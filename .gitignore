@@ -1,0 +1,59 @@
+# --- Python (uv) ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+*.pyo
+
+# uv
+uv.lock.local
+
+# --- Node / extension ---
+node_modules/
+*.tsbuildinfo
+.npm/
+.yarn/
+*.log
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Project ---
+.env
+.env.local
+.env.*.local
+*.local
+secrets/
+.tmp/
+.cache/
+
+# Runtime data we never want in git
+data/
+storage/
+artifacts/
+jobs/
+*.mp3
+*.wav
+*.mp4
+*.webm
