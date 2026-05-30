@@ -26,10 +26,10 @@ from karaoke.api.auth import (
     require_owner,
     resolve_owner,
 )
-from karaoke.api.worker_stub import schedule_mock_job
 from karaoke.config import Settings, get_settings
 from karaoke.db.models import Job, JobStatus
 from karaoke.db.session import get_session, get_session_factory
+from karaoke.worker.scheduler import schedule_job
 
 # ---------------------------------------------------------------------------
 # Pydantic schemas
@@ -134,8 +134,9 @@ async def create_job(
     await session.commit()
     await session.refresh(job)
 
-    # Mocked worker — no real vast.ai provisioning.
-    schedule_mock_job(get_session_factory(), job.id)
+    # Dispatch to the real vast.ai worker, or the in-process mock when no
+    # vast key is configured (CI / dev default). See worker.scheduler.
+    schedule_job(get_session_factory(), job.id, settings)
 
     return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
 
