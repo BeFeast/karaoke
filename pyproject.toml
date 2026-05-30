@@ -8,7 +8,18 @@ authors = [
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "alembic>=1.18.4",
+    "asyncpg>=0.31.0",
+    "cryptography>=48.0.0",
+    "fastapi>=0.136.3",
+    "httpx>=0.28.1",
+    "pydantic-settings>=2.14.1",
+    "pyjwt[crypto]>=2.13.0",
+    "sqlalchemy>=2.0.50",
+    "uvicorn[standard]>=0.48.0",
+    "websockets>=16.0",
+]
 
 [project.scripts]
 karaoke = "karaoke:main"
@@ -19,7 +30,9 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "aiosqlite>=0.22.1",
     "pytest>=8",
+    "pytest-asyncio>=1.4.0",
     "ruff>=0.9",
 ]
 
@@ -30,6 +43,19 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
 ignore = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Query",
+    "fastapi.Header",
+    "fastapi.Cookie",
+    "fastapi.Form",
+    "fastapi.File",
+    "fastapi.Security",
+]
 
 [tool.pytest.ini_options]
 addopts = "-q"
