@@ -27,15 +27,10 @@ JOB_STATUS = sa.Enum(
     "failed",
     "cancelled",
     name="job_status",
-    create_type=False,
 )
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-    if bind.dialect.name == "postgresql":
-        JOB_STATUS.create(bind, checkfirst=True)
-
     op.create_table(
         "jobs",
         sa.Column("id", sa.Integer, primary_key=True),
