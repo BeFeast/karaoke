@@ -50,6 +50,47 @@ class Settings(BaseSettings):
     # Test-only escape hatch: skip Clerk JWT validation when set.
     auth_test_mode: bool = False
 
+    # ---- Worker / vast.ai ----
+    # The coordinator (devbox) downloads + normalizes locally, then ships the
+    # working wav to an ephemeral vast.ai GPU instance for Demucs + Whisper.
+    # The instance is ALWAYS destroyed in a ``finally`` clause; these caps are
+    # the safety rails that keep a single job (and the rolling day) bounded.
+    #
+    # ``device_mode`` selects the dispatch path:
+    #   - "auto"      → real vast.ai when a key is set, else mock (CI default).
+    #   - "vast"      → force real vast.ai (errors if no key).
+    #   - "cpu-local" → reserved for a future local-CPU fallback (not yet wired;
+    #                   currently behaves like "vast" minus GPU expectations).
+    #   - "mock"      → always the in-process mock worker.
+    device_mode: str = "auto"  # auto | vast | cpu-local | mock
+
+    vast_api_key: str = ""  # KARAOKE_VAST_API_KEY; empty + auto → mock path.
+    vast_image: str = "ghcr.io/befeast/karaoke-vast:cuda12.4"
+
+    # Offer-selection / budget tunables (mirror scribe naming). Overridable via
+    # Infisical (KARAOKE_VAST_*).
+    vast_max_price_per_hour: float = 1.0
+    vast_max_job_cost: float = 0.35  # per-job USD ceiling; refuse/abort beyond.
+    vast_min_cuda: float = 12.4  # never land on a host whose driver < CUDA 12.4.
+    vast_instance_ready_timeout: int = 360  # per-attempt startup budget (s).
+    vast_offer_attempts: int = 5  # distinct offers tried per job.
+    # GPU model allowlist (mirror scribe's regex shape, narrowed to the cards
+    # that comfortably run htdemucs + faster-whisper large-v3-turbo).
+    vast_gpu_regex: str = (
+        r"\b("
+        r"RTX\s+4090|"
+        r"(RTX\s+)?A[2456][05]00|A10|A40|"
+        r"L4|L40S?|"
+        r"RTX\s+(4000|4500|5000|5500|6000)(\s+Ada(\s+Generation)?)?"
+        r")\b"
+    )
+    # Rolling 24-hour hard ceiling on vast spend (USD). 0 disables. When the
+    # cap is reached the worker refuses to provision a new instance.
+    vast_daily_cost_cap: float = 5.0
+
+    # NFS-mounted artifact root inside the coordinator container.
+    artifact_root: str = "/srv/artifacts"
+
 
 _settings: Settings | None = None
 
