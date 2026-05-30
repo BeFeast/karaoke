@@ -95,6 +95,18 @@ class SharePayload(BaseModel):
     artifacts: list[ArtifactOut]
 
 
+class ConfigOut(BaseModel):
+    """Public runtime config the Submitter SPA needs to boot.
+
+    The Clerk *publishable* key is safe to expose to browsers (that is its
+    purpose); the secret key is never returned here.
+    """
+
+    clerk_publishable_key: str
+    clerk_enabled: bool
+    public_base_url: str
+
+
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
@@ -107,6 +119,23 @@ router = APIRouter()
 async def health() -> dict[str, str]:
     """Liveness probe — no auth, no DB hit."""
     return {"status": "ok"}
+
+
+@router.get("/config", response_model=ConfigOut, tags=["meta"])
+async def runtime_config(
+    settings: Settings = Depends(get_settings),
+) -> ConfigOut:
+    """Public runtime config for the SPA — no auth.
+
+    ``clerk_enabled`` is simply whether a publishable key is configured; when
+    it is empty the SPA renders in trusted-LAN "LAN mode" with no sign-in UI.
+    """
+    key = settings.clerk_publishable_key.strip()
+    return ConfigOut(
+        clerk_publishable_key=key,
+        clerk_enabled=bool(key),
+        public_base_url=settings.public_base_url,
+    )
 
 
 @router.post(

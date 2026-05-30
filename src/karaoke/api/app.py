@@ -3,9 +3,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from karaoke.api.routes import router
 from karaoke.config import Settings, get_settings
@@ -65,4 +68,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.include_router(router)
+
+    # Root redirect → Submitter SPA. Exact-path only, so it never shadows
+    # /health, /jobs, /share, /me, /config, or /ws.
+    @app.get("/", include_in_schema=False)
+    async def _spa_root_redirect() -> RedirectResponse:
+        return RedirectResponse(url="/app/")
+
+    # Serve the built Submitter SPA at /app, but only when a build exists —
+    # dev/test runs without a `vite build` still boot cleanly.
+    spa = Path(settings.spa_dist_path)
+    if spa.is_dir():
+        app.mount("/app", StaticFiles(directory=str(spa), html=True), name="spa")
+
     return app

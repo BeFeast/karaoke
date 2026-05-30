@@ -1,0 +1,49 @@
+"""Tests for the public ``GET /config`` endpoint used by the Submitter SPA."""
+from __future__ import annotations
+
+from karaoke.config import Settings, get_settings
+
+
+def test_config_default_has_clerk_disabled(client):
+    """With no publishable key configured, ``clerk_enabled`` is False."""
+    response = client.get("/config")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body.keys()) == {
+        "clerk_publishable_key",
+        "clerk_enabled",
+        "public_base_url",
+    }
+    # conftest sets no KARAOKE_CLERK_PUBLISHABLE_KEY -> empty -> disabled.
+    assert body["clerk_publishable_key"] == ""
+    assert body["clerk_enabled"] is False
+    # conftest pins the public base URL.
+    assert body["public_base_url"] == "http://test.local"
+
+
+def test_config_reports_clerk_enabled_when_key_set(client):
+    """A configured publishable key flips ``clerk_enabled`` to True."""
+
+    def override() -> Settings:
+        return Settings(
+            clerk_publishable_key="pk_test_abc123",
+            public_base_url="https://karaoke.example",
+        )
+
+    client.app.dependency_overrides[get_settings] = override
+    try:
+        response = client.get("/config")
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["clerk_publishable_key"] == "pk_test_abc123"
+    assert body["clerk_enabled"] is True
+    assert body["public_base_url"] == "https://karaoke.example"
+
+
+def test_config_is_public_no_auth(client):
+    """``/config`` must be reachable without any auth header (meta tag)."""
+    response = client.get("/config")
+    assert response.status_code == 200
