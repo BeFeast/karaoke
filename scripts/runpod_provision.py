@@ -49,9 +49,22 @@ TEMPLATE_SPEC: dict[str, Any] = {
 # Endpoint guardrails (issue #33). templateId added at runtime.
 ENDPOINT_SPEC: dict[str, Any] = {
     "name": ENDPOINT_NAME,
-    "gpuTypeIds": ["NVIDIA RTX A4000", "NVIDIA L4"],
+    # Wide pool to dodge supply-low throttling — verified 2026-05-30 against
+    # the live `endpoints.gpuTypeIds` enum. workersMax=3 lets a few requests
+    # run in parallel; per-job + daily cost caps still apply on the client.
+    "gpuTypeIds": [
+        "NVIDIA RTX A4000",
+        "NVIDIA RTX A4500",
+        "NVIDIA RTX 4000 Ada Generation",
+        "NVIDIA RTX A5000",
+        "NVIDIA L4",
+        "NVIDIA GeForce RTX 3090",
+        "NVIDIA L40",
+        "NVIDIA L40S",
+        "NVIDIA GeForce RTX 4090",
+    ],
     "workersMin": 0,
-    "workersMax": 1,
+    "workersMax": 3,
     "idleTimeout": 5,
     "executionTimeoutMs": 600000,
     "flashboot": True,
