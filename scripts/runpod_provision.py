@@ -66,7 +66,10 @@ ENDPOINT_SPEC: dict[str, Any] = {
     "workersMin": 0,
     "workersMax": 3,
     "idleTimeout": 5,
-    "executionTimeoutMs": 600000,
+    # Hard kill from RunPod side: handler runs in ~90-150s on warm worker;
+    # 5 min is generous headroom. Coordinator wall_ceiling (600s) covers
+    # the queue-wait window separately.
+    "executionTimeoutMs": 300000,
     "flashboot": True,
 }
 
