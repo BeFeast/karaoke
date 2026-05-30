@@ -27,6 +27,7 @@ def test_config_reports_clerk_enabled_when_key_set(client):
     def override() -> Settings:
         return Settings(
             clerk_publishable_key="pk_test_abc123",
+            clerk_spa_enabled=True,
             public_base_url="https://karaoke.example",
         )
 
@@ -47,3 +48,23 @@ def test_config_is_public_no_auth(client):
     """``/config`` must be reachable without any auth header (meta tag)."""
     response = client.get("/config")
     assert response.status_code == 200
+
+
+def test_config_key_set_but_gate_off_stays_disabled(client):
+    """A publishable key present but clerk_spa_enabled False -> LAN mode."""
+    from karaoke.config import Settings, get_settings
+
+    def override() -> Settings:
+        return Settings(
+            clerk_publishable_key="pk_test_xyz",
+            clerk_spa_enabled=False,
+            public_base_url="https://karaoke.example",
+        )
+
+    client.app.dependency_overrides[get_settings] = override
+    try:
+        body = client.get("/config").json()
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+    assert body["clerk_publishable_key"] == "pk_test_xyz"
+    assert body["clerk_enabled"] is False

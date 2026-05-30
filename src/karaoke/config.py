@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # Clerk frontend SDK. Exposed via ``GET /config``. Empty disables the
     # Clerk sign-in UI (the SPA falls back to trusted-LAN "LAN mode").
     clerk_publishable_key: str = ""  # KARAOKE_CLERK_PUBLISHABLE_KEY
+    # Gate: the SPA only switches to Clerk sign-in when this is true AND a
+    # publishable key is set. Keeps the SPA in trusted-LAN mode until the
+    # Clerk app's allowed origins are configured + smoke-tested (#12).
+    clerk_spa_enabled: bool = False  # KARAOKE_CLERK_SPA_ENABLED
 
     # Default owner used by trusted-LAN / machine-bearer flows.
     default_owner_subject: str = ""

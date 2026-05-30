@@ -127,13 +127,15 @@ async def runtime_config(
 ) -> ConfigOut:
     """Public runtime config for the SPA — no auth.
 
-    ``clerk_enabled`` is simply whether a publishable key is configured; when
-    it is empty the SPA renders in trusted-LAN "LAN mode" with no sign-in UI.
+    ``clerk_enabled`` is true only when ``clerk_spa_enabled`` is set AND a
+    publishable key exists; otherwise the SPA renders in trusted-LAN "LAN
+    mode" with no sign-in UI (the default until Clerk origins are set up).
     """
     key = settings.clerk_publishable_key.strip()
+    enabled = settings.clerk_spa_enabled and bool(key)
     return ConfigOut(
         clerk_publishable_key=key,
-        clerk_enabled=bool(key),
+        clerk_enabled=enabled,
         public_base_url=settings.public_base_url,
     )
 
