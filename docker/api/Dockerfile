@@ -1,6 +1,23 @@
 # karaoke coordinator image (FastAPI API + in-process worker).
 # Built by Dockhand at /opt/stacks/karaoke; image: karaoke:local.
 # GPU stages run on ephemeral vast.ai — never bake CUDA/Demucs/Whisper here.
+
+# ---------------------------------------------------------------------------
+# Stage: build the Submitter SPA (Vite + React) → web/spa/dist.
+# Uses bun (matches the repo's Node toolchain convention).
+# ---------------------------------------------------------------------------
+FROM oven/bun:1-slim AS spa
+WORKDIR /spa
+# Install deps first for cacheability (lockfile committed).
+COPY web/spa/package.json web/spa/bun.lock ./
+RUN bun install --frozen-lockfile
+# Build.
+COPY web/spa/ ./
+RUN bun run build
+
+# ---------------------------------------------------------------------------
+# Stage: Python runtime.
+# ---------------------------------------------------------------------------
 FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -36,6 +53,11 @@ COPY alembic.ini ./alembic.ini
 COPY alembic ./alembic
 
 RUN uv sync --frozen --no-dev
+
+# Built Submitter SPA → matches settings.spa_dist_path default
+# (KARAOKE_SPA_DIST_PATH overrides). create_app() mounts it at /app only when
+# this directory exists.
+COPY --from=spa /spa/dist /app/web/spa/dist
 
 # Entrypoint:
 #   1. Source /secrets/karaoke.env if Infisical-Agent rendered it (compose mounts it).

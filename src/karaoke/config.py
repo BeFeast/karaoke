@@ -43,12 +43,27 @@ class Settings(BaseSettings):
     clerk_backend_api_url: str = "https://api.clerk.com"
     auth_allowed_emails: str = ""  # comma-separated; empty = no allowlist
 
+    # Clerk publishable key — NOT a secret; the SPA needs it to boot the
+    # Clerk frontend SDK. Exposed via ``GET /config``. Empty disables the
+    # Clerk sign-in UI (the SPA falls back to trusted-LAN "LAN mode").
+    clerk_publishable_key: str = ""  # KARAOKE_CLERK_PUBLISHABLE_KEY
+    # Gate: the SPA only switches to Clerk sign-in when this is true AND a
+    # publishable key is set. Keeps the SPA in trusted-LAN mode until the
+    # Clerk app's allowed origins are configured + smoke-tested (#12).
+    clerk_spa_enabled: bool = False  # KARAOKE_CLERK_SPA_ENABLED
+
     # Default owner used by trusted-LAN / machine-bearer flows.
     default_owner_subject: str = ""
     default_owner_email: str = ""
 
     # Test-only escape hatch: skip Clerk JWT validation when set.
     auth_test_mode: bool = False
+
+    # ---- SPA (Submitter single-page app) ----
+    # Filesystem path to the built Vite SPA (``web/spa/dist``) inside the
+    # container. Mounted at ``/app`` by ``create_app`` only when present, so
+    # dev/test runs without a build still boot.
+    spa_dist_path: str = "/app/web/spa/dist"
 
     # ---- Worker / vast.ai ----
     # The coordinator (devbox) downloads + normalizes locally, then ships the
