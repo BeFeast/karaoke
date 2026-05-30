@@ -113,8 +113,10 @@ def _find_by_name(token: str, path: str, key: str, name: str) -> dict[str, Any] 
 def _ensure_template(token: str) -> str:
     existing = _find_by_name(token, "/templates", "templates", TEMPLATE_NAME)
     if existing and existing.get("id"):
-        # PATCH to keep the spec in sync (idempotent).
-        body = {k: v for k, v in TEMPLATE_SPEC.items() if k != "name"}
+        # PATCH to keep the spec in sync (idempotent). RunPod rejects
+        # `isServerless` on PATCH (immutable after create).
+        immutable = {"name", "isServerless"}
+        body = {k: v for k, v in TEMPLATE_SPEC.items() if k not in immutable}
         _request("PATCH", f"/templates/{existing['id']}", token, body)
         print(f"# template OK (existing): id={existing['id']}", file=sys.stderr)
         return str(existing["id"])
