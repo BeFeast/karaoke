@@ -141,6 +141,48 @@ def presign_get(
     return f"{scheme}://{host}{canonical_uri}?{canonical_qs}&X-Amz-Signature={signature}"
 
 
+def presign_put(
+    *,
+    endpoint_url: str,
+    bucket: str,
+    key: str,
+    access_key_id: str,
+    secret_access_key: str,
+    region: str = "auto",
+    expires_in: int = 600,
+) -> str:
+    """Return a SigV4 presigned URL for ``PUT {endpoint}/{bucket}/{key}``."""
+    host, scheme = _split_endpoint(endpoint_url)
+    now = dt.datetime.now(dt.UTC)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date_stamp = now.strftime("%Y%m%d")
+
+    canonical_uri = f"/{bucket}/{quote(key, safe='/-_.')}"
+    credential_scope = f"{date_stamp}/{region}/s3/aws4_request"
+    qs = {
+        "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+        "X-Amz-Credential": f"{access_key_id}/{credential_scope}",
+        "X-Amz-Date": amz_date,
+        "X-Amz-Expires": str(expires_in),
+        "X-Amz-SignedHeaders": "host",
+    }
+    canonical_qs = "&".join(
+        f"{quote(k, safe='-_.~')}={quote(v, safe='-_.~')}" for k, v in sorted(qs.items())
+    )
+    canonical_headers = f"host:{host}\n"
+    signed_headers = "host"
+    payload_hash = "UNSIGNED-PAYLOAD"
+    canonical_request = (
+        f"PUT\n{canonical_uri}\n{canonical_qs}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+    )
+    string_to_sign = (
+        f"AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{_sha256(canonical_request.encode())}"
+    )
+    signing_key = _signing_key(secret_access_key, date_stamp, region, "s3")
+    signature = hmac.new(signing_key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+    return f"{scheme}://{host}{canonical_uri}?{canonical_qs}&X-Amz-Signature={signature}"
+
+
 def upload_file(
     path: Path,
     *,

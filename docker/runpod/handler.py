@@ -173,6 +173,22 @@ def _transcribe(wav_path: Path) -> tuple[str, dict[str, Any]]:
     return lyrics_txt, lyrics_json
 
 
+def _put_file(path: Path, presigned_url: str, content_type: str) -> None:
+    """PUT a file to a presigned URL via urllib (no boto3 dep)."""
+    import urllib.request
+
+    body = path.read_bytes()
+    req = urllib.request.Request(
+        presigned_url,
+        data=body,
+        method="PUT",
+        headers={"Content-Type": content_type, "Content-Length": str(len(body))},
+    )
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        if resp.status not in (200, 201, 204):
+            raise RuntimeError(f"presigned PUT returned HTTP {resp.status}")
+
+
 def _b64_file(path: Path) -> str:
     return base64.b64encode(path.read_bytes()).decode("ascii")
 
@@ -218,6 +234,13 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         if not audio_bytes:
             raise ValueError("audio_base64 decoded to empty bytes")
 
+    # Optional presigned PUT URLs — when present, the handler streams
+    # the wav stems into them and returns only URLs (RunPod /run output
+    # has a 10MB cap; raw stems are well over that).
+    vocals_put_url = job_input.get("vocals_put_url")
+    instrumental_put_url = job_input.get("instrumental_put_url")
+    use_put = bool(vocals_put_url and instrumental_put_url)
+
     result: dict[str, Any] = {}
 
     with _GPU_LOCK, tempfile.TemporaryDirectory(prefix="kar-rp-") as tmp:
@@ -231,14 +254,18 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         if mode in ("demucs", "both"):
             out_dir = tmp_path / "out"
             vocals_path, instrumental_path = _run_demucs(in_wav, out_dir)
-            result["vocals_b64"] = _b64_file(vocals_path)
-            result["instrumental_b64"] = _b64_file(instrumental_path)
+            if use_put:
+                _put_file(vocals_path, vocals_put_url, "audio/wav")
+                _put_file(instrumental_path, instrumental_put_url, "audio/wav")
+                result["vocals_uploaded"] = True
+                result["instrumental_uploaded"] = True
+            else:
+                result["vocals_b64"] = _b64_file(vocals_path)
+                result["instrumental_b64"] = _b64_file(instrumental_path)
 
         if mode in ("whisper", "both"):
-            # In "both" we transcribe the separated vocals stem, not the
-            # raw input — that's the lyrics signal we actually want.
             target = vocals_path if mode == "both" else in_wav
-            assert target is not None  # mode==whisper -> in_wav; both -> vocals_path
+            assert target is not None
             lyrics_txt, lyrics_json = _transcribe(target)
             result["lyrics_txt"] = lyrics_txt
             result["lyrics_json"] = lyrics_json
