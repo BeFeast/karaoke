@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from karaoke.db.models import JobStatus
 
@@ -68,15 +69,16 @@ def test_share_endpoint_works_with_unlisted_token(client):
     assert create.status_code == 201
     token = create.json()["job_token"]
 
-    # Wait briefly for the mock worker to advance state at least once.
+    # JSON path — same auth, but explicit Accept negotiates to the API payload.
+    json_headers = {"Accept": "application/json"}
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline:
-        share = client.get(f"/share/{token}")
+        share = client.get(f"/share/{token}", headers=json_headers)
         if share.status_code == 200 and share.json()["status"] == JobStatus.completed.value:
             break
         time.sleep(0.05)
 
-    share = client.get(f"/share/{token}")
+    share = client.get(f"/share/{token}", headers=json_headers)
     assert share.status_code == 200, share.text
     body = share.json()
     assert body["job_token"] == token
@@ -137,3 +139,67 @@ def test_websocket_streams_progress_to_completion(client):
     assert frames, "no frames received"
     assert any(f.get("status") == JobStatus.completed.value for f in frames)
     assert any(f.get("progress") == 100 for f in frames)
+
+
+def test_share_endpoint_renders_html_for_browsers(client):
+    """Default Accept (or text/html) returns the HTML share page with audio tags."""
+    create = client.post("/jobs", json={"url": "https://example.com/x", "title": "TuneHTML"})
+    assert create.status_code == 201
+    token = create.json()["job_token"]
+
+    # Wait for the mock worker to populate Artifact rows.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        s = client.get(f"/share/{token}", headers={"Accept": "application/json"})
+        if s.status_code == 200 and s.json()["status"] == JobStatus.completed.value:
+            break
+        time.sleep(0.05)
+
+    resp = client.get(f"/share/{token}", headers={"Accept": "text/html"})
+    assert resp.status_code == 200, resp.text
+    body = resp.text
+    assert "<audio" in body, "expected an <audio> player in HTML share page"
+    assert f"/share/{token}/karaoke.mp3" in body
+    assert f"/share/{token}/vocals.mp3" in body
+    assert "TuneHTML" in body
+
+
+def test_share_artifact_404_for_unknown_artifact_name(client):
+    create = client.post("/jobs", json={"url": "https://example.com/x"})
+    token = create.json()["job_token"]
+    # Path-traversal / random names: must 404, not serve.
+    for bad in ("../../../etc/passwd", "secret.env", "lyrics.json"):
+        r = client.get(f"/share/{token}/{bad}")
+        assert r.status_code == 404, (bad, r.status_code, r.text)
+
+
+def test_share_artifact_404_when_file_missing(client, tmp_path):
+    create = client.post("/jobs", json={"url": "https://example.com/x"})
+    token = create.json()["job_token"]
+    r = client.get(f"/share/{token}/karaoke.mp3")
+    # Default artifact_root in tests is /srv/artifacts (not present) -> 404.
+    assert r.status_code == 404
+
+
+def test_share_artifact_serves_file_when_present(client, tmp_path):
+    from karaoke.config import Settings, get_settings
+
+    create = client.post("/jobs", json={"url": "https://example.com/x"})
+    token = create.json()["job_token"]
+
+    exports = Path(tmp_path) / token / "exports"
+    exports.mkdir(parents=True, exist_ok=True)
+    (exports / "karaoke.mp3").write_bytes(b"ID3\x04\x00fake-mp3-bytes")
+
+    def fake_settings() -> Settings:
+        return Settings(artifact_root=str(tmp_path))
+
+    client.app.dependency_overrides[get_settings] = fake_settings
+    try:
+        r = client.get(f"/share/{token}/karaoke.mp3")
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+
+    assert r.status_code == 200, r.text
+    assert r.headers.get("content-type", "").startswith("audio/mpeg")
+    assert r.content.startswith(b"ID3")
