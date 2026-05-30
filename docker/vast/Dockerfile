@@ -19,19 +19,28 @@ ENV DEBIAN_FRONTEND=noninteractive \
     HF_HUB_DOWNLOAD_TIMEOUT=120 \
     TORCH_HOME="/root/.cache/torch" \
     PIP_NO_CACHE_DIR=1 \
-    UV_NO_CACHE=1
+    UV_NO_CACHE=1 \
+    KARAOKE_VAST_PORT=8000
 
 # ffmpeg stays: Demucs and faster-whisper both decode through it.
 # Demucs htdemucs needs torchaudio's ffmpeg backend.
+# Ubuntu 22.04 ships python3.10; pull python3.12 from deadsnakes PPA.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
+      gnupg \
+      software-properties-common \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
       ffmpeg \
       openssh-client \
       python3.12 \
       python3.12-venv \
       python3.12-dev \
+    && apt-get purge -y software-properties-common \
+    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/apt/*
 
 # uv installed to /usr/local/bin so it survives PATH resets and any
@@ -97,6 +106,18 @@ assert os.path.isdir(th), "torch model cache missing"
 print("model caches present:", hf, th)
 PY
 
+# Install the HTTP server entrypoint. The coordinator (devbox) SSH-tunnels
+# 8000 to this container and POSTs work to /demucs and /whisper.
+WORKDIR /work
+COPY server.py /work/server.py
+
+EXPOSE 8000
+
+# Sanity-check the entrypoint imports cleanly (no model load).
+RUN /opt/karaoke-venv/bin/python -c "import py_compile; py_compile.compile('/work/server.py', doraise=True)"
+
 LABEL org.opencontainers.image.title="karaoke Vast worker (Demucs + Whisper)" \
       org.opencontainers.image.description="CUDA 12.4 GPU worker for karaoke: pre-cached htdemucs (separation) + large-v3-turbo (lyrics). Coordinator owns yt-dlp/ffmpeg; this image runs GPU stages only." \
       org.opencontainers.image.source="https://github.com/BeFeast/karaoke"
+
+ENTRYPOINT ["/opt/karaoke-venv/bin/python", "/work/server.py"]
