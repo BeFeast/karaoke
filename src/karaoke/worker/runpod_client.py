@@ -15,13 +15,13 @@ Mirrors the safety contract of :mod:`karaoke.worker.vast_client`:
 The RunPod handler contract is JSON in / JSON out (see
 ``docker/runpod/handler.py``)::
 
-    POST   /v1/endpoints/{endpoint_id}/run
+    POST   https://api.runpod.ai/v2/{endpoint_id}/run
            { "input": { "audio_base64": str, "mode": "both" } }
-    GET    /v1/endpoints/{endpoint_id}/status/{id}
+    GET    https://api.runpod.ai/v2/{endpoint_id}/status/{id}
            { "status": "IN_QUEUE"|"IN_PROGRESS"|"COMPLETED"|"FAILED"
              |"CANCELLED"|"TIMED_OUT", "output": {...}?, "executionTime"?: ms,
              "delayTime"?: ms }
-    POST   /v1/endpoints/{endpoint_id}/cancel/{id}
+    POST   https://api.runpod.ai/v2/{endpoint_id}/cancel/{id}
 
 For ``mode="both"`` the handler returns
 ``{"vocals_b64", "instrumental_b64", "lyrics_txt", "lyrics_json",
@@ -41,7 +41,7 @@ from typing import Any
 
 from karaoke.worker.vast_client import GpuJobResult
 
-RUNPOD_REST = "https://rest.runpod.io/v1"
+RUNPOD_REST = "https://api.runpod.ai/v2"
 TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"}
 USER_AGENT = "karaoke-worker/0.1"
 
@@ -154,9 +154,9 @@ class RunpodClient:
         wall_ceiling = float(self.settings.runpod_wall_ceiling_s or 900)
 
         audio_b64 = base64.b64encode(mix_wav.read_bytes()).decode("ascii")
-        run_url = f"{RUNPOD_REST}/endpoints/{endpoint_id}/run"
-        cancel_url_tpl = f"{RUNPOD_REST}/endpoints/{endpoint_id}/cancel/{{id}}"
-        status_url_tpl = f"{RUNPOD_REST}/endpoints/{endpoint_id}/status/{{id}}"
+        run_url = f"{RUNPOD_REST}/{endpoint_id}/run"
+        cancel_url_tpl = f"{RUNPOD_REST}/{endpoint_id}/cancel/{{id}}"
+        status_url_tpl = f"{RUNPOD_REST}/{endpoint_id}/status/{{id}}"
 
         job_id: str | None = None
         terminal = False
