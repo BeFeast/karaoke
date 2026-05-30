@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import secrets
+from pathlib import Path as _PathLib
 
 from fastapi import (
     APIRouter,
@@ -14,6 +15,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -158,20 +160,110 @@ async def job_status(
     return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
 
 
-@router.get("/share/{job_token}", response_model=SharePayload, tags=["share"])
+_SHARE_HTML_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{title} — karaoke</title>
+<style>
+ :root {{ color-scheme: light dark; }}
+ body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+   max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }}
+ h1 {{ font-size: 1.4rem; margin: 0 0 0.25rem; }}
+ .meta {{ color: #888; font-size: 0.85rem; margin-bottom: 1.5rem; }}
+ section {{ margin: 1.25rem 0; }}
+ section h2 {{ font-size: 1rem; margin: 0 0 0.4rem; }}
+ audio {{ width: 100%; }}
+ pre {{ white-space: pre-wrap; word-wrap: break-word; background: #f6f6f6;
+   padding: 0.75rem; border-radius: 4px; max-height: 50vh; overflow: auto;
+   font-size: 0.85rem; }}
+ @media (prefers-color-scheme: dark) {{ pre {{ background: #1f1f1f; }} }}
+ .empty {{ color: #888; font-style: italic; }}
+</style>
+</head>
+<body>
+<h1>{title_escaped}</h1>
+<div class="meta">
+  status: <strong>{status}</strong>
+  · progress: {progress}%
+  {owner_block}
+</div>
+{karaoke_block}
+{vocals_block}
+{lyrics_block}
+</body>
+</html>
+"""
+
+
+def _html_escape(s: str | None) -> str:
+    if not s:
+        return ""
+    return (
+        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        .replace('"', "&quot;").replace("'", "&#39;")
+    )
+
+
+def _render_share_html(job: Job, lyrics_text: str | None) -> str:
+    title = job.title or job.source_url or "karaoke job"
+    owner = (job.owner_display_name or "").strip()
+    owner_block = f"· owner: {_html_escape(owner)}" if owner else ""
+    base = f"/share/{job.job_token}"
+    artifacts_by_kind = {a.kind: a for a in job.artifacts}
+
+    def audio_block(kind: str, label: str) -> str:
+        if kind not in artifacts_by_kind:
+            return f'<section><h2>{label}</h2><div class="empty">not yet available</div></section>'
+        return (
+            f'<section><h2>{label}</h2>'
+            f'<audio controls preload="none" src="{base}/{kind}.mp3"></audio>'
+            f'</section>'
+        )
+
+    if lyrics_text:
+        lyrics_block = (
+            f'<section><h2>lyrics</h2>'
+            f'<pre>{_html_escape(lyrics_text)}</pre></section>'
+        )
+    elif "lyrics" in artifacts_by_kind:
+        lyrics_block = (
+            f'<section><h2>lyrics</h2>'
+            f'<p><a href="{base}/lyrics.txt">open lyrics.txt</a></p></section>'
+        )
+    else:
+        lyrics_block = '<section><h2>lyrics</h2><div class="empty">not yet available</div></section>'
+
+    return _SHARE_HTML_TEMPLATE.format(
+        title=_html_escape(title)[:80],
+        title_escaped=_html_escape(title),
+        status=job.status.value,
+        progress=job.progress,
+        owner_block=owner_block,
+        karaoke_block=audio_block("karaoke", "karaoke (instrumental)"),
+        vocals_block=audio_block("vocals", "vocals only"),
+        lyrics_block=lyrics_block,
+    )
+
+
+def _wants_json(request: Request) -> bool:
+    accept = (request.headers.get("accept") or "").lower()
+    # Default to HTML in browsers; JSON only when explicitly asked.
+    return "application/json" in accept and "text/html" not in accept
+
+
+@router.get("/share/{job_token}", tags=["share"])
 async def share_page(
     job_token: str,
     request: Request,
     owner: Owner | None = Depends(resolve_owner),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
-) -> SharePayload:
+):
     """Owner-aware + unlisted-token-aware share endpoint.
 
-    - The owner of the job can always see it.
-    - Anyone holding the unlisted ``job_token`` can see it.
-    - Trusted-LAN callers (machine viewers) can see it.
-    Otherwise, 404.
+    Returns HTML for browsers (with embedded ``<audio>`` players), or JSON
+    when ``Accept: application/json`` is sent — keeps API consumers happy.
     """
     job = await session.scalar(
         select(Job)
@@ -181,26 +273,90 @@ async def share_page(
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
-    holds_unlisted_token = True  # path itself proves possession of the token
+    holds_unlisted_token = True
     is_owner = owner is not None and _can_owner_view(owner, job)
     is_lan = is_trusted_lan_request(request, settings)
     if not (holds_unlisted_token or is_owner or is_lan):  # pragma: no cover
         raise HTTPException(status_code=404, detail="job not found")
 
-    return SharePayload(
-        job_token=job.job_token,
-        title=job.title,
-        status=job.status,
-        progress=job.progress,
-        owner_display_name=job.owner_display_name,
-        artifacts=[
-            ArtifactOut(
-                kind=a.kind,
-                relative_path=a.relative_path,
-                content_type=a.content_type,
-            )
-            for a in job.artifacts
-        ],
+    if _wants_json(request):
+        return SharePayload(
+            job_token=job.job_token,
+            title=job.title,
+            status=job.status,
+            progress=job.progress,
+            owner_display_name=job.owner_display_name,
+            artifacts=[
+                ArtifactOut(
+                    kind=a.kind,
+                    relative_path=a.relative_path,
+                    content_type=a.content_type,
+                )
+                for a in job.artifacts
+            ],
+        )
+
+    # Inline lyrics if they fit comfortably on the page.
+    lyrics_text: str | None = None
+    artifact_root = _PathLib(settings.artifact_root)
+    lyrics_path = artifact_root / job.job_token / "exports" / "lyrics.txt"
+    if lyrics_path.is_file() and lyrics_path.stat().st_size < 64 * 1024:
+        try:
+            lyrics_text = lyrics_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            lyrics_text = None
+
+    return HTMLResponse(_render_share_html(job, lyrics_text))
+
+
+_ALLOWED_ARTIFACTS: dict[str, tuple[str, str]] = {
+    # name -> (relative path under exports/, content-type)
+    "karaoke.mp3": ("karaoke.mp3", "audio/mpeg"),
+    "vocals.mp3": ("vocals.mp3", "audio/mpeg"),
+    "lyrics.txt": ("lyrics.txt", "text/plain; charset=utf-8"),
+    "metadata.json": ("metadata.json", "application/json"),
+}
+
+
+@router.get("/share/{job_token}/{artifact_name}", tags=["share"])
+async def share_artifact(
+    job_token: str,
+    artifact_name: str,
+    request: Request,
+    owner: Owner | None = Depends(resolve_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    """Stream an artifact file from the NFS artifact root.
+
+    Same auth model as ``/share/{job_token}``: possession of the unlisted
+    ``job_token`` is itself the access proof; trusted-LAN and the owner
+    also see it. Only an explicit allowlist of artifact names is served
+    so this endpoint cannot be turned into an arbitrary-file reader.
+    """
+    if artifact_name not in _ALLOWED_ARTIFACTS:
+        raise HTTPException(status_code=404, detail="artifact not found")
+
+    job = await session.scalar(select(Job).where(Job.job_token == job_token))
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    holds_unlisted_token = True
+    is_owner = owner is not None and _can_owner_view(owner, job)
+    is_lan = is_trusted_lan_request(request, settings)
+    if not (holds_unlisted_token or is_owner or is_lan):  # pragma: no cover
+        raise HTTPException(status_code=404, detail="job not found")
+
+    rel, ctype = _ALLOWED_ARTIFACTS[artifact_name]
+    artifact_root = _PathLib(settings.artifact_root)
+    file_path = artifact_root / job_token / "exports" / rel
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="artifact not yet ready")
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=ctype,
+        filename=rel,
     )
 
 
