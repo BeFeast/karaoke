@@ -27,6 +27,7 @@ JOB_STATUS = sa.Enum(
     "failed",
     "cancelled",
     name="job_status",
+    create_type=False,
 )
 
 
