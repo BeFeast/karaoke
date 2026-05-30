@@ -185,6 +185,7 @@ async def run_real_job(
     """Run a real karaoke job end-to-end. Always leaves the Job in a terminal
     state (completed / failed) and never leaks a vast instance."""
     # Import here so the module is importable in CI without the worker deps.
+    from karaoke.worker.scheduler import _use_runpod
     from karaoke.worker.vast_client import VastClient
 
     async with session_factory() as session:
@@ -219,7 +220,12 @@ async def run_real_job(
         if not await _set_stage(session_factory, job_id, JobStatus.separating, 45):
             return
         prior = await _prior_24h_cost_micros(session_factory)
-        client = VastClient(settings, prior_24h_cost_micros=prior)
+        if _use_runpod(settings):
+            from karaoke.worker.runpod_client import RunpodClient
+
+            client = RunpodClient(settings, prior_24h_cost_micros=prior)
+        else:
+            client = VastClient(settings, prior_24h_cost_micros=prior)
 
         # VastClient.run is synchronous (urllib + ssh + httpx); offload it. It
         # runs BOTH /demucs (separating) and /whisper (transcribing) in one

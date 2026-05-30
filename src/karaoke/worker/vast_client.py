@@ -70,7 +70,7 @@ class VastReadyTimeoutError(VastError):
 class GpuJobResult:
     """Outcome of a single GPU window (one instance, demucs + whisper)."""
 
-    vast_instance_id: int
+    vast_instance_id: int | str
     vast_cost: float
     gpu_model: str
     vocals_path: Path

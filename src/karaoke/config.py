@@ -88,6 +88,18 @@ class Settings(BaseSettings):
     # cap is reached the worker refuses to provision a new instance.
     vast_daily_cost_cap: float = 5.0
 
+    # ---- RunPod Serverless (alternative GPU runtime; see issue #33) ----
+    runpod_api_key: str = ""  # KARAOKE_RUNPOD_API_KEY; empty disables.
+    runpod_endpoint_id: str = ""  # KARAOKE_RUNPOD_ENDPOINT_ID; created by scripts/runpod_provision.py.
+    runpod_max_job_cost: float = 0.50  # per-job USD ceiling; cancel + raise beyond.
+    runpod_daily_cost_cap: float = 5.0  # rolling 24h cap (shares Job.vast_cost_micros bookkeeping).
+    runpod_poll_interval_s: float = 2.0
+    runpod_request_timeout_s: int = 30
+    runpod_wall_ceiling_s: float = 900.0  # max poll-loop wall clock per job.
+    # Conservative \$/hr estimate for cost projection mid-poll. RunPod's
+    # cheapest 16-24GB Flex is \$0.58-0.68/hr; we use 0.68 (pessimistic).
+    runpod_hourly_rate_estimate: float = 0.68
+
     # NFS-mounted artifact root inside the coordinator container.
     artifact_root: str = "/srv/artifacts"
 
