@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-test:
+    name: lint-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync deps
+        run: uv sync --frozen --all-extras --all-groups
+      - name: Ruff
+        run: uv run ruff check src tests
+      - name: Pytest
+        run: uv run pytest -q
+
+  migrations:
+    name: migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: karaoke
+          POSTGRES_PASSWORD: karaoke
+          POSTGRES_DB: karaoke
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U karaoke"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      KARAOKE_DATABASE_URL: postgresql+psycopg://karaoke:karaoke@localhost:5432/karaoke
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync deps
+        run: uv sync --frozen --all-extras --all-groups
+      - name: Alembic upgrade head (clean Postgres)
+        run: uv run alembic upgrade head
