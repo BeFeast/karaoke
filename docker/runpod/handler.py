@@ -189,19 +189,34 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("event.input must be an object")
 
     audio_b64 = job_input.get("audio_base64")
-    if not audio_b64 or not isinstance(audio_b64, str):
-        raise ValueError("audio_base64 (str) is required")
+    audio_url = job_input.get("audio_url")
+    if not audio_url and not audio_b64:
+        raise ValueError("audio_url or audio_base64 is required")
+    if audio_url and not isinstance(audio_url, str):
+        raise ValueError("audio_url must be a string")
+    if audio_b64 and not isinstance(audio_b64, str):
+        raise ValueError("audio_base64 must be a string")
 
     mode = job_input.get("mode", "both")
     if mode not in ("demucs", "whisper", "both"):
         raise ValueError("unknown mode")
 
-    try:
-        audio_bytes = base64.b64decode(audio_b64, validate=True)
-    except Exception as exc:
-        raise ValueError(f"audio_base64 is not valid base64: {exc}") from exc
-    if not audio_bytes:
-        raise ValueError("audio_base64 decoded to empty bytes")
+    if audio_url:
+        import urllib.request
+        try:
+            with urllib.request.urlopen(audio_url, timeout=120) as resp:
+                audio_bytes = resp.read()
+        except Exception as exc:
+            raise ValueError(f"audio_url fetch failed: {exc}") from exc
+        if not audio_bytes:
+            raise ValueError("audio_url returned empty body")
+    else:
+        try:
+            audio_bytes = base64.b64decode(audio_b64, validate=True)
+        except Exception as exc:
+            raise ValueError(f"audio_base64 is not valid base64: {exc}") from exc
+        if not audio_bytes:
+            raise ValueError("audio_base64 decoded to empty bytes")
 
     result: dict[str, Any] = {}
 
