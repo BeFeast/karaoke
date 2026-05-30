@@ -114,6 +114,8 @@ class RunpodClient:
         self.prior_24h_cost_micros = prior_24h_cost_micros
         self._http = http or _http
         self._r2_uploader = r2_uploader
+        self._r2_put_urls: dict[str, str] = {}
+        self._r2_output_keys: dict[str, str] = {}
 
     # -- budget --------------------------------------------------------------
     def _check_daily_cap(self) -> None:
@@ -160,8 +162,11 @@ class RunpodClient:
         # Otherwise fall back to base64 (works for tiny test inputs and tests).
         run_input: dict[str, Any]
         if self._r2_configured():
-            audio_url = self._upload_to_r2(mix_wav)
+            audio_url, _ = self._upload_to_r2(mix_wav)
             run_input = {"audio_url": audio_url, "mode": "both"}
+            if getattr(self, "_r2_put_urls", None):
+                run_input["vocals_put_url"] = self._r2_put_urls["vocals"]
+                run_input["instrumental_put_url"] = self._r2_put_urls["instrumental"]
         else:
             audio_b64 = base64.b64encode(mix_wav.read_bytes()).decode("ascii")
             run_input = {"audio_base64": audio_b64, "mode": "both"}
@@ -263,33 +268,111 @@ class RunpodClient:
             and self.settings.r2_secret_access_key.strip()
         )
 
-    def _upload_to_r2(self, mix_wav: Path) -> str:
-        """Upload ``mix_wav`` to R2 under a per-job key and return a
-        presigned GET URL the worker can pull from. Test seam: callers
-        may pass ``r2_uploader`` to __init__ to bypass the network."""
+    def _upload_to_r2(self, mix_wav: Path) -> tuple[str, dict[str, str]]:
+        """Upload ``mix_wav`` to R2 under a per-job prefix and return
+        ``(audio_get_url, output_keys)`` where ``output_keys`` are the
+        per-stem R2 keys we'll pull after COMPLETED. Also stashes
+        per-stem presigned PUT URLs on ``self`` so ``run()`` can pass
+        them to the handler — the handler streams stems straight to R2
+        because RunPod /run output has a ~10MB cap and raw stems blow
+        it. Test seam: pass ``r2_uploader`` to __init__."""
         if self._r2_uploader is not None:
-            return self._r2_uploader(mix_wav)
-        from karaoke.worker.r2_client import presign_get, upload_file
+            audio_url = self._r2_uploader(mix_wav)
+            return audio_url, {"vocals": "", "instrumental": ""}
+        from karaoke.worker.r2_client import (
+            presign_get,
+            presign_put,
+            upload_file,
+        )
 
-        # Per-instance unique key; lifecycle rule on the bucket cleans
-        # stale objects after 24h.
-        key = f"jobs/{int(time.time())}-{mix_wav.stem}.wav"
+        prefix = f"jobs/{int(time.time())}-{mix_wav.stem}"
+        input_key = f"{prefix}/mix.wav"
+        output_keys = {
+            "vocals": f"{prefix}/vocals.wav",
+            "instrumental": f"{prefix}/instrumental.wav",
+        }
         upload_file(
             mix_wav,
             endpoint_url=self.settings.r2_endpoint_url,
             bucket=self.settings.r2_bucket,
-            key=key,
+            key=input_key,
             access_key_id=self.settings.r2_access_key_id,
             secret_access_key=self.settings.r2_secret_access_key,
             content_type="audio/wav",
         )
-        return presign_get(
+        audio_url = presign_get(
             endpoint_url=self.settings.r2_endpoint_url,
             bucket=self.settings.r2_bucket,
-            key=key,
+            key=input_key,
             access_key_id=self.settings.r2_access_key_id,
             secret_access_key=self.settings.r2_secret_access_key,
             expires_in=int(self.settings.r2_presign_ttl_s or 600),
+        )
+        self._r2_put_urls = {
+            kind: presign_put(
+                endpoint_url=self.settings.r2_endpoint_url,
+                bucket=self.settings.r2_bucket,
+                key=k,
+                access_key_id=self.settings.r2_access_key_id,
+                secret_access_key=self.settings.r2_secret_access_key,
+                expires_in=int(self.settings.r2_presign_ttl_s or 600),
+            )
+            for kind, k in output_keys.items()
+        }
+        self._r2_output_keys = output_keys
+        return audio_url, output_keys
+
+    # -- R2 download (output stems too large for RunPod's 10MB cap) ----------
+    def _handle_r2_output(
+        self, output: dict[str, Any], work_dir: Path
+    ) -> tuple[Path, Path]:
+        """Materialise vocals.wav + instrumental.wav into ``work_dir``.
+
+        Three cases:
+          1. R2 PUT path (handler set ``vocals_uploaded: True``): GET
+             the stems from the keys we generated up front.
+          2. base64 path (no R2): decode ``vocals_b64`` /
+             ``instrumental_b64`` from the JSON output.
+          3. Otherwise: raise.
+        """
+        vocals_path = work_dir / "vocals.wav"
+        instrumental_path = work_dir / "instrumental.wav"
+
+        if output.get("vocals_uploaded") and output.get("instrumental_uploaded"):
+            if self._r2_uploader is not None:
+                vocals_path.write_bytes(b"vocals-from-r2")
+                instrumental_path.write_bytes(b"instrumental-from-r2")
+                return vocals_path, instrumental_path
+
+            from karaoke.worker.r2_client import presign_get
+
+            for kind, target in (
+                ("vocals", vocals_path),
+                ("instrumental", instrumental_path),
+            ):
+                key = self._r2_output_keys[kind]
+                url = presign_get(
+                    endpoint_url=self.settings.r2_endpoint_url,
+                    bucket=self.settings.r2_bucket,
+                    key=key,
+                    access_key_id=self.settings.r2_access_key_id,
+                    secret_access_key=self.settings.r2_secret_access_key,
+                    expires_in=int(self.settings.r2_presign_ttl_s or 600),
+                )
+                with urllib.request.urlopen(url, timeout=300) as resp:
+                    target.write_bytes(resp.read())
+            return vocals_path, instrumental_path
+
+        if "vocals_b64" in output and "instrumental_b64" in output:
+            vocals_path.write_bytes(base64.b64decode(output["vocals_b64"]))
+            instrumental_path.write_bytes(
+                base64.b64decode(output["instrumental_b64"])
+            )
+            return vocals_path, instrumental_path
+
+        raise RunpodError(
+            "runpod COMPLETED but stems missing in output: "
+            f"keys={sorted(output)}"
         )
 
     # -- helpers -------------------------------------------------------------
@@ -302,17 +385,14 @@ class RunpodClient:
         wall_seconds: float,
     ) -> GpuJobResult:
         work_dir.mkdir(parents=True, exist_ok=True)
-        for key in ("vocals_b64", "instrumental_b64", "lyrics_txt", "lyrics_json"):
+        for key in ("lyrics_txt", "lyrics_json"):
             if key not in output:
                 raise RunpodError(
                     f"runpod COMPLETED but output missing {key!r}; "
                     f"keys={sorted(output)}"
                 )
 
-        vocals_path = work_dir / "vocals.wav"
-        vocals_path.write_bytes(base64.b64decode(output["vocals_b64"]))
-        instrumental_path = work_dir / "instrumental.wav"
-        instrumental_path.write_bytes(base64.b64decode(output["instrumental_b64"]))
+        vocals_path, instrumental_path = self._handle_r2_output(output, work_dir)
 
         lyrics_txt_path = work_dir / "lyrics.txt"
         lyrics_txt_path.write_text(str(output["lyrics_txt"]), encoding="utf-8")
