@@ -110,7 +110,7 @@ class Settings(BaseSettings):
     runpod_daily_cost_cap: float = 5.0  # rolling 24h cap (shares Job.vast_cost_micros bookkeeping).
     runpod_poll_interval_s: float = 2.0
     runpod_request_timeout_s: int = 30
-    runpod_wall_ceiling_s: float = 900.0  # max poll-loop wall clock per job.
+    runpod_wall_ceiling_s: float = 1800.0  # max poll-loop wall clock per job (covers queue + cold-pull + work + safety).
     # Conservative \$/hr estimate for cost projection mid-poll. RunPod's
     # cheapest 16-24GB Flex is \$0.58-0.68/hr; we use 0.68 (pessimistic).
     runpod_hourly_rate_estimate: float = 0.68
@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     r2_bucket: str = ""  # KARAOKE_R2_BUCKET
     r2_access_key_id: str = ""  # KARAOKE_R2_ACCESS_KEY_ID
     r2_secret_access_key: str = ""  # KARAOKE_R2_SECRET_ACCESS_KEY
-    r2_presign_ttl_s: int = 600  # presigned-URL TTL — covers cold-start + work.
+    r2_presign_ttl_s: int = 1800  # presigned-URL TTL — must exceed worst-case (queue wait + cold-pull + work) so the URL is still valid when the worker finally executes.
 
     # NFS-mounted artifact root inside the coordinator container.
     artifact_root: str = "/srv/artifacts"
