@@ -203,3 +203,38 @@ def test_share_artifact_serves_file_when_present(client, tmp_path):
     assert r.status_code == 200, r.text
     assert r.headers.get("content-type", "").startswith("audio/mpeg")
     assert r.content.startswith(b"ID3")
+
+
+def test_me_returns_admin_for_trusted_lan(client):
+    """Default conftest is trusted-LAN -> admin identity."""
+    r = client.get("/me")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["is_admin"] is True
+    assert body["state"] in {"trusted_lan", "machine_bearer"}
+    assert body["subject"]
+
+
+def test_list_jobs_returns_created_jobs(client):
+    """A freshly created job shows up in the owner's job list."""
+    create = client.post("/jobs", json={"url": "https://example.com/a", "title": "ListMe"})
+    assert create.status_code == 201
+    token = create.json()["job_token"]
+
+    r = client.get("/jobs")
+    assert r.status_code == 200, r.text
+    jobs = r.json()
+    assert isinstance(jobs, list)
+    assert any(j["job_token"] == token for j in jobs)
+    # newest-first ordering: our just-created job is at or near the top.
+    assert jobs[0]["job_token"] == token or any(
+        j["job_token"] == token for j in jobs[:5]
+    )
+
+
+def test_list_jobs_respects_limit(client):
+    for i in range(3):
+        client.post("/jobs", json={"url": f"https://example.com/{i}"})
+    r = client.get("/jobs", params={"limit": 2})
+    assert r.status_code == 200
+    assert len(r.json()) <= 2

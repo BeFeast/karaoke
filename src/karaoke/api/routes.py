@@ -160,6 +160,52 @@ async def job_status(
     return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
 
 
+class MeOut(BaseModel):
+    """Who the caller is, per the resolved auth layer."""
+
+    subject: str
+    email: str | None
+    display_name: str | None
+    state: str
+    is_admin: bool
+
+
+@router.get("/jobs", response_model=list[JobOut], tags=["jobs"])
+async def list_jobs(
+    owner: Owner = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+    limit: int = 50,
+) -> list[JobOut]:
+    """List jobs for the caller, newest first.
+
+    Owner-scoped: a Clerk user sees only their own jobs. Trusted-LAN and
+    machine-bearer callers are treated as admin and see every job (matches
+    ``_can_owner_view``).
+    """
+    limit = max(1, min(limit, 200))
+    stmt = select(Job).order_by(Job.created_at.desc()).limit(limit)
+    if owner.state not in {AuthState.trusted_lan, AuthState.machine_bearer}:
+        stmt = stmt.where(Job.owner_subject == owner.subject)
+    jobs = (await session.scalars(stmt)).all()
+    return [
+        JobOut.from_orm_job(j, public_base_url=settings.public_base_url) for j in jobs
+    ]
+
+
+@router.get("/me", response_model=MeOut, tags=["meta"])
+async def whoami(owner: Owner = Depends(require_owner)) -> MeOut:
+    """Return the resolved caller identity — the SPA uses this to show
+    sign-in state and gate admin-only affordances."""
+    return MeOut(
+        subject=owner.subject,
+        email=owner.email,
+        display_name=owner.display_name,
+        state=owner.state.value,
+        is_admin=owner.state in {AuthState.trusted_lan, AuthState.machine_bearer},
+    )
+
+
 _SHARE_HTML_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
