@@ -108,10 +108,12 @@ class RunpodClient:
         *,
         prior_24h_cost_micros: int = 0,
         http: Callable[..., tuple[int, dict]] | None = None,
+        r2_uploader: Callable[..., str] | None = None,
     ) -> None:
         self.settings = settings
         self.prior_24h_cost_micros = prior_24h_cost_micros
         self._http = http or _http
+        self._r2_uploader = r2_uploader
 
     # -- budget --------------------------------------------------------------
     def _check_daily_cap(self) -> None:
@@ -153,7 +155,16 @@ class RunpodClient:
         # bound, padded a little for queueing.
         wall_ceiling = float(self.settings.runpod_wall_ceiling_s or 900)
 
-        audio_b64 = base64.b64encode(mix_wav.read_bytes()).decode("ascii")
+        # If R2 is configured, upload mix.wav and pass a presigned URL
+        # (RunPod async /run has a ~10MB body cap; our 35-50MB wavs blow it up).
+        # Otherwise fall back to base64 (works for tiny test inputs and tests).
+        run_input: dict[str, Any]
+        if self._r2_configured():
+            audio_url = self._upload_to_r2(mix_wav)
+            run_input = {"audio_url": audio_url, "mode": "both"}
+        else:
+            audio_b64 = base64.b64encode(mix_wav.read_bytes()).decode("ascii")
+            run_input = {"audio_base64": audio_b64, "mode": "both"}
         run_url = f"{RUNPOD_REST}/{endpoint_id}/run"
         cancel_url_tpl = f"{RUNPOD_REST}/{endpoint_id}/cancel/{{id}}"
         status_url_tpl = f"{RUNPOD_REST}/{endpoint_id}/status/{{id}}"
@@ -170,7 +181,7 @@ class RunpodClient:
                 "POST",
                 run_url,
                 api_key,
-                {"input": {"audio_base64": audio_b64, "mode": "both"}},
+                {"input": run_input},
                 timeout=request_timeout,
             )
             if code not in (200, 201) or not body.get("id"):
@@ -241,6 +252,45 @@ class RunpodClient:
                         None,
                         timeout=request_timeout,
                     )
+
+
+    # -- R2 upload (presigned audio URL bypasses RunPod's ~10MB body cap) ----
+    def _r2_configured(self) -> bool:
+        return bool(
+            self.settings.r2_endpoint_url.strip()
+            and self.settings.r2_bucket.strip()
+            and self.settings.r2_access_key_id.strip()
+            and self.settings.r2_secret_access_key.strip()
+        )
+
+    def _upload_to_r2(self, mix_wav: Path) -> str:
+        """Upload ``mix_wav`` to R2 under a per-job key and return a
+        presigned GET URL the worker can pull from. Test seam: callers
+        may pass ``r2_uploader`` to __init__ to bypass the network."""
+        if self._r2_uploader is not None:
+            return self._r2_uploader(mix_wav)
+        from karaoke.worker.r2_client import presign_get, upload_file
+
+        # Per-instance unique key; lifecycle rule on the bucket cleans
+        # stale objects after 24h.
+        key = f"jobs/{int(time.time())}-{mix_wav.stem}.wav"
+        upload_file(
+            mix_wav,
+            endpoint_url=self.settings.r2_endpoint_url,
+            bucket=self.settings.r2_bucket,
+            key=key,
+            access_key_id=self.settings.r2_access_key_id,
+            secret_access_key=self.settings.r2_secret_access_key,
+            content_type="audio/wav",
+        )
+        return presign_get(
+            endpoint_url=self.settings.r2_endpoint_url,
+            bucket=self.settings.r2_bucket,
+            key=key,
+            access_key_id=self.settings.r2_access_key_id,
+            secret_access_key=self.settings.r2_secret_access_key,
+            expires_in=int(self.settings.r2_presign_ttl_s or 600),
+        )
 
     # -- helpers -------------------------------------------------------------
     def _materialise(

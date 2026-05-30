@@ -360,3 +360,77 @@ def test_scheduler_runpod_mode_without_keys_does_not_use_mock(tmp_path):
         artifact_root=str(tmp_path),
     )
     assert not _use_mock(s)
+
+
+# ---------------------------------------------------------------------------
+# 9. R2 upload path
+# ---------------------------------------------------------------------------
+def test_run_uses_audio_url_when_r2_configured(settings, tmp_path):
+    settings.r2_endpoint_url = "https://acct.r2.cloudflarestorage.com"
+    settings.r2_bucket = "karaoke-job-uploads"
+    settings.r2_access_key_id = "AKID"
+    settings.r2_secret_access_key = "SECRET"
+
+    captured: dict = {}
+
+    def fake_uploader(path: Path) -> str:
+        captured["path"] = path
+        return "https://acct.r2.cloudflarestorage.com/karaoke-job-uploads/jobs/123-mix.wav?X-Amz-Signature=abc"
+
+    rec = _Recorder([
+        {"expect_in": "/run", "code": 200, "body": {"id": "rp-r2-1"}},
+        {
+            "expect_in": "/status/rp-r2-1",
+            "code": 200,
+            "body": {
+                "status": "COMPLETED",
+                "executionTime": 5000,
+                "output": {
+                    "vocals_b64": _b64(b"v"),
+                    "instrumental_b64": _b64(b"i"),
+                    "lyrics_txt": "x",
+                    "lyrics_json": {},
+                    "gpu_model": "A4000",
+                    "elapsed_s": 5.0,
+                },
+            },
+        },
+    ])
+
+    client = RunpodClient(settings, http=rec, r2_uploader=fake_uploader)
+    client.run(_mix_wav(tmp_path), tmp_path / "work")
+
+    assert captured["path"].name == "mix.wav"
+    # The submit body must carry audio_url, not audio_base64.
+    submit_call = next(c for c in rec.calls if "/run" in c[1] and c[2])
+    payload = submit_call[2]["input"]
+    assert "audio_url" in payload
+    assert "audio_base64" not in payload
+
+
+def test_run_falls_back_to_base64_when_r2_not_configured(settings, tmp_path):
+    # Default fixture has no R2 settings -> base64 path.
+    rec = _Recorder([
+        {"expect_in": "/run", "code": 200, "body": {"id": "rp-b64-1"}},
+        {
+            "expect_in": "/status/rp-b64-1",
+            "code": 200,
+            "body": {
+                "status": "COMPLETED",
+                "executionTime": 5000,
+                "output": {
+                    "vocals_b64": _b64(b"v"),
+                    "instrumental_b64": _b64(b"i"),
+                    "lyrics_txt": "x",
+                    "lyrics_json": {},
+                    "gpu_model": "A4000",
+                    "elapsed_s": 5.0,
+                },
+            },
+        },
+    ])
+    RunpodClient(settings, http=rec).run(_mix_wav(tmp_path), tmp_path / "work")
+    submit_call = next(c for c in rec.calls if "/run" in c[1] and c[2])
+    payload = submit_call[2]["input"]
+    assert "audio_base64" in payload
+    assert "audio_url" not in payload

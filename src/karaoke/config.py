@@ -100,6 +100,13 @@ class Settings(BaseSettings):
     # cheapest 16-24GB Flex is \$0.58-0.68/hr; we use 0.68 (pessimistic).
     runpod_hourly_rate_estimate: float = 0.68
 
+    # ---- R2 (Cloudflare) for audio upload (RunPod /run has ~10MB body cap) ----
+    r2_endpoint_url: str = ""  # KARAOKE_R2_ENDPOINT_URL
+    r2_bucket: str = ""  # KARAOKE_R2_BUCKET
+    r2_access_key_id: str = ""  # KARAOKE_R2_ACCESS_KEY_ID
+    r2_secret_access_key: str = ""  # KARAOKE_R2_SECRET_ACCESS_KEY
+    r2_presign_ttl_s: int = 600  # presigned-URL TTL — covers cold-start + work.
+
     # NFS-mounted artifact root inside the coordinator container.
     artifact_root: str = "/srv/artifacts"
 
