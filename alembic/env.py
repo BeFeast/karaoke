@@ -26,7 +26,7 @@ def _resolved_url() -> str:
     if env_url:
         # Alembic itself wants a sync URL; normalise the asyncpg/aiosqlite drivers.
         return (
-            env_url.replace("+asyncpg", "")
+            env_url.replace("+asyncpg", "+psycopg")
             .replace("+aiosqlite", "")
         )
     return config.get_main_option("sqlalchemy.url") or "sqlite:///./karaoke.db"
