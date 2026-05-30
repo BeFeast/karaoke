@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Scribe">
+  <rect width="128" height="128" rx="24" fill="#174ea6"/>
+  <path d="M32 86h64v10H32z" fill="#ffffff" opacity=".9"/>
+  <path d="M38 32h52c4.4 0 8 3.6 8 8v37c0 4.4-3.6 8-8 8H38c-4.4 0-8-3.6-8-8V40c0-4.4 3.6-8 8-8z" fill="#ffffff"/>
+  <path d="M58 49v19l18-9.5z" fill="#d93025"/>
+  <path d="M43 88l-8 18 18-8 41-41-10-10z" fill="#fbbc04"/>
+  <path d="M84 47l6-6 10 10-6 6z" fill="#34a853"/>
+</svg>

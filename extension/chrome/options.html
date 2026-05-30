@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Karaoke extension settings</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main>
+      <h1>Karaoke settings</h1>
+      <form id="settings-form">
+        <label>
+          Karaoke base URL
+          <input id="base-url" name="baseUrl" type="url" required placeholder="http://10.10.0.13:13140">
+          <span class="help">
+            Defaults to the LAN runtime. Public deployments use the URL from
+            <code>KARAOKE_PUBLIC_BASE_URL</code> (Cloudflare / NPM in front of the host).
+          </span>
+        </label>
+        <label>
+          Optional bearer token
+          <input id="bearer-token" name="bearerToken" type="password" autocomplete="off">
+          <span class="help">
+            Create a Chrome extension token (<code>ktx_...</code>) in Karaoke Settings, then paste it here.
+            It is required for protected Karaoke URLs outside trusted LAN.
+          </span>
+        </label>
+        <div class="actions">
+          <button type="submit">Save</button>
+          <span id="status" role="status" aria-live="polite"></span>
+        </div>
+      </form>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>
