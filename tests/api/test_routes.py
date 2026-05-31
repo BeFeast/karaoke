@@ -1,10 +1,58 @@
 """Smoke tests for the karaoke HTTP routes."""
 from __future__ import annotations
 
+import base64
+import json
+import os
+import secrets
+import sqlite3
 import time
 from pathlib import Path
 
 from karaoke.db.models import JobStatus
+
+
+def _clerk_jwt(sub: str) -> str:
+    """Forge a Clerk-test-mode JWT (signature unchecked in KARAOKE_AUTH_TEST_MODE)."""
+    header = base64.urlsafe_b64encode(b'{"alg":"RS256","typ":"JWT"}').rstrip(b"=").decode()
+    body = base64.urlsafe_b64encode(
+        json.dumps(
+            {"sub": sub, "email": f"{sub}@example.com", "exp": int(time.time()) + 600}
+        ).encode()
+    ).rstrip(b"=").decode()
+    sig = base64.urlsafe_b64encode(b"sig").rstrip(b"=").decode()
+    return f"{header}.{body}.{sig}"
+
+
+def _seed_job(status: str, *, owner_subject: str = "lan-default") -> tuple[int, str]:
+    """Insert a job row directly (the mock never produces failed/long-queued
+    states). Uses a parallel sqlite3 connection — the pattern the conftest
+    explicitly supports with its file-backed test DB."""
+    db_path = os.environ["KARAOKE_DATABASE_URL"].split("///", 1)[1]
+    token = secrets.token_urlsafe(16)
+    con = sqlite3.connect(db_path)
+    try:
+        con.execute("PRAGMA busy_timeout=3000")
+        con.execute(
+            "INSERT INTO jobs "
+            "(job_token, owner_subject, source_url, title, status, progress, "
+            " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                token,
+                owner_subject,
+                "https://example.com/seed",
+                None,
+                status,
+                0,
+                "2026-05-31 00:00:00+00:00",
+                "2026-05-31 00:00:00+00:00",
+            ),
+        )
+        con.commit()
+        row = con.execute("SELECT id FROM jobs WHERE job_token=?", (token,)).fetchone()
+        return int(row[0]), token
+    finally:
+        con.close()
 
 
 def test_health_is_public(client):
@@ -27,22 +75,10 @@ def test_post_jobs_returns_initial_payload(client):
 
 def test_get_status_owner_isolation(client):
     """A clerk-authenticated user cannot read another clerk user's job."""
-    # alice creates a job via Clerk-test-mode JWT.
-    import base64
-    import json
-
-    def _jwt(sub: str) -> str:
-        header = base64.urlsafe_b64encode(b'{"alg":"RS256","typ":"JWT"}').rstrip(b"=").decode()
-        body = base64.urlsafe_b64encode(
-            json.dumps({"sub": sub, "email": f"{sub}@example.com", "exp": int(time.time()) + 600}).encode()
-        ).rstrip(b"=").decode()
-        sig = base64.urlsafe_b64encode(b"sig").rstrip(b"=").decode()
-        return f"{header}.{body}.{sig}"
-
     create = client.post(
         "/jobs",
         json={"url": "https://x"},
-        headers={"Authorization": f"Bearer {_jwt('alice')}"},
+        headers={"Authorization": f"Bearer {_clerk_jwt('alice')}"},
     )
     assert create.status_code == 201, create.text
     job = create.json()
@@ -50,14 +86,14 @@ def test_get_status_owner_isolation(client):
     # Alice can read it.
     own = client.get(
         f"/jobs/{job['id']}/status",
-        headers={"Authorization": f"Bearer {_jwt('alice')}"},
+        headers={"Authorization": f"Bearer {_clerk_jwt('alice')}"},
     )
     assert own.status_code == 200, own.text
 
     # Bob cannot — gets 404 (not 403, to hide existence).
     other = client.get(
         f"/jobs/{job['id']}/status",
-        headers={"Authorization": f"Bearer {_jwt('bob')}"},
+        headers={"Authorization": f"Bearer {_clerk_jwt('bob')}"},
     )
     assert other.status_code == 404
 
@@ -238,3 +274,95 @@ def test_list_jobs_respects_limit(client):
     r = client.get("/jobs", params={"limit": 2})
     assert r.status_code == 200
     assert len(r.json()) <= 2
+
+
+def test_delete_job_removes_it(client):
+    """LAN-admin can delete a job; it then 404s and drops out of the list."""
+    job_id, token = _seed_job(JobStatus.completed.value)
+
+    r = client.delete(f"/jobs/{job_id}")
+    assert r.status_code == 204, r.text
+
+    assert client.get(f"/jobs/{job_id}/status").status_code == 404
+    assert not any(j["job_token"] == token for j in client.get("/jobs").json())
+
+
+def test_delete_job_404_for_missing(client):
+    assert client.delete("/jobs/999999").status_code == 404
+
+
+def test_delete_job_owner_isolation(client):
+    """Bob cannot delete Alice's job (404 to hide existence); it survives."""
+    create = client.post(
+        "/jobs",
+        json={"url": "https://x"},
+        headers={"Authorization": f"Bearer {_clerk_jwt('alice')}"},
+    )
+    job_id = create.json()["id"]
+
+    bob = client.delete(
+        f"/jobs/{job_id}", headers={"Authorization": f"Bearer {_clerk_jwt('bob')}"}
+    )
+    assert bob.status_code == 404
+
+    alice = client.get(
+        f"/jobs/{job_id}/status",
+        headers={"Authorization": f"Bearer {_clerk_jwt('alice')}"},
+    )
+    assert alice.status_code == 200
+
+
+def test_cancel_nonterminal_job(client):
+    """Cancelling a queued job flips it to cancelled."""
+    job_id, _ = _seed_job(JobStatus.queued.value)
+
+    r = client.post(f"/jobs/{job_id}/cancel")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == JobStatus.cancelled.value
+
+    assert client.get(f"/jobs/{job_id}/status").json()["status"] == JobStatus.cancelled.value
+
+
+def test_cancel_terminal_job_conflicts(client):
+    """A completed/failed job cannot be cancelled (409)."""
+    job_id, _ = _seed_job(JobStatus.completed.value)
+    r = client.post(f"/jobs/{job_id}/cancel")
+    assert r.status_code == 409, r.text
+
+
+def test_cancel_job_owner_isolation(client):
+    job_id, _ = _seed_job(JobStatus.queued.value, owner_subject="alice")
+    bob = client.post(
+        f"/jobs/{job_id}/cancel",
+        headers={"Authorization": f"Bearer {_clerk_jwt('bob')}"},
+    )
+    assert bob.status_code == 404
+
+
+def test_clear_failed_deletes_only_failed(client):
+    """clear-failed removes failed jobs and leaves others untouched."""
+    f1, t1 = _seed_job(JobStatus.failed.value)
+    f2, t2 = _seed_job(JobStatus.failed.value)
+    ok_id, ok_token = _seed_job(JobStatus.completed.value)
+
+    r = client.post("/jobs/clear-failed")
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == 2
+
+    tokens = {j["job_token"] for j in client.get("/jobs").json()}
+    assert t1 not in tokens and t2 not in tokens
+    assert ok_token in tokens
+
+
+def test_clear_failed_is_owner_scoped(client):
+    """A clerk user only clears their own failed jobs, not everyone's."""
+    _alice_id, alice_token = _seed_job(JobStatus.failed.value, owner_subject="alice")
+
+    r = client.post(
+        "/jobs/clear-failed", headers={"Authorization": f"Bearer {_clerk_jwt('bob')}"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == 0  # bob has no failed jobs
+
+    # alice's failed job is still present (LAN-admin can see it).
+    assert any(j["job_token"] == alice_token for j in client.get("/jobs").json())

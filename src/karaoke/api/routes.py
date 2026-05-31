@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import secrets
+import shutil
 from pathlib import Path as _PathLib
 
 from fastapi import (
@@ -235,6 +236,106 @@ async def whoami(owner: Owner = Depends(require_owner)) -> MeOut:
         state=owner.state.value,
         is_admin=owner.state in {AuthState.trusted_lan, AuthState.machine_bearer},
     )
+
+
+_TERMINAL_STATUSES = {JobStatus.completed, JobStatus.failed, JobStatus.cancelled}
+
+
+def _remove_artifact_files(settings: Settings, job_token: str) -> None:
+    """Best-effort removal of a job's NFS artifact directory.
+
+    Strictly scoped to ``<artifact_root>/<job_token>`` so a malformed token can
+    never escalate into deleting the artifact root itself."""
+    if not job_token:
+        return
+    root = _PathLib(settings.artifact_root)
+    target = (root / job_token).resolve()
+    try:
+        root_resolved = root.resolve()
+    except OSError:  # pragma: no cover - root not present in dev/test
+        return
+    if target == root_resolved or root_resolved not in target.parents:
+        return
+    shutil.rmtree(target, ignore_errors=True)
+
+
+class ClearResult(BaseModel):
+    """Result of a bulk cleanup action."""
+
+    deleted: int
+
+
+@router.post("/jobs/clear-failed", response_model=ClearResult, tags=["jobs"])
+async def clear_failed_jobs(
+    owner: Owner = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> ClearResult:
+    """Delete all of the caller's failed jobs (admin/LAN clears every failed job).
+
+    Registered before the ``/jobs/{job_id}`` routes so the literal path is never
+    shadowed by the path-parameter ones."""
+    stmt = (
+        select(Job)
+        .where(Job.status == JobStatus.failed)
+        .options(selectinload(Job.artifacts))
+    )
+    if owner.state not in {AuthState.trusted_lan, AuthState.machine_bearer}:
+        stmt = stmt.where(Job.owner_subject == owner.subject)
+    jobs = (await session.scalars(stmt)).all()
+    tokens = [j.job_token for j in jobs]
+    for job in jobs:
+        await session.delete(job)
+    await session.commit()
+    for token in tokens:
+        _remove_artifact_files(settings, token)
+    return ClearResult(deleted=len(tokens))
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=JobOut, tags=["jobs"])
+async def cancel_job(
+    job_id: int,
+    owner: Owner = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> JobOut:
+    """Cancel an in-flight job. The worker re-checks the status at each stage
+    boundary and stops, so this gracefully unwinds a running pipeline."""
+    job = await session.get(Job, job_id)
+    if job is None or not _can_owner_view(owner, job):
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status in _TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=409, detail=f"job is already {job.status.value}"
+        )
+    job.status = JobStatus.cancelled
+    await session.commit()
+    await session.refresh(job)
+    return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
+
+
+@router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["jobs"])
+async def delete_job(
+    job_id: int,
+    owner: Owner = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    """Delete a job (any status) plus its artifact rows and NFS files.
+
+    Owner-scoped: a cross-owner delete returns 404 to hide existence, matching
+    the read endpoints. Artifacts are eager-loaded so the ORM delete-orphan
+    cascade fires under SQLite (whose FK cascade is off by default)."""
+    job = await session.scalar(
+        select(Job).where(Job.id == job_id).options(selectinload(Job.artifacts))
+    )
+    if job is None or not _can_owner_view(owner, job):
+        raise HTTPException(status_code=404, detail="job not found")
+    token = job.job_token
+    await session.delete(job)
+    await session.commit()
+    _remove_artifact_files(settings, token)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 _SHARE_HTML_TEMPLATE = """<!doctype html>

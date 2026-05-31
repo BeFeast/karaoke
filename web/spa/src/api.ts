@@ -106,3 +106,31 @@ export function createJob(input: CreateJobInput): Promise<JobOut> {
     body: JSON.stringify(body),
   });
 }
+
+// Delete a job + its artifacts (204, no body).
+export async function deleteJob(id: number): Promise<void> {
+  const resp = await fetch(`/jobs/${id}`, {
+    method: "DELETE",
+    headers: { ...(await authHeaders()) },
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`${resp.status} ${resp.statusText}: ${text}`.trim());
+  }
+}
+
+// Cancel an in-flight job; the worker stops at the next stage boundary.
+export function cancelJob(id: number): Promise<JobOut> {
+  return request<JobOut>(`/jobs/${id}/cancel`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+}
+
+// Bulk-remove the caller's failed jobs. Returns how many were deleted.
+export function clearFailedJobs(): Promise<{ deleted: number }> {
+  return request<{ deleted: number }>("/jobs/clear-failed", {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
+}
