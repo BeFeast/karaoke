@@ -10,10 +10,18 @@ import {
 } from "@clerk/clerk-react";
 import { App } from "./App";
 import { getConfig, type RuntimeConfig, setTokenGetter } from "./api";
+import { MicMark } from "./components/TopBar";
 import "./styles.css";
 
 function Boot({ children }: { children: React.ReactNode }) {
-  return <div className="center">{children}</div>;
+  return (
+    <div className="center">
+      <span className="brand-mark">
+        <MicMark />
+      </span>
+      {children}
+    </div>
+  );
 }
 
 // Bridges Clerk's session token into the API client whenever auth state
@@ -37,15 +45,17 @@ function ClerkShell({ config }: { config: RuntimeConfig }) {
       <ClerkTokenBridge />
       <SignedOut>
         <Boot>
-          <h1>Karaoke Submitter</h1>
+          <h1>Karaoke</h1>
           <p>Sign in to submit and track jobs.</p>
           <SignInButton mode="modal">
-            <button type="button">Sign in</button>
+            <button type="button" className="btn primary">
+              Sign in
+            </button>
           </SignInButton>
         </Boot>
       </SignedOut>
       <SignedIn>
-        <App config={config} headerExtra={<UserButton afterSignOutUrl="/app/" />} />
+        <App config={config} authControl={<UserButton afterSignOutUrl="/app/" />} />
       </SignedIn>
     </ClerkProvider>
   );
@@ -54,7 +64,17 @@ function ClerkShell({ config }: { config: RuntimeConfig }) {
 function LanShell({ config }: { config: RuntimeConfig }) {
   // No Clerk: the API's trusted-LAN bypass authorises us. Send no auth header.
   setTokenGetter(null);
-  return <App config={config} headerExtra={<span className="badge badge-lan">LAN mode</span>} />;
+  return (
+    <App
+      config={config}
+      authControl={
+        <span className="chip lan">
+          <span className="dot" aria-hidden />
+          LAN mode
+        </span>
+      }
+    />
+  );
 }
 
 async function bootstrap() {
@@ -65,7 +85,7 @@ async function bootstrap() {
   } catch (err) {
     root.render(
       <Boot>
-        <h1>Karaoke Submitter</h1>
+        <h1>Karaoke</h1>
         <p className="error">
           Failed to load runtime config: {err instanceof Error ? err.message : String(err)}
         </p>
