@@ -17,7 +17,9 @@ RunPod posts a JSON job; the handler returns JSON.
 ```json
 {
   "audio_base64": "<base64-encoded WAV bytes>",
-  "mode": "demucs" | "whisper" | "both"
+  "mode": "demucs" | "whisper" | "both",
+  "align_text": "<plain lyrics to force-align>",
+  "align_lang": "eng"
 }
 ```
 
@@ -27,6 +29,14 @@ is marked FAILED — the handler never silently swallows errors.
 In `mode=="both"` Whisper transcribes the **separated vocals stem**, not
 the raw input — that gives cleaner lyrics.
 
+`align_text` (optional, #55): when supplied and Demucs runs, the handler
+force-aligns this plain-text against the vocal stem with
+`ctc-forced-aligner` (MMS-300m) and returns a synthesized line-level LRC in
+`aligned_lrc`. `align_lang` is an ISO-639-3 code (default `eng`). Alignment
+is purely additive and **never fatal**: on failure (or with an old image
+that ignores the field) the handler simply omits `aligned_lrc`, and the
+coordinator falls back to the plain text / Whisper transcript.
+
 ### Output
 
 | field             | demucs | whisper | both |
@@ -35,8 +45,13 @@ the raw input — that gives cleaner lyrics.
 | `instrumental_b64`|   x    |         |  x   |
 | `lyrics_txt`      |        |    x    |  x   |
 | `lyrics_json`     |        |    x    |  x   |
+| `aligned_lrc`*    |   x    |         |  x   |
+| `aligned_lang`*   |   x    |         |  x   |
 | `gpu_model`       |   x    |    x    |  x   |
 | `elapsed_s`       |   x    |    x    |  x   |
+
+`*` only present when `align_text` was supplied **and** alignment
+succeeded.
 
 `*_b64` are base64-encoded `.wav` bytes (htdemucs writes `vocals.wav` and
 `no_vocals.wav` — the latter is mapped to `instrumental_b64`).
@@ -71,10 +86,19 @@ free). Run from the repo root:
 docker buildx build \
   --builder karbuilder \
   --platform linux/amd64 \
-  -t ghcr.io/befeast/karaoke-runpod:cuda12.4 \
+  -t ghcr.io/befeast/karaoke-runpod:cuda12.4-r4 \
   --push \
   docker/runpod/
 ```
+
+> **#55 rebuild required.** The current live image is
+> `ghcr.io/befeast/karaoke-runpod:cuda12.4-r3`. The force-align support
+> (`ctc-forced-aligner` + pre-cached MMS-300m + the `align_text`/`aligned_lrc`
+> handler contract) lands in the **next** tag (`…-r4`). Until that image is
+> built, pushed, and the RunPod endpoint/template is repointed to it, the
+> live handler ignores `align_text` — and the coordinator degrades cleanly
+> (LRCLIB plain text / Whisper). Do the rebuild + endpoint update under
+> supervision after this PR merges; do not bump the endpoint from CI.
 
 After the **first** push the image must be flipped to **public** in the
 GHCR UI (`https://github.com/orgs/BeFeast/packages` → karaoke-runpod →

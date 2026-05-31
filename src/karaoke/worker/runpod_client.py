@@ -138,7 +138,22 @@ class RunpodClient:
         return seconds / 3600.0 * rate
 
     # -- main entrypoint -----------------------------------------------------
-    def run(self, mix_wav: Path, work_dir: Path) -> GpuJobResult:
+    def run(
+        self,
+        mix_wav: Path,
+        work_dir: Path,
+        *,
+        align_text: str | None = None,
+        align_lang: str | None = None,
+    ) -> GpuJobResult:
+        """Submit one job and pull back the artifacts.
+
+        ``align_text`` (#55): when set, the handler force-aligns this plain
+        text against the separated vocal stem and returns a synced LRC in
+        ``aligned_lrc``. ``align_lang`` is an ISO-639-3 code. Both are passed
+        through verbatim; the handler ignores them if it predates the feature,
+        so this is safe against an old image (we just get no ``aligned_lrc``).
+        """
         api_key = self.settings.runpod_api_key.strip()
         endpoint_id = self.settings.runpod_endpoint_id.strip()
         if not api_key:
@@ -171,6 +186,14 @@ class RunpodClient:
         else:
             audio_b64 = base64.b64encode(mix_wav.read_bytes()).decode("ascii")
             run_input = {"audio_base64": audio_b64, "mode": "both"}
+
+        # Force-alignment (#55): pass the plain lyrics to the handler so it can
+        # synthesize a synced LRC from the vocal stem inside the same GPU window.
+        if align_text and align_text.strip():
+            run_input["align_text"] = align_text
+            if align_lang and align_lang.strip():
+                run_input["align_lang"] = align_lang
+
         run_url = f"{RUNPOD_REST}/{endpoint_id}/run"
         cancel_url_tpl = f"{RUNPOD_REST}/{endpoint_id}/cancel/{{id}}"
         status_url_tpl = f"{RUNPOD_REST}/{endpoint_id}/status/{{id}}"
@@ -416,6 +439,16 @@ class RunpodClient:
             lj = json.dumps(lj, ensure_ascii=False, indent=2)
         lyrics_json_path.write_text(lj, encoding="utf-8")
 
+        # Force-aligned LRC (#55) is optional: present only when align_text was
+        # sent AND the handler produced a non-empty LRC. An old image (or a
+        # failed alignment) simply omits it → aligned_lrc_path stays None and
+        # the pipeline falls back to LRCLIB plain / Whisper.
+        aligned_lrc_path: Path | None = None
+        aligned = output.get("aligned_lrc")
+        if isinstance(aligned, str) and aligned.strip():
+            aligned_lrc_path = work_dir / "aligned.lrc"
+            aligned_lrc_path.write_text(aligned, encoding="utf-8")
+
         # Prefer RunPod's reported execution time; fall back to wall clock.
         seconds = max(execution_ms / 1000.0, wall_seconds)
         rate = float(self.settings.runpod_hourly_rate_estimate or 0.68)
@@ -431,4 +464,5 @@ class RunpodClient:
             instrumental_path=instrumental_path,
             lyrics_txt_path=lyrics_txt_path,
             lyrics_json_path=lyrics_json_path,
+            aligned_lrc_path=aligned_lrc_path,
         )

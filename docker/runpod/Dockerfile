@@ -61,6 +61,7 @@ RUN uv venv --python python3.12 /opt/karaoke-venv \
         "demucs>=4.0.1" \
         "faster-whisper>=1.1.1" \
         "runpod>=1.7.0" \
+        "ctc-forced-aligner" \
     && /opt/karaoke-venv/bin/pip uninstall -y hf_xet 2>/dev/null || true
 
 # Pre-cache Demucs htdemucs model weights at build time so cold-start
@@ -78,6 +79,20 @@ from faster_whisper import WhisperModel
 WhisperModel("large-v3-turbo", device="cpu", compute_type="int8")
 PY
 
+# Pre-cache the ctc-forced-aligner MMS-300m model + tokenizer (#55) so
+# cold-start does not pay a model-download cost. CPU load only downloads
+# weights; runtime uses GPU+float16 when available.
+RUN /opt/karaoke-venv/bin/python - <<'PY'
+import torch
+from ctc_forced_aligner import load_alignment_model
+load_alignment_model(
+    "cpu",
+    model_path="MahmoudAshraf/mms-300m-1130-forced-aligner",
+    dtype=torch.float32,
+)
+print("ctc-forced-aligner mms-300m cached")
+PY
+
 # Clean caches and pyc bloat.
 RUN find /opt/karaoke-venv -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true \
     && find /opt/karaoke-venv -name "*.pyc" -delete 2>/dev/null || true \
@@ -92,11 +107,13 @@ import torch
 from demucs.pretrained import get_model
 from faster_whisper import WhisperModel
 import runpod  # noqa: F401
+import ctc_forced_aligner  # noqa: F401
 print("torch version:", torch.__version__)
 print("torch cuda built:", torch.version.cuda)
 print("demucs htdemucs loadable:", type(get_model("htdemucs")).__name__)
 print("faster-whisper import ok")
 print("runpod sdk import ok")
+print("ctc-forced-aligner import ok")
 hf = os.environ.get("HF_HOME", "/root/.cache/huggingface")
 assert os.path.isdir(hf + "/hub"), "whisper model cache missing"
 th = os.environ.get("TORCH_HOME", "/root/.cache/torch")

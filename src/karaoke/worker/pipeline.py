@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime as dt
+import functools
 import json
 import re
 import subprocess
@@ -37,6 +38,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from karaoke.db.models import Artifact, Job, JobStatus
 from karaoke.titles import derive_metadata
 from karaoke.worker.lyrics import (
+    SOURCE_FORCED_ALIGNED,
     SOURCE_INSTRUMENTAL,
     SOURCE_LRCLIB_PLAIN,
     SOURCE_LRCLIB_SYNCED,
@@ -210,15 +212,23 @@ def _resolve_lyrics(
     lyrics: LyricsResult,
     exports_dir: Path,
     whisper_lyrics_txt: Path,
+    aligned_lrc_path: Path | None = None,
 ) -> dict[str, object]:
     """Apply the lyrics precedence and write the chosen export files.
 
     Precedence (highest first):
-      1. LRCLIB synced  → write ``exports/lyrics.lrc`` (+ ``lyrics.txt`` so the
-         existing plain-text share/inline path still works).
-      2. LRCLIB plain   → write ``exports/lyrics.txt`` from LRCLIB.
-      3. LRCLIB instrumental → no lyrics; mark the job instrumental.
-      4. LRCLIB miss    → keep the Whisper transcript (``lyrics.txt``).
+      1. LRCLIB synced        → write ``exports/lyrics.lrc`` (+ ``lyrics.txt``).
+      2. LRCLIB plain + force-aligned LRC → write the GPU-synthesized
+         ``exports/lyrics.lrc`` (provenance ``forced_aligned``) + the LRCLIB
+         plain text as ``lyrics.txt``.
+      3. LRCLIB plain (no usable aligned LRC) → write ``exports/lyrics.txt``
+         (untimed) from LRCLIB.
+      4. LRCLIB instrumental  → no lyrics; mark the job instrumental.
+      5. LRCLIB miss          → keep the Whisper transcript (``lyrics.txt``).
+
+    ``aligned_lrc_path`` is the optional GPU-produced force-aligned LRC (#55).
+    It is only consulted in the plain-only branch — synced LRCLIB always wins,
+    and we never force-align when there's nothing to align.
 
     Returns a mapping with provenance for ``metadata.json`` and a flag for
     whether an ``.lrc`` was written::
@@ -242,7 +252,20 @@ def _resolve_lyrics(
         }
 
     if lyrics.plain:
+        # Always keep the LRCLIB plain text as the plain-text export.
         lyrics_txt.write_text(lyrics.plain, encoding="utf-8")
+        # Promote to a synced export if the GPU force-aligned the plain text
+        # into a usable LRC (#55). Tolerant: a missing/empty/garbage aligned
+        # file degrades silently to the untimed plain-only branch.
+        aligned = _read_aligned_lrc(aligned_lrc_path)
+        if aligned:
+            lyrics_lrc.write_text(aligned, encoding="utf-8")
+            return {
+                "lyrics_source": SOURCE_FORCED_ALIGNED,
+                "synced": True,
+                "instrumental": False,
+                "lrc_written": True,
+            }
         return {
             "lyrics_source": SOURCE_LRCLIB_PLAIN,
             "synced": False,
@@ -279,6 +302,52 @@ def _lrc_to_plain(lrc: str) -> str:
         if stripped:
             out.append(stripped)
     return "\n".join(out)
+
+
+# Minimal ISO-639-1 → ISO-639-3 map for the languages we realistically see in
+# YouTube music metadata. ctc-forced-aligner's MMS-300m takes ISO-639-3; an
+# unknown code falls back to English, which the aligner tolerates (romanize=True
+# normalizes the text regardless). This is intentionally tiny — we only need a
+# best-effort hint, never a complete language database.
+_ISO1_TO_ISO3 = {
+    "en": "eng", "es": "spa", "fr": "fra", "de": "deu", "it": "ita",
+    "pt": "por", "ru": "rus", "uk": "ukr", "pl": "pol", "nl": "nld",
+    "ja": "jpn", "ko": "kor", "zh": "zho", "ar": "ara", "he": "heb",
+    "tr": "tur", "hi": "hin", "sv": "swe", "fi": "fin", "no": "nor",
+    "cs": "ces", "el": "ell", "ro": "ron", "hu": "hun", "id": "ind",
+    "vi": "vie", "th": "tha",
+}
+
+
+def _align_lang(source_meta: dict) -> str:
+    """Best-effort ISO-639-3 code for force-alignment from job metadata.
+
+    Accepts either an ISO-639-1 (``"en"``) or already-639-3 (``"eng"``) value
+    under ``language``/``lang``; defaults to English when unknown/absent.
+    """
+    raw = source_meta.get("language") or source_meta.get("lang")
+    code = str(raw or "").strip().lower()
+    if len(code) == 3:
+        return code
+    return _ISO1_TO_ISO3.get(code[:2], "eng")
+
+
+def _read_aligned_lrc(aligned_lrc_path: Path | None) -> str | None:
+    """Read a GPU force-aligned LRC (#55), validating it looks like an LRC.
+
+    Tolerant by design: returns ``None`` on a missing/empty/unreadable file or
+    a body that carries no ``[mm:ss.xx]`` timestamp tag — so the pipeline falls
+    back to LRCLIB plain text rather than emitting a bogus ``.lrc``.
+    """
+    if aligned_lrc_path is None:
+        return None
+    try:
+        body = aligned_lrc_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not body.strip() or not _LRC_TIMESTAMP_RE.search(body):
+        return None
+    return body
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +398,28 @@ async def run_real_job(
         mix_wav = work_dir / "mix.wav"
         await asyncio.to_thread(_to_wav, raw_audio, mix_wav)
 
+        # --- lyrics lookup (BEFORE GPU dispatch) ----------------------------
+        # We resolve LRCLIB *before* the GPU window so that, when LRCLIB has the
+        # text but no synced timing, we can ship that plain text to the GPU as
+        # ``align_text`` and force-align it against the vocal stem in the SAME
+        # job (#55). Best-effort: any network error → empty result → no
+        # align_text → unchanged behavior (Whisper floor). Runs on the
+        # coordinator, never on the GPU.
+        lyrics = await asyncio.to_thread(
+            _LYRICS_SOURCE.fetch,
+            artist=source_meta.get("artist"),
+            track=source_meta.get("track"),
+            album=source_meta.get("album"),
+            duration=source_meta.get("duration"),
+        )
+        # Force-align only when LRCLIB returned plain text but NO synced LRC
+        # (synced already wins; instrumental/miss have nothing to align).
+        align_text: str | None = None
+        align_lang: str | None = None
+        if lyrics.plain and not lyrics.synced_lrc and not lyrics.instrumental:
+            align_text = lyrics.plain
+            align_lang = _align_lang(source_meta)
+
         # --- separating (provision + /demucs) -------------------------------
         if not await _set_stage(session_factory, job_id, JobStatus.separating, 45):
             return
@@ -345,9 +436,16 @@ async def run_real_job(
         # instance window, then destroys the instance in its own finally.
         # We flip the visible status to "transcribing" right before the call so
         # the WS poller reflects the GPU phase; the single window covers both.
+        # When ``align_text`` is set, the RunPod handler additionally force-
+        # aligns it against the vocal stem and returns a synced LRC (#55).
         if not await _set_stage(session_factory, job_id, JobStatus.transcribing, 75):
             return
-        gpu = await asyncio.to_thread(client.run, mix_wav, work_dir)
+        gpu = await asyncio.to_thread(
+            functools.partial(
+                client.run, mix_wav, work_dir,
+                align_text=align_text, align_lang=align_lang,
+            )
+        )
 
         # --- finalize -------------------------------------------------------
         exports_dir.mkdir(parents=True, exist_ok=True)
@@ -356,18 +454,15 @@ async def run_real_job(
         await asyncio.to_thread(_wav_to_mp3, gpu.instrumental_path, karaoke_mp3)
         await asyncio.to_thread(_wav_to_mp3, gpu.vocals_path, vocals_mp3)
 
-        # --- lyrics: prefer real LRCLIB lyrics over the Whisper transcript --
-        # Precedence: LRCLIB synced > LRCLIB plain > Whisper ASR. The lookup is
-        # best-effort and never fails the job (network errors → empty result →
-        # Whisper transcript kept). Runs on the coordinator, not the GPU.
-        lyrics = await asyncio.to_thread(
-            _LYRICS_SOURCE.fetch,
-            artist=source_meta.get("artist"),
-            track=source_meta.get("track"),
-            album=source_meta.get("album"),
-            duration=source_meta.get("duration"),
+        # --- lyrics resolution: precedence + chosen exports -----------------
+        # LRCLIB synced > LRCLIB plain + force-aligned LRC (→ synced) >
+        # LRCLIB plain (untimed) > Whisper ASR (floor). Tolerant: if the GPU
+        # returned no usable aligned LRC (old image / alignment failed), we
+        # degrade to LRCLIB plain text; if LRCLIB missed entirely, we keep the
+        # Whisper transcript. Never fails the job over alignment.
+        lyrics_prov = _resolve_lyrics(
+            lyrics, exports_dir, gpu.lyrics_txt_path, gpu.aligned_lrc_path
         )
-        lyrics_prov = _resolve_lyrics(lyrics, exports_dir, gpu.lyrics_txt_path)
 
         lyrics_txt = exports_dir / "lyrics.txt"
         lyrics_lrc = exports_dir / "lyrics.lrc"
