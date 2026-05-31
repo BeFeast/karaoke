@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getLyricsText, getShare, type SharePayload } from "../api";
 import { artifactView, statusMeta } from "../jobStatus";
 import { goDashboard, itemUrl } from "../router";
@@ -6,6 +6,10 @@ import { useTheme } from "../theme";
 import { StatusChip } from "./StatusChip";
 import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
+
+// Lazy so wavesurfer.js (+ its WebAudio engine) only loads on the item route,
+// keeping the dashboard bundle lean.
+const KaraokePlayer = lazy(() => import("../player/KaraokePlayer"));
 
 const POLL_MS = 3000;
 
@@ -164,6 +168,18 @@ function ItemBody({
   const downloads = views; // all artifacts are downloadable
   const isComplete = payload.status === "completed";
 
+  // Resolve the two stems for the real player. `karaoke` = instrumental (the
+  // master + waveform), `vocals` = the follower. We prefer kind, then fall back
+  // to filename for older jobs whose artifacts lack a precise content_type.
+  const instrumental = useMemo(
+    () => audio.find((v) => v.kind === "karaoke") ?? audio.find((v) => v.name.startsWith("karaoke")) ?? null,
+    [audio],
+  );
+  const vocals = useMemo(
+    () => audio.find((v) => v.kind === "vocals") ?? audio.find((v) => v.name.startsWith("vocals")) ?? null,
+    [audio],
+  );
+
   return (
     <>
       <div className="item-header">
@@ -209,22 +225,27 @@ function ItemBody({
           ))}
       </div>
 
-      {/* Player slot — simple HTML5 audio cards for THIS issue; the wavesurfer
-          player is a separate issue (#58). */}
+      {/* Player slot — the real karaoke player (wavesurfer waveform + dual-stem
+          transport). Falls back to bare <audio> only when no instrumental stem
+          exists, and to an empty state when there's no audio at all. */}
       {isComplete && (
         <section className="players">
           <div className="sec-label">player</div>
-          {audio.length === 0 ? (
-            <div className="empty">
-              <div>No audio tracks were produced for this job.</div>
-            </div>
-          ) : (
+          {instrumental ? (
+            <Suspense fallback={<div className="player-card ksplayer-fallback" aria-hidden />}>
+              <KaraokePlayer instrumentalUrl={instrumental.href} vocalsUrl={vocals?.href ?? null} />
+            </Suspense>
+          ) : audio.length > 0 ? (
             audio.map((v) => (
               <div className="player-card" key={v.name}>
                 <div className="player-label">{v.label}</div>
                 <audio controls preload="none" src={v.href} />
               </div>
             ))
+          ) : (
+            <div className="empty">
+              <div>No audio tracks were produced for this job.</div>
+            </div>
           )}
         </section>
       )}

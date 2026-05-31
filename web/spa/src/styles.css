@@ -777,6 +777,137 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   width: 100%;
   display: block;
 }
+/* ─── Karaoke player (wavesurfer + dual-stem transport) ─────────────────── */
+.ksplayer {
+  background: var(--bg-card);
+  border: var(--rule);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  margin-bottom: 10px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ksplayer:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.ksplayer-wave-wrap {
+  position: relative;
+  min-height: 96px;
+}
+.ksplayer-wave {
+  width: 100%;
+  cursor: pointer;
+}
+/* Shimmer placeholder until wavesurfer paints the decoded peaks. */
+.ksplayer-loading {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius);
+  background: linear-gradient(90deg, var(--bg-soft) 0%, var(--border-soft) 40%, var(--bg-soft) 80%);
+  background-size: 200% 100%;
+  animation: skel-shimmer 1.4s linear infinite;
+}
+.ksplayer-error {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.ksplayer-fallback {
+  min-height: 140px;
+}
+
+.ksplayer-transport,
+.ksplayer-mix,
+.ksplayer-loop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ksplayer-play {
+  min-width: 42px;
+  justify-content: center;
+  font-size: 14px;
+}
+.ksplayer-time {
+  font-size: 12.5px;
+  color: var(--fg-soft);
+  font-variant-numeric: tabular-nums;
+}
+.ksplayer-spacer { flex: 1 1 auto; }
+.ksplayer-ctl-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.ksplayer-rate { display: inline-flex; align-items: center; gap: 8px; }
+.ksplayer-select {
+  appearance: none;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+.ksplayer-select:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.ksplayer-mix {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 14px;
+  justify-content: space-between;
+}
+.ksplayer-ab { display: inline-flex; align-items: center; gap: 8px; }
+.ksplayer-blend {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 220px;
+  min-width: 200px;
+  justify-content: flex-end;
+}
+.ksplayer-blend input[type="range"] {
+  flex: 1 1 auto;
+  max-width: 220px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.ksplayer-blend input[type="range"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.ksplayer-loop {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 14px;
+}
+
+@media (max-width: 880px) {
+  .ksplayer { padding: 14px; gap: 12px; }
+  .ksplayer-wave-wrap, .ksplayer-wave { min-height: 72px; }
+  .ksplayer-mix { flex-direction: column; align-items: stretch; gap: 12px; }
+  .ksplayer-blend { justify-content: flex-start; }
+  .ksplayer-blend input[type="range"] { max-width: none; }
+  .ksplayer-spacer { flex-basis: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ksplayer-loading { animation: none; }
+}
+
 .lyrics-panel { margin-bottom: 28px; }
 .lyrics-text {
   background: var(--bg-card);
