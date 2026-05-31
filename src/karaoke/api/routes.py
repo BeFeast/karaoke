@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import re
 import secrets
 import shutil
 from pathlib import Path as _PathLib
@@ -46,6 +48,14 @@ class JobCreate(BaseModel):
     title: str | None = None
 
 
+class JobArtifactOut(BaseModel):
+    """A ready output file, projected for the SPA's "what's available" UI."""
+
+    kind: str
+    name: str
+    size: int | None
+
+
 class JobOut(BaseModel):
     """Owner-visible job projection."""
 
@@ -60,6 +70,7 @@ class JobOut(BaseModel):
     error: str | None
     share_url: str
     owner_subject: str
+    artifacts: list[JobArtifactOut]
 
     @classmethod
     def from_orm_job(cls, job: Job, *, public_base_url: str) -> JobOut:
@@ -76,6 +87,14 @@ class JobOut(BaseModel):
             error=job.error,
             share_url=share,
             owner_subject=job.owner_subject,
+            artifacts=[
+                JobArtifactOut(
+                    kind=a.kind,
+                    name=_PathLib(a.relative_path).name,
+                    size=a.size_bytes,
+                )
+                for a in job.artifacts
+            ],
         )
 
 
@@ -100,6 +119,33 @@ class SharePayload(BaseModel):
     progress: int
     owner_display_name: str | None
     artifacts: list[ArtifactOut]
+
+
+class LyricsLine(BaseModel):
+    """A single time-synced lyrics line: ``t`` seconds → ``text``."""
+
+    t: float
+    text: str
+
+
+class LyricsPayload(BaseModel):
+    """Structured lyrics for the player + lyrics panel (Track 2).
+
+    * ``synced`` — true when a time-synced ``.lrc`` is available; ``lines`` is
+      then populated and the player can highlight the active line.
+    * ``lrc`` — raw ``.lrc`` body when synced, else ``None``.
+    * ``lines`` — parsed ``[{t, text}]`` (sorted, blank lines dropped) when
+      synced, else ``None``.
+    * ``plain`` — plain-text lyrics when available, else ``None``.
+    * ``source`` — provenance (``lrclib_synced`` / ``lrclib_plain`` /
+      ``whisper_asr`` / ``instrumental`` / inferred fallback).
+    """
+
+    synced: bool
+    lrc: str | None
+    lines: list[LyricsLine] | None
+    plain: str | None
+    source: str
 
 
 class ConfigOut(BaseModel):
@@ -172,7 +218,9 @@ async def create_job(
     )
     session.add(job)
     await session.commit()
-    await session.refresh(job)
+    # Eager-load ``artifacts`` (empty for a brand-new job) so building JobOut
+    # never triggers an async lazy-load.
+    await session.refresh(job, attribute_names=["artifacts"])
 
     # Dispatch to the real vast.ai worker, or the in-process mock when no
     # vast key is configured (CI / dev default). See worker.scheduler.
@@ -189,7 +237,9 @@ async def job_status(
     settings: Settings = Depends(get_settings),
 ) -> JobOut:
     """Owner-scoped job status."""
-    job = await session.get(Job, job_id)
+    job = await session.scalar(
+        select(Job).where(Job.id == job_id).options(selectinload(Job.artifacts))
+    )
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if not _can_owner_view(owner, job):
@@ -222,7 +272,12 @@ async def list_jobs(
     ``_can_owner_view``).
     """
     limit = max(1, min(limit, 200))
-    stmt = select(Job).order_by(Job.created_at.desc()).limit(limit)
+    stmt = (
+        select(Job)
+        .order_by(Job.created_at.desc())
+        .limit(limit)
+        .options(selectinload(Job.artifacts))
+    )
     if owner.state not in {AuthState.trusted_lan, AuthState.machine_bearer}:
         stmt = stmt.where(Job.owner_subject == owner.subject)
     jobs = (await session.scalars(stmt)).all()
@@ -307,7 +362,9 @@ async def cancel_job(
 ) -> JobOut:
     """Cancel an in-flight job. The worker re-checks the status at each stage
     boundary and stops, so this gracefully unwinds a running pipeline."""
-    job = await session.get(Job, job_id)
+    job = await session.scalar(
+        select(Job).where(Job.id == job_id).options(selectinload(Job.artifacts))
+    )
     if job is None or not _can_owner_view(owner, job):
         raise HTTPException(status_code=404, detail="job not found")
     if job.status in _TERMINAL_STATUSES:
@@ -316,7 +373,7 @@ async def cancel_job(
         )
     job.status = JobStatus.cancelled
     await session.commit()
-    await session.refresh(job)
+    await session.refresh(job, attribute_names=["artifacts"])
     return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
 
 
@@ -573,6 +630,169 @@ async def share_page(
             lyrics_text = None
 
     return HTMLResponse(_render_share_html(job, lyrics_text))
+
+
+# One LRC timestamp tag, e.g. "[01:23.45]" / "[1:23]" / "[01:23:456]". Multiple
+# tags may prefix a single line; we expand each into its own timed line. Mirrors
+# the worker's ``_LRC_TIMESTAMP_RE`` but captures the components for conversion.
+_LRC_TAG_RE = re.compile(r"\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]")
+
+
+def _parse_lrc_lines(lrc: str) -> list[LyricsLine]:
+    """Parse an LRC body into sorted ``LyricsLine`` entries.
+
+    Lines without a timestamp tag (e.g. ``[ar:]`` metadata or free text) and
+    timestamped lines whose text is blank are dropped. A single line carrying
+    several timestamp tags expands into one entry per tag.
+    """
+    lines: list[LyricsLine] = []
+    for raw in lrc.splitlines():
+        tags = list(_LRC_TAG_RE.finditer(raw))
+        if not tags:
+            continue
+        text = _LRC_TAG_RE.sub("", raw).strip()
+        if not text:
+            continue
+        for tag in tags:
+            minutes = int(tag.group(1))
+            seconds = int(tag.group(2))
+            frac_raw = tag.group(3) or "0"
+            # Normalize the fractional part to seconds regardless of 2- or
+            # 3-digit precision (".45" -> 0.45s, ".456" -> 0.456s).
+            frac = int(frac_raw) / (10 ** len(frac_raw))
+            t = minutes * 60 + seconds + frac
+            lines.append(LyricsLine(t=round(t, 3), text=text))
+    lines.sort(key=lambda line: line.t)
+    return lines
+
+
+def _lrc_strip_timestamps(lrc: str) -> str:
+    """Derive plain text from an LRC body (drop tags + blank lines)."""
+    out: list[str] = []
+    for raw in lrc.splitlines():
+        stripped = _LRC_TAG_RE.sub("", raw).strip()
+        if stripped:
+            out.append(stripped)
+    return "\n".join(out)
+
+
+def _read_lyrics_source(exports_dir: _PathLib) -> str | None:
+    """Read ``metadata.json``'s ``lyrics_source`` if present, else ``None``."""
+    meta_path = exports_dir / "metadata.json"
+    if not meta_path.is_file():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(meta, dict):
+        return None
+    source = meta.get("lyrics_source")
+    return source if isinstance(source, str) and source else None
+
+
+def _metadata_is_instrumental(exports_dir: _PathLib) -> bool:
+    """Whether ``metadata.json`` flags the job as instrumental."""
+    meta_path = exports_dir / "metadata.json"
+    if not meta_path.is_file():
+        return False
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return False
+    return bool(isinstance(meta, dict) and meta.get("instrumental"))
+
+
+def _read_text_artifact(path: _PathLib) -> str | None:
+    """Read a small UTF-8 text artifact, or ``None`` on any IO error."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:  # pragma: no cover - filesystem race
+        return None
+
+
+@router.get("/share/{job_token}/lyrics", response_model=LyricsPayload, tags=["share"])
+async def share_lyrics(
+    job_token: str,
+    request: Request,
+    owner: Owner | None = Depends(resolve_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> LyricsPayload:
+    """Structured lyrics for a job, read from the NFS artifact root.
+
+    Same auth model as the other ``/share/{job_token}`` routes (possession of
+    the unlisted token is the access proof; owner and trusted-LAN also see it).
+
+    Resolution from ``<artifact_root>/<job_token>/exports/``:
+
+    * ``lyrics.lrc`` present  → ``synced=true``, ``lrc`` = its text, ``lines`` =
+      parsed ``[mm:ss.xx]`` → ``{t, text}`` (sorted, blank lines dropped),
+      ``plain`` = ``lyrics.txt`` if present else the LRC with timestamps stripped.
+    * only ``lyrics.txt``     → ``synced=false``, ``plain`` only.
+    * instrumental (per ``metadata.json``) → empty lyrics, ``source`` =
+      ``"instrumental"``.
+
+    ``source`` comes from ``metadata.json``'s ``lyrics_source`` when present,
+    otherwise it is inferred from which artifacts exist.
+    """
+    job = await session.scalar(select(Job).where(Job.job_token == job_token))
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    holds_unlisted_token = True
+    is_owner = owner is not None and _can_owner_view(owner, job)
+    is_lan = is_trusted_lan_request(request, settings)
+    if not (holds_unlisted_token or is_owner or is_lan):  # pragma: no cover
+        raise HTTPException(status_code=404, detail="job not found")
+
+    exports_dir = _PathLib(settings.artifact_root) / job_token / "exports"
+    meta_source = _read_lyrics_source(exports_dir)
+
+    # Instrumental: no lyrics regardless of any stray files.
+    if _metadata_is_instrumental(exports_dir):
+        return LyricsPayload(
+            synced=False,
+            lrc=None,
+            lines=None,
+            plain=None,
+            source=meta_source or "instrumental",
+        )
+
+    lrc_path = exports_dir / "lyrics.lrc"
+    txt_path = exports_dir / "lyrics.txt"
+
+    lrc_text = _read_text_artifact(lrc_path) if lrc_path.is_file() else None
+    if lrc_text is not None:
+        plain = _read_text_artifact(txt_path) if txt_path.is_file() else None
+        if plain is None:
+            plain = _lrc_strip_timestamps(lrc_text)
+        return LyricsPayload(
+            synced=True,
+            lrc=lrc_text,
+            lines=_parse_lrc_lines(lrc_text),
+            plain=plain,
+            source=meta_source or "lrclib_synced",
+        )
+
+    plain = _read_text_artifact(txt_path) if txt_path.is_file() else None
+    if plain is not None:
+        return LyricsPayload(
+            synced=False,
+            lrc=None,
+            lines=None,
+            plain=plain,
+            source=meta_source or "whisper_asr",
+        )
+
+    # No lyrics artifacts at all (job still running, or none produced).
+    return LyricsPayload(
+        synced=False,
+        lrc=None,
+        lines=None,
+        plain=None,
+        source=meta_source or "none",
+    )
 
 
 _ALLOWED_ARTIFACTS: dict[str, tuple[str, str]] = {
