@@ -25,28 +25,39 @@ export function SubmitForm({ onCreated }: { onCreated: () => void }) {
   }
 
   return (
-    <form className="submit" onSubmit={handleSubmit}>
-      <div className="row">
+    <form className="submit-card" onSubmit={handleSubmit}>
+      <div className="submit-row">
         <input
+          className="field field-url"
           type="url"
           required
-          placeholder="YouTube / yt-dlp URL"
+          placeholder="Paste a YouTube / yt-dlp URL…"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           disabled={busy}
+          autoComplete="off"
+          spellCheck={false}
         />
         <input
+          className="field field-title"
           type="text"
           placeholder="Title (optional)"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           disabled={busy}
         />
-        <button type="submit" disabled={busy || !url.trim()}>
-          {busy ? "Submitting…" : "Submit"}
+        <button type="submit" className="btn primary" disabled={busy || !url.trim()}>
+          {busy ? (
+            <>
+              <span className="spinner" aria-hidden /> Submitting…
+            </>
+          ) : (
+            "Submit"
+          )}
         </button>
       </div>
-      {error && <div className="error">{error}</div>}
+      <p className="form-note">Splits vocals + instrumental and transcribes the lyrics.</p>
+      {error && <div className="form-error">{error}</div>}
     </form>
   );
 }

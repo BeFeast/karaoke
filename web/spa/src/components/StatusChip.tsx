@@ -1,19 +1,24 @@
 import type { JobStatus } from "../api";
+import { statusMeta } from "../jobStatus";
 
-const COLORS: Record<JobStatus, string> = {
-  queued: "#6b7280",
-  downloading: "#0ea5e9",
-  separating: "#6366f1",
-  transcribing: "#8b5cf6",
-  completed: "#16a34a",
-  failed: "#dc2626",
-  cancelled: "#9ca3af",
+const CHIP_CLASS: Record<string, string> = {
+  ok: "chip ok",
+  err: "chip err",
+  run: "chip run",
+  info: "chip info",
+  neutral: "chip",
 };
 
 export function StatusChip({ status }: { status: JobStatus }) {
+  const meta = statusMeta(status);
   return (
-    <span className="status-chip" style={{ backgroundColor: COLORS[status] ?? "#6b7280" }}>
-      {status}
+    <span className={CHIP_CLASS[meta.chip]}>
+      {meta.spinner ? (
+        <span className="spinner" aria-hidden />
+      ) : (
+        <span className="dot" aria-hidden />
+      )}
+      {meta.label}
     </span>
   );
 }
