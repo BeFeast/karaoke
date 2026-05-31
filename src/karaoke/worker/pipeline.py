@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from karaoke.db.models import Artifact, Job, JobStatus
+from karaoke.titles import derive_metadata
 
 # yt-dlp player-client chain (mirrors scribe's downloader; android_vr is the
 # token-free workhorse, web clients need the EJS/deno JS solver in the image).
@@ -133,9 +134,15 @@ async def _set_stage(
     progress: int,
     *,
     title: str | None = None,
+    metadata: dict | None = None,
 ) -> bool:
     """Advance the job to ``status``/``progress``. Returns False if the job is
-    gone or already terminal (cancelled/failed) — the caller should stop."""
+    gone or already terminal (cancelled/failed) — the caller should stop.
+
+    When ``metadata`` is given (a ``derive_metadata`` mapping), persist any
+    of ``artist``/``track``/``album``/``duration`` that we don't already have;
+    we never overwrite an existing value so a later, coarser source can't clobber
+    a better one."""
     async with session_factory() as session:
         job = await session.get(Job, job_id)
         if job is None or job.status in {JobStatus.cancelled, JobStatus.failed}:
@@ -144,6 +151,11 @@ async def _set_stage(
         job.progress = progress
         if title and not job.title:
             job.title = title
+        if metadata:
+            for field in ("artist", "track", "album", "duration"):
+                value = metadata.get(field)
+                if value is not None and getattr(job, field) is None:
+                    setattr(job, field, value)
         await session.commit()
     return True
 
@@ -206,9 +218,15 @@ async def run_real_job(
             return
         meta = await asyncio.to_thread(_ytdlp_metadata, source_url)
         title = (meta.get("title") or "").strip() or None
-        if title:
+        source_meta = derive_metadata(meta)
+        if title or any(source_meta.values()):
             await _set_stage(
-                session_factory, job_id, JobStatus.downloading, 20, title=title
+                session_factory,
+                job_id,
+                JobStatus.downloading,
+                20,
+                title=title,
+                metadata=source_meta,
             )
 
         raw_audio = work_dir / "source.audio"
@@ -248,6 +266,10 @@ async def run_real_job(
 
         metadata = {
             "title": title,
+            "artist": source_meta.get("artist"),
+            "track": source_meta.get("track"),
+            "album": source_meta.get("album"),
+            "duration": source_meta.get("duration"),
             "source_url": source_url,
             "device": "vast",
             "gpu_model": gpu.gpu_model,
