@@ -10,6 +10,7 @@ monkeypatched. Covers:
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -186,6 +187,16 @@ async def test_run_real_job_completes_with_mocked_gpu(factory, monkeypatch, tmp_
 
     monkeypatch.setattr(vast_client.VastClient, "run", fake_run)
 
+    # LRCLIB lookup must never hit the network in tests: inject a source that
+    # always misses, so the pipeline keeps the (mocked) Whisper transcript.
+    from karaoke.worker.lyrics import LyricsSource
+
+    monkeypatch.setattr(
+        pipeline,
+        "_LYRICS_SOURCE",
+        LyricsSource(http=lambda *a, **k: (404, None)),
+    )
+
     job_id = await _make_job(factory)
     settings = Settings(
         device_mode="vast", vast_api_key="k-real", artifact_root=str(tmp_path)
@@ -206,6 +217,7 @@ async def test_run_real_job_completes_with_mocked_gpu(factory, monkeypatch, tmp_
         assert job.vast_cost_micros == 120000  # 0.12 * 1e6
         arts = (await session.scalars(select(Artifact).where(Artifact.job_id == job_id))).all()
         kinds = sorted(a.kind for a in arts)
+        # LRCLIB missed → Whisper transcript kept; no lyrics_lrc artifact.
         assert kinds == ["karaoke", "lyrics", "vocals"]
         for a in arts:
             assert a.relative_path.startswith("tok-test/exports/")
@@ -215,4 +227,101 @@ async def test_run_real_job_completes_with_mocked_gpu(factory, monkeypatch, tmp_
     assert (exports / "karaoke.mp3").is_file()
     assert (exports / "vocals.mp3").is_file()
     assert (exports / "lyrics.txt").is_file()
+    assert not (exports / "lyrics.lrc").exists()
     assert (exports / "metadata.json").is_file()
+    metadata = json.loads((exports / "metadata.json").read_text())
+    assert metadata["lyrics_source"] == "whisper_asr"
+    assert metadata["synced"] is False
+    assert metadata["instrumental"] is False
+    # The kept transcript is the Whisper output.
+    assert (exports / "lyrics.txt").read_text() == "la la"
+
+
+@pytest.mark.asyncio
+async def test_run_real_job_prefers_lrclib_synced(factory, monkeypatch, tmp_path):
+    """When LRCLIB returns synced lyrics, the pipeline writes lyrics.lrc, adds a
+    lyrics_lrc artifact, and records provenance — overriding the Whisper ASR."""
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.worker.vast_client import GpuJobResult
+
+    monkeypatch.setattr(
+        pipeline, "_ytdlp_metadata", lambda url: {"title": "Artist - Song"}
+    )
+
+    def fake_download(url, dest: Path):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"audio")
+        return dest
+
+    def fake_to_wav(src, dest: Path):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"wav")
+        return dest
+
+    def fake_wav_to_mp3(src, dest: Path):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"mp3")
+        return dest
+
+    monkeypatch.setattr(pipeline, "_download_audio", fake_download)
+    monkeypatch.setattr(pipeline, "_to_wav", fake_to_wav)
+    monkeypatch.setattr(pipeline, "_wav_to_mp3", fake_wav_to_mp3)
+
+    def fake_run(self, mix_wav, work_dir: Path):
+        work_dir.mkdir(parents=True, exist_ok=True)
+        voc = work_dir / "vocals.wav"
+        inst = work_dir / "instrumental.wav"
+        ltxt = work_dir / "lyrics.txt"
+        ljson = work_dir / "lyrics.json"
+        for p, c in [(voc, b"v"), (inst, b"i"), (ltxt, b"whisper"), (ljson, b"{}")]:
+            p.write_bytes(c)
+        return GpuJobResult(
+            vast_instance_id=7,
+            vast_cost=0.05,
+            gpu_model="L40",
+            vocals_path=voc,
+            instrumental_path=inst,
+            lyrics_txt_path=ltxt,
+            lyrics_json_path=ljson,
+        )
+
+    from karaoke.worker import vast_client
+
+    monkeypatch.setattr(vast_client.VastClient, "run", fake_run)
+
+    synced = "[00:10.00]synced line one\n[00:13.00]synced line two"
+
+    def fake_http(method, url, params):
+        if "/api/get" in url:
+            return 200, {"syncedLyrics": synced, "plainLyrics": "p1\np2"}
+        return 404, None
+
+    from karaoke.worker.lyrics import LyricsSource
+
+    monkeypatch.setattr(pipeline, "_LYRICS_SOURCE", LyricsSource(http=fake_http))
+
+    job_id = await _make_job(factory)
+    settings = Settings(
+        device_mode="vast", vast_api_key="k-real", artifact_root=str(tmp_path)
+    )
+    await pipeline.run_real_job(factory, job_id, settings)
+
+    async with factory() as session:
+        from sqlalchemy import select
+
+        from karaoke.db.models import Artifact
+
+        arts = (
+            await session.scalars(select(Artifact).where(Artifact.job_id == job_id))
+        ).all()
+        kinds = sorted(a.kind for a in arts)
+        assert kinds == ["karaoke", "lyrics", "lyrics_lrc", "vocals"]
+
+    exports = tmp_path / "tok-test" / "exports"
+    assert (exports / "lyrics.lrc").read_text() == synced
+    # Plain export prefers LRCLIB plain text, NOT the Whisper transcript.
+    assert (exports / "lyrics.txt").read_text() == "p1\np2"
+    metadata = json.loads((exports / "metadata.json").read_text())
+    assert metadata["lyrics_source"] == "lrclib_synced"
+    assert metadata["synced"] is True
+    assert metadata["instrumental"] is False

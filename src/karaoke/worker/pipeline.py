@@ -24,8 +24,10 @@ they are NOT imported, so unit tests never need them installed.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime as dt
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -34,10 +36,25 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from karaoke.db.models import Artifact, Job, JobStatus
 from karaoke.titles import derive_metadata
+from karaoke.worker.lyrics import (
+    SOURCE_INSTRUMENTAL,
+    SOURCE_LRCLIB_PLAIN,
+    SOURCE_LRCLIB_SYNCED,
+    SOURCE_WHISPER_ASR,
+    LyricsResult,
+    LyricsSource,
+)
+
+# Module-level LRCLIB client so its in-process cache survives across jobs.
+_LYRICS_SOURCE = LyricsSource()
 
 # yt-dlp player-client chain (mirrors scribe's downloader; android_vr is the
 # token-free workhorse, web clients need the EJS/deno JS solver in the image).
 _PLAYER_CLIENTS = "mweb,web_safari,android_vr,web_embedded"
+
+# Matches an LRC line timestamp tag, e.g. "[01:23.45]" / "[01:23]", including
+# repeated tags on one line. Used to derive a plain-text export from synced LRC.
+_LRC_TIMESTAMP_RE = re.compile(r"\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]")
 
 
 class PipelineError(RuntimeError):
@@ -187,6 +204,84 @@ async def _mark_failed(
 
 
 # ---------------------------------------------------------------------------
+# lyrics resolution (LRCLIB synced > LRCLIB plain > Whisper ASR)
+# ---------------------------------------------------------------------------
+def _resolve_lyrics(
+    lyrics: LyricsResult,
+    exports_dir: Path,
+    whisper_lyrics_txt: Path,
+) -> dict[str, object]:
+    """Apply the lyrics precedence and write the chosen export files.
+
+    Precedence (highest first):
+      1. LRCLIB synced  → write ``exports/lyrics.lrc`` (+ ``lyrics.txt`` so the
+         existing plain-text share/inline path still works).
+      2. LRCLIB plain   → write ``exports/lyrics.txt`` from LRCLIB.
+      3. LRCLIB instrumental → no lyrics; mark the job instrumental.
+      4. LRCLIB miss    → keep the Whisper transcript (``lyrics.txt``).
+
+    Returns a mapping with provenance for ``metadata.json`` and a flag for
+    whether an ``.lrc`` was written::
+
+        {"lyrics_source": str, "synced": bool, "instrumental": bool,
+         "lrc_written": bool}
+    """
+    lyrics_txt = exports_dir / "lyrics.txt"
+    lyrics_lrc = exports_dir / "lyrics.lrc"
+
+    if lyrics.synced_lrc:
+        lyrics_lrc.write_text(lyrics.synced_lrc, encoding="utf-8")
+        # Also keep a plain-text export so the inline/share text path renders.
+        plain_text = lyrics.plain or _lrc_to_plain(lyrics.synced_lrc)
+        lyrics_txt.write_text(plain_text, encoding="utf-8")
+        return {
+            "lyrics_source": SOURCE_LRCLIB_SYNCED,
+            "synced": True,
+            "instrumental": False,
+            "lrc_written": True,
+        }
+
+    if lyrics.plain:
+        lyrics_txt.write_text(lyrics.plain, encoding="utf-8")
+        return {
+            "lyrics_source": SOURCE_LRCLIB_PLAIN,
+            "synced": False,
+            "instrumental": False,
+            "lrc_written": False,
+        }
+
+    if lyrics.instrumental:
+        # Instrumental: no lyrics. Drop any Whisper transcript that was staged.
+        with contextlib.suppress(OSError):
+            lyrics_txt.unlink()
+        return {
+            "lyrics_source": SOURCE_INSTRUMENTAL,
+            "synced": False,
+            "instrumental": True,
+            "lrc_written": False,
+        }
+
+    # LRCLIB miss → keep the Whisper transcript.
+    lyrics_txt.write_bytes(whisper_lyrics_txt.read_bytes())
+    return {
+        "lyrics_source": SOURCE_WHISPER_ASR,
+        "synced": False,
+        "instrumental": False,
+        "lrc_written": False,
+    }
+
+
+def _lrc_to_plain(lrc: str) -> str:
+    """Strip ``[mm:ss.xx]`` timestamps from an LRC body for the plain export."""
+    out: list[str] = []
+    for line in lrc.splitlines():
+        stripped = _LRC_TIMESTAMP_RE.sub("", line).strip()
+        if stripped:
+            out.append(stripped)
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
 # orchestrator
 # ---------------------------------------------------------------------------
 async def run_real_job(
@@ -261,8 +356,21 @@ async def run_real_job(
         await asyncio.to_thread(_wav_to_mp3, gpu.instrumental_path, karaoke_mp3)
         await asyncio.to_thread(_wav_to_mp3, gpu.vocals_path, vocals_mp3)
 
+        # --- lyrics: prefer real LRCLIB lyrics over the Whisper transcript --
+        # Precedence: LRCLIB synced > LRCLIB plain > Whisper ASR. The lookup is
+        # best-effort and never fails the job (network errors → empty result →
+        # Whisper transcript kept). Runs on the coordinator, not the GPU.
+        lyrics = await asyncio.to_thread(
+            _LYRICS_SOURCE.fetch,
+            artist=source_meta.get("artist"),
+            track=source_meta.get("track"),
+            album=source_meta.get("album"),
+            duration=source_meta.get("duration"),
+        )
+        lyrics_prov = _resolve_lyrics(lyrics, exports_dir, gpu.lyrics_txt_path)
+
         lyrics_txt = exports_dir / "lyrics.txt"
-        lyrics_txt.write_bytes(gpu.lyrics_txt_path.read_bytes())
+        lyrics_lrc = exports_dir / "lyrics.lrc"
 
         metadata = {
             "title": title,
@@ -275,6 +383,9 @@ async def run_real_job(
             "gpu_model": gpu.gpu_model,
             "vast_instance_id": gpu.vast_instance_id,
             "vast_cost": round(gpu.vast_cost, 6),
+            "lyrics_source": lyrics_prov["lyrics_source"],
+            "synced": lyrics_prov["synced"],
+            "instrumental": lyrics_prov["instrumental"],
         }
         (exports_dir / "metadata.json").write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -283,8 +394,15 @@ async def run_real_job(
         artifacts = [
             ("vocals", "vocals.mp3", vocals_mp3, "audio/mpeg"),
             ("karaoke", "karaoke.mp3", karaoke_mp3, "audio/mpeg"),
-            ("lyrics", "lyrics.txt", lyrics_txt, "text/plain"),
         ]
+        # Plain-text lyrics exist unless the track is instrumental.
+        if lyrics_txt.is_file():
+            artifacts.append(("lyrics", "lyrics.txt", lyrics_txt, "text/plain"))
+        # Synced LRC is a distinct artifact kind served at /share/.../lyrics.lrc.
+        if lyrics_prov["lrc_written"] and lyrics_lrc.is_file():
+            artifacts.append(
+                ("lyrics_lrc", "lyrics.lrc", lyrics_lrc, "text/plain")
+            )
 
         async with session_factory() as session:
             job = await session.get(Job, job_id)
