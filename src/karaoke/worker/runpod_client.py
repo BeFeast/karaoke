@@ -152,10 +152,11 @@ class RunpodClient:
         max_job_cost = float(self.settings.runpod_max_job_cost or 0)
         poll_interval = float(self.settings.runpod_poll_interval_s or 2.0)
         request_timeout = int(self.settings.runpod_request_timeout_s or 30)
-        # Wall-clock ceiling: never poll forever even if RunPod keeps replying.
-        # Use the executionTimeoutMs configured on the endpoint as the upper
-        # bound, padded a little for queueing.
-        wall_ceiling = float(self.settings.runpod_wall_ceiling_s or 900)
+        # Two-tier timeout (see config). queue_ceiling fails fast while the
+        # job waits for a GPU; wall_ceiling is an absolute backstop. Once the
+        # job is IN_PROGRESS we never abort it on the queue timer.
+        queue_ceiling = float(self.settings.runpod_queue_ceiling_s or 480)
+        wall_ceiling = float(self.settings.runpod_wall_ceiling_s or 1200)
 
         # If R2 is configured, upload mix.wav and pass a presigned URL
         # (RunPod async /run has a ~10MB body cap; our 35-50MB wavs blow it up).
@@ -179,6 +180,7 @@ class RunpodClient:
         started = time.monotonic()
         last_status: str | None = None
         last_execution_ms = 0.0
+        exec_phase = False  # flips True once RunPod reports IN_PROGRESS
 
         try:
             # --- submit ---------------------------------------------------
@@ -198,10 +200,20 @@ class RunpodClient:
             # --- poll until terminal --------------------------------------
             while True:
                 wall = time.monotonic() - started
+                # Absolute backstop — only trips if status never advances.
                 if wall >= wall_ceiling:
                     raise RunpodTimeoutError(
-                        f"runpod poll wall-clock {wall:.0f}s exceeded ceiling "
-                        f"{wall_ceiling:.0f}s (job_id={job_id})"
+                        f"runpod poll wall-clock {wall:.0f}s exceeded backstop "
+                        f"{wall_ceiling:.0f}s (job_id={job_id}, last={last_status})"
+                    )
+                # Queue fail-fast: a job that never starts running within the
+                # queue ceiling is a GPU capacity outage. NEVER applied once the
+                # job is IN_PROGRESS (we don't kill paid, running compute).
+                if not exec_phase and wall >= queue_ceiling:
+                    raise RunpodTimeoutError(
+                        f"runpod job stuck in queue {wall:.0f}s > "
+                        f"{queue_ceiling:.0f}s — GPU capacity busy, retry shortly "
+                        f"(job_id={job_id})"
                     )
                 # Per-job cost guard. We check BEFORE each poll so a runaway
                 # job is killed before the next billing tick.
@@ -229,6 +241,8 @@ class RunpodClient:
 
                 last_status = str(st.get("status") or "").upper()
                 last_execution_ms = float(st.get("executionTime") or 0.0)
+                if last_status == "IN_PROGRESS" or last_execution_ms > 0:
+                    exec_phase = True  # past the queue — let it run to completion
 
                 if last_status == "COMPLETED":
                     terminal = True
