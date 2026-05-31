@@ -10,8 +10,21 @@ import {
 } from "@clerk/clerk-react";
 import { App } from "./App";
 import { getConfig, type RuntimeConfig, setTokenGetter } from "./api";
+import { ItemPage } from "./components/ItemPage";
 import { MicMark } from "./components/TopBar";
+import { useRoute } from "./router";
 import "./styles.css";
+
+// Routes between the dashboard (App) and the item page (/app/#/job/:token).
+// Item page is rendered inside the auth context so owner-scoped reads carry
+// the Clerk bearer when signed in; on the LAN it works without auth too.
+function Routed({ config, authControl }: { config: RuntimeConfig; authControl?: React.ReactNode }) {
+  const route = useRoute();
+  if (route.name === "item") {
+    return <ItemPage token={route.token} authControl={authControl} />;
+  }
+  return <App config={config} authControl={authControl} />;
+}
 
 function Boot({ children }: { children: React.ReactNode }) {
   return (
@@ -55,7 +68,7 @@ function ClerkShell({ config }: { config: RuntimeConfig }) {
         </Boot>
       </SignedOut>
       <SignedIn>
-        <App config={config} authControl={<UserButton afterSignOutUrl="/app/" />} />
+        <Routed config={config} authControl={<UserButton afterSignOutUrl="/app/" />} />
       </SignedIn>
     </ClerkProvider>
   );
@@ -65,7 +78,7 @@ function LanShell({ config }: { config: RuntimeConfig }) {
   // No Clerk: the API's trusted-LAN bypass authorises us. Send no auth header.
   setTokenGetter(null);
   return (
-    <App
+    <Routed
       config={config}
       authControl={
         <span className="chip lan">

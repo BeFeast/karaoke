@@ -1,5 +1,6 @@
 import type { JobOut } from "../api";
-import { ARTIFACTS, artifactHref, canRetry, resultHref, sourceLabel, statusMeta } from "../jobStatus";
+import { ARTIFACTS, artifactHref, canRetry, sourceLabel, statusMeta } from "../jobStatus";
+import { itemHash } from "../router";
 import { StatusChip } from "./StatusChip";
 
 export interface JobActions {
@@ -57,7 +58,7 @@ function JobCard({ job, actions }: { job: JobOut; actions: JobActions }) {
         <div className="job-foot">
           {job.status === "completed" && (
             <>
-              <a className="btn sm" href={resultHref(job.job_token)} target="_blank" rel="noopener noreferrer">
+              <a className="btn sm" href={itemHash(job.job_token)}>
                 ▶ Open
               </a>
               <span className="artifact-links">
