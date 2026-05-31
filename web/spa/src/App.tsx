@@ -10,6 +10,7 @@ import {
   type MeOut,
   type RuntimeConfig,
 } from "./api";
+import { ConfirmDialog, type ConfirmState } from "./components/ConfirmDialog";
 import { type JobActions, JobList } from "./components/JobList";
 import { type JobFilter, jobMatchesFilter, Sidebar } from "./components/Sidebar";
 import { SubmitForm } from "./components/SubmitForm";
@@ -44,6 +45,7 @@ export function App(props: {
   const [listError, setListError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [filter, setFilter] = useState<JobFilter>("all");
+  const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const timer = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
@@ -94,9 +96,16 @@ export function App(props: {
   const actions: JobActions = useMemo(
     () => ({
       onDelete: (job) => {
-        if (!window.confirm(`Remove job #${job.id} and its artifacts?`)) return;
-        setJobs((js) => js.filter((j) => j.id !== job.id)); // optimistic
-        void runAction(() => deleteJob(job.id));
+        setConfirmState({
+          title: "Remove job",
+          message: `Remove job #${job.id} and its artifacts? This can’t be undone.`,
+          confirmLabel: "Remove",
+          danger: true,
+          onConfirm: () => {
+            setJobs((js) => js.filter((j) => j.id !== job.id)); // optimistic
+            void runAction(() => deleteJob(job.id));
+          },
+        });
       },
       onCancel: (job) => void runAction(() => cancelJob(job.id)),
       onRetry: (job) =>
@@ -111,8 +120,13 @@ export function App(props: {
   const onClearFailed = useCallback(() => {
     const n = jobs.filter((j) => j.status === "failed").length;
     if (n === 0) return;
-    if (!window.confirm(`Remove all ${n} failed job${n === 1 ? "" : "s"}?`)) return;
-    void runAction(() => clearFailedJobs());
+    setConfirmState({
+      title: "Clear failed",
+      message: `Remove all ${n} failed job${n === 1 ? "" : "s"} and their artifacts?`,
+      confirmLabel: "Clear failed",
+      danger: true,
+      onConfirm: () => void runAction(() => clearFailedJobs()),
+    });
   }, [jobs, runAction]);
 
   const visible = useMemo(() => jobs.filter((j) => jobMatchesFilter(j, filter)), [jobs, filter]);
@@ -175,6 +189,7 @@ export function App(props: {
           />
         </div>
       </main>
+      <ConfirmDialog state={confirmState} onClose={() => setConfirmState(null)} />
     </div>
   );
 }

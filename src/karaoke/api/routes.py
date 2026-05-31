@@ -338,40 +338,100 @@ async def delete_job(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+# Standalone result page — mirrors the Submitter SPA's Scribe "field" design
+# tokens (olive/sage, system Geist/Inter stack, light + dark) so a shared link
+# reads as a sibling of the app. No external assets; CSS braces are doubled for
+# str.format.
 _SHARE_HTML_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>{title} — karaoke</title>
 <style>
- :root {{ color-scheme: light dark; }}
- body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-   max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }}
- h1 {{ font-size: 1.4rem; margin: 0 0 0.25rem; }}
- .meta {{ color: #888; font-size: 0.85rem; margin-bottom: 1.5rem; }}
- section {{ margin: 1.25rem 0; }}
- section h2 {{ font-size: 1rem; margin: 0 0 0.4rem; }}
- audio {{ width: 100%; }}
- pre {{ white-space: pre-wrap; word-wrap: break-word; background: #f6f6f6;
-   padding: 0.75rem; border-radius: 4px; max-height: 50vh; overflow: auto;
-   font-size: 0.85rem; }}
- @media (prefers-color-scheme: dark) {{ pre {{ background: #1f1f1f; }} }}
- .empty {{ color: #888; font-style: italic; }}
+ :root {{
+   color-scheme: light dark;
+   --font-sans: "Geist","Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+   --font-mono: "Geist Mono","JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+   --bg:#eceef2; --bg-soft:#d1d5de; --bg-card:#f5f6f9; --fg:#1c2018; --fg-soft:#3a4234;
+   --muted:#837569; --border:#b7b6c2; --border-soft:#c8ccd3; --accent:#657153; --accent-soft:#d8dfcd;
+   --ok:#657153; --err:#8a4a3a; --info:#5d7088; --radius:5px; --radius-lg:10px;
+ }}
+ @media (prefers-color-scheme: dark) {{
+   :root {{
+     --bg:#1a1e1a; --bg-soft:#232924; --bg-card:#1e231d; --fg:#d1d5de; --fg-soft:#b7b6c2;
+     --muted:#837569; --border:#2d362c; --border-soft:#232924; --accent:#8aaa79; --accent-soft:#2c3a2c;
+     --ok:#8aaa79; --err:#c4796a; --info:#8ea4c0;
+   }}
+ }}
+ * {{ box-sizing: border-box; }}
+ body {{ margin:0; background:var(--bg); color:var(--fg); font-family:var(--font-sans);
+   line-height:1.5; -webkit-font-smoothing:antialiased; font-feature-settings:"ss01","cv11"; }}
+ .bar {{ display:flex; align-items:center; gap:10px; padding:0 20px; height:56px;
+   border-bottom:1px solid var(--border); font-weight:600; font-size:17px; letter-spacing:-0.01em; }}
+ .mark {{ width:24px; height:24px; display:grid; place-items:center; background:var(--accent);
+   color:var(--bg-card); border-radius:3px; }}
+ .mark svg {{ display:block; }}
+ .wrap {{ max-width:760px; margin:0 auto; padding:32px 20px 64px; }}
+ h1 {{ font-size:30px; font-weight:600; letter-spacing:-0.02em; margin:0 0 10px; word-break:break-word; }}
+ .meta {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:28px;
+   font-family:var(--font-mono); font-size:12px; color:var(--muted); }}
+ .chip {{ display:inline-flex; align-items:center; gap:5px; padding:2px 9px; font-size:11.5px;
+   font-family:var(--font-mono); border-radius:999px; border:1px solid var(--border-soft);
+   background:var(--bg-soft); color:var(--fg-soft); }}
+ .chip .dot {{ width:6px; height:6px; border-radius:50%; background:currentColor; }}
+ .chip.ok {{ color:var(--ok); background:color-mix(in oklab,var(--ok) 12%,var(--bg)); border-color:color-mix(in oklab,var(--ok) 24%,transparent); }}
+ .chip.err {{ color:var(--err); background:color-mix(in oklab,var(--err) 12%,var(--bg)); border-color:color-mix(in oklab,var(--err) 24%,transparent); }}
+ .chip.info {{ color:var(--info); background:color-mix(in oklab,var(--info) 12%,var(--bg)); border-color:color-mix(in oklab,var(--info) 24%,transparent); }}
+ .chip.run {{ color:var(--accent); background:var(--accent-soft); border-color:color-mix(in oklab,var(--accent) 32%,transparent); }}
+ .player {{ border:1px solid var(--border); border-radius:var(--radius-lg); background:var(--bg-card);
+   padding:16px; margin:0 0 16px; }}
+ .player-label, .sec-label {{ font-family:var(--font-mono); font-size:10.5px; font-weight:650;
+   text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); margin-bottom:10px; }}
+ audio {{ width:100%; accent-color:var(--accent); }}
+ audio::-webkit-media-controls-panel {{ background:var(--bg-soft); }}
+ .lyrics {{ margin-top:28px; }}
+ pre {{ white-space:pre-wrap; word-wrap:break-word; background:var(--bg-card); color:var(--fg);
+   border:1px solid var(--border-soft); padding:16px; border-radius:var(--radius-lg);
+   max-height:52vh; overflow:auto; font-family:var(--font-mono); font-size:13px; line-height:1.6; margin:0; }}
+ .downloads {{ margin-top:28px; padding-top:16px; border-top:1px solid var(--border-soft);
+   font-family:var(--font-mono); font-size:12px; color:var(--muted); display:flex; gap:10px; flex-wrap:wrap; align-items:center; }}
+ .downloads a {{ color:var(--accent); text-decoration:none; }}
+ .downloads a:hover {{ text-decoration:underline; }}
+ .empty {{ color:var(--muted); font-style:italic; font-size:13px; }}
 </style>
 </head>
 <body>
+<header class="bar">
+  <span class="mark"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3" fill="currentColor"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+  karaoke
+</header>
+<main class="wrap">
 <h1>{title_escaped}</h1>
 <div class="meta">
-  status: <strong>{status}</strong>
-  · progress: {progress}%
+  <span class="chip {status_chip_class}"><span class="dot"></span>{status}</span>
+  <span>{progress}%</span>
   {owner_block}
 </div>
 {karaoke_block}
 {vocals_block}
 {lyrics_block}
+{downloads_block}
+</main>
 </body>
 </html>
 """
+
+
+_STATUS_CHIP_CLASS: dict[str, str] = {
+    "completed": "ok",
+    "failed": "err",
+    "cancelled": "",
+    "queued": "info",
+    "downloading": "run",
+    "separating": "run",
+    "transcribing": "run",
+}
 
 
 def _html_escape(s: str | None) -> str:
@@ -386,41 +446,61 @@ def _html_escape(s: str | None) -> str:
 def _render_share_html(job: Job, lyrics_text: str | None) -> str:
     title = job.title or job.source_url or "karaoke job"
     owner = (job.owner_display_name or "").strip()
-    owner_block = f"· owner: {_html_escape(owner)}" if owner else ""
+    owner_block = f"<span>· {_html_escape(owner)}</span>" if owner else ""
     base = f"/share/{job.job_token}"
     artifacts_by_kind = {a.kind: a for a in job.artifacts}
 
     def audio_block(kind: str, label: str) -> str:
         if kind not in artifacts_by_kind:
-            return f'<section><h2>{label}</h2><div class="empty">not yet available</div></section>'
+            return (
+                f'<div class="player"><div class="player-label">{label}</div>'
+                f'<div class="empty">not yet available</div></div>'
+            )
         return (
-            f'<section><h2>{label}</h2>'
-            f'<audio controls preload="none" src="{base}/{kind}.mp3"></audio>'
-            f'</section>'
+            f'<div class="player"><div class="player-label">{label}</div>'
+            f'<audio controls preload="none" src="{base}/{kind}.mp3"></audio></div>'
         )
 
     if lyrics_text:
         lyrics_block = (
-            f'<section><h2>lyrics</h2>'
+            f'<section class="lyrics"><div class="sec-label">lyrics</div>'
             f'<pre>{_html_escape(lyrics_text)}</pre></section>'
         )
     elif "lyrics" in artifacts_by_kind:
         lyrics_block = (
-            f'<section><h2>lyrics</h2>'
+            f'<section class="lyrics"><div class="sec-label">lyrics</div>'
             f'<p><a href="{base}/lyrics.txt">open lyrics.txt</a></p></section>'
         )
     else:
-        lyrics_block = '<section><h2>lyrics</h2><div class="empty">not yet available</div></section>'
+        lyrics_block = (
+            '<section class="lyrics"><div class="sec-label">lyrics</div>'
+            '<div class="empty">not yet available</div></section>'
+        )
+
+    downloads: list[str] = []
+    if "karaoke" in artifacts_by_kind:
+        downloads.append(f'<a href="{base}/karaoke.mp3">instrumental</a>')
+    if "vocals" in artifacts_by_kind:
+        downloads.append(f'<a href="{base}/vocals.mp3">vocals</a>')
+    if "lyrics" in artifacts_by_kind:
+        downloads.append(f'<a href="{base}/lyrics.txt">lyrics</a>')
+    downloads_block = (
+        '<div class="downloads">download:&nbsp;' + " · ".join(downloads) + "</div>"
+        if downloads
+        else ""
+    )
 
     return _SHARE_HTML_TEMPLATE.format(
         title=_html_escape(title)[:80],
         title_escaped=_html_escape(title),
         status=job.status.value,
+        status_chip_class=_STATUS_CHIP_CLASS.get(job.status.value, ""),
         progress=job.progress,
         owner_block=owner_block,
         karaoke_block=audio_block("karaoke", "karaoke (instrumental)"),
         vocals_block=audio_block("vocals", "vocals only"),
         lyrics_block=lyrics_block,
+        downloads_block=downloads_block,
     )
 
 
