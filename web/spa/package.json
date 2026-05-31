@@ -11,7 +11,8 @@
   "dependencies": {
     "@clerk/clerk-react": "^5.51.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "wavesurfer.js": "^7.12.7"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",
