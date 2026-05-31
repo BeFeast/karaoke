@@ -7,8 +7,18 @@ Input (``event["input"]``)::
 
     {
       "audio_base64": "<base64-encoded WAV bytes>",
-      "mode": "demucs" | "whisper" | "both"   # default "both"
+      "mode": "demucs" | "whisper" | "both",  # default "both"
+      "align_text": "<plain lyrics to force-align>",  # optional (#55)
+      "align_lang": "eng"                              # optional ISO-639-3
     }
+
+When ``align_text`` is present (and Demucs ran, i.e. ``mode != "whisper"``),
+the handler force-aligns that text against the separated vocal stem with
+``ctc-forced-aligner`` (MMS-300m) and returns a synthesized line-level LRC in
+``aligned_lrc``. This is purely additive: an old handler that ignores
+``align_text`` still works, and a coordinator that does not send it sees
+unchanged behavior. Alignment failures NEVER fail the job — the handler logs
+and omits ``aligned_lrc`` so the coordinator falls back (plain text / Whisper).
 
 Output (returned to RunPod as JSON)::
 
@@ -24,6 +34,10 @@ Output (returned to RunPod as JSON)::
       {"vocals_b64": str, "instrumental_b64": str,
        "lyrics_txt": str, "lyrics_json": dict,
        "gpu_model": str, "elapsed_s": float}
+
+    + optional (any mode that ran Demucs, when ``align_text`` was supplied
+      and alignment succeeded):
+      {"aligned_lrc": str, "aligned_lang": str}
 
 Unknown modes raise ``ValueError`` so RunPod marks the job FAILED rather
 than silently returning a wrong shape.
@@ -52,6 +66,15 @@ _GPU_LOCK = threading.Lock()
 # Lazy-loaded faster-whisper model; mirrors server.py's _get_whisper pattern.
 _WHISPER_MODEL: Any = None
 _WHISPER_LOCK = threading.Lock()
+
+# Lazy-loaded ctc-forced-aligner model/tokenizer (#55). Same lazy-load shape as
+# the Whisper model so the aligner weights only load when a job actually needs
+# force-alignment (align_text supplied). MMS-300m is multilingual + light.
+_ALIGN_MODEL: Any = None
+_ALIGN_TOKENIZER: Any = None
+_ALIGN_LOCK = threading.Lock()
+# MMS-300m forced aligner — pre-cached in the image (see Dockerfile).
+_ALIGN_MODEL_ID = "MahmoudAshraf/mms-300m-1130-forced-aligner"
 
 
 def _gpu_available() -> bool:
@@ -173,6 +196,119 @@ def _transcribe(wav_path: Path) -> tuple[str, dict[str, Any]]:
     return lyrics_txt, lyrics_json
 
 
+def _get_aligner():
+    """Lazy-load the ctc-forced-aligner MMS-300m model + tokenizer.
+
+    Mirrors ``_get_whisper``: load once, reuse across jobs on the worker.
+    Returns ``(model, tokenizer, device, dtype)``.
+    """
+    global _ALIGN_MODEL, _ALIGN_TOKENIZER
+    if _ALIGN_MODEL is not None and _ALIGN_TOKENIZER is not None:
+        return _ALIGN_MODEL, _ALIGN_TOKENIZER, _align_device(), _align_dtype()
+    with _ALIGN_LOCK:
+        if _ALIGN_MODEL is None or _ALIGN_TOKENIZER is None:
+            from ctc_forced_aligner import (  # type: ignore
+                load_alignment_model,
+            )
+
+            device = _align_device()
+            dtype = _align_dtype()
+            LOG.info("loading ctc-forced-aligner %s on %s/%s", _ALIGN_MODEL_ID, device, dtype)
+            _ALIGN_MODEL, _ALIGN_TOKENIZER = load_alignment_model(
+                device,
+                model_path=_ALIGN_MODEL_ID,
+                dtype=dtype,
+            )
+    return _ALIGN_MODEL, _ALIGN_TOKENIZER, _align_device(), _align_dtype()
+
+
+def _align_device() -> str:
+    return "cuda" if _gpu_available() else "cpu"
+
+
+def _align_dtype():
+    import torch  # type: ignore
+
+    return torch.float16 if _gpu_available() else torch.float32
+
+
+def _fmt_lrc_timestamp(seconds: float) -> str:
+    """Format ``seconds`` as an LRC ``[mm:ss.xx]`` timestamp tag."""
+    if seconds < 0:
+        seconds = 0.0
+    minutes = int(seconds // 60)
+    rem = seconds - minutes * 60
+    return f"[{minutes:02d}:{rem:05.2f}]"
+
+
+def _force_align_to_lrc(
+    vocals_wav: Path, text: str, language: str
+) -> str:
+    """Force-align ``text`` against the ``vocals_wav`` stem → line-level LRC.
+
+    Uses ctc-forced-aligner (MMS-300m). Produces one ``[mm:ss.xx]line`` per
+    source lyric line, timed at the start of the first aligned token of that
+    line. Raises on any failure; the caller swallows it so alignment is never
+    fatal to the job.
+    """
+    from ctc_forced_aligner import (  # type: ignore
+        generate_emissions,
+        get_alignments,
+        get_spans,
+        load_audio,
+        postprocess_results,
+        preprocess_text,
+    )
+
+    model, tokenizer, device, dtype = _get_aligner()
+
+    audio_waveform = load_audio(str(vocals_wav), model.dtype, model.device)
+    emissions, stride = generate_emissions(model, audio_waveform, batch_size=1)
+
+    tokens_starred, text_starred = preprocess_text(
+        text,
+        romanize=True,
+        language=language,
+    )
+    segments, scores, blank_token = get_alignments(
+        emissions,
+        tokens_starred,
+        tokenizer,
+    )
+    spans = get_spans(tokens_starred, segments, blank_token)
+    word_timestamps = postprocess_results(text_starred, spans, stride, scores)
+
+    return _word_timestamps_to_lrc(word_timestamps, text)
+
+
+def _word_timestamps_to_lrc(
+    word_timestamps: list[dict[str, Any]], text: str
+) -> str:
+    """Build a line-level LRC from ctc-forced-aligner word timestamps.
+
+    ``word_timestamps`` is a list of ``{"text", "start", "end", ...}`` in the
+    same order as the words in ``text``. We walk the original lines, consuming
+    one timestamp per word, and tag each non-empty line with the start time of
+    its first word.
+    """
+    lines = [ln for ln in text.splitlines()]
+    out: list[str] = []
+    wi = 0
+    n = len(word_timestamps)
+    for line in lines:
+        words = line.split()
+        if not words:
+            continue
+        # The start of this line = start of its first aligned word.
+        if wi < n:
+            start = float(word_timestamps[wi].get("start") or 0.0)
+        else:
+            start = float(word_timestamps[-1].get("end") or 0.0) if n else 0.0
+        out.append(f"{_fmt_lrc_timestamp(start)}{line.strip()}")
+        wi += len(words)
+    return "\n".join(out)
+
+
 def _put_file(path: Path, presigned_url: str, content_type: str) -> None:
     """PUT a file to a presigned URL via urllib (no boto3 dep)."""
     import urllib.request
@@ -217,6 +353,17 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
     if mode not in ("demucs", "whisper", "both"):
         raise ValueError("unknown mode")
 
+    # Optional force-alignment of supplied plain lyrics against the vocal stem
+    # (#55). Only meaningful when Demucs runs (we need the vocal stem). Absent →
+    # behave exactly as before.
+    align_text = job_input.get("align_text")
+    if align_text is not None and not isinstance(align_text, str):
+        raise ValueError("align_text must be a string")
+    align_lang = job_input.get("align_lang") or "eng"  # ISO-639-3
+    if not isinstance(align_lang, str):
+        raise ValueError("align_lang must be a string")
+    want_align = bool(align_text and align_text.strip()) and mode in ("demucs", "both")
+
     if audio_url:
         import urllib.request
         try:
@@ -254,6 +401,19 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         if mode in ("demucs", "both"):
             out_dir = tmp_path / "out"
             vocals_path, instrumental_path = _run_demucs(in_wav, out_dir)
+            # Force-align supplied plain lyrics against the vocal stem (#55).
+            # Best-effort: a failure here must NOT fail the job — the
+            # coordinator falls back to the plain text / Whisper transcript.
+            if want_align:
+                try:
+                    lrc = _force_align_to_lrc(vocals_path, align_text, align_lang)
+                    if lrc.strip():
+                        result["aligned_lrc"] = lrc
+                        result["aligned_lang"] = align_lang
+                    else:
+                        LOG.warning("force-align produced empty LRC; omitting")
+                except Exception as exc:  # noqa: BLE001 — never fatal
+                    LOG.warning("force-align failed (%s); omitting aligned_lrc", exc)
             if use_put:
                 _put_file(vocals_path, vocals_put_url, "audio/wav")
                 _put_file(instrumental_path, instrumental_put_url, "audio/wav")

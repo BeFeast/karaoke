@@ -408,6 +408,107 @@ def test_run_uses_audio_url_when_r2_configured(settings, tmp_path):
     assert "audio_base64" not in payload
 
 
+# ---------------------------------------------------------------------------
+# 10. force-align (#55): align_text is sent + aligned_lrc materialised
+# ---------------------------------------------------------------------------
+def test_align_text_sent_and_aligned_lrc_materialised(settings, tmp_path):
+    work = tmp_path / "work"
+    aligned = "[00:01.00]line one\n[00:03.50]line two"
+    output = {
+        "vocals_b64": _b64(b"v"),
+        "instrumental_b64": _b64(b"i"),
+        "lyrics_txt": "whisper floor",
+        "lyrics_json": {},
+        "aligned_lrc": aligned,
+        "aligned_lang": "eng",
+        "gpu_model": "L40",
+        "elapsed_s": 12.0,
+    }
+    rec = _Recorder([
+        {"expect_in": "/run", "code": 200, "body": {"id": "rp-align"}},
+        {
+            "expect_in": "/status/rp-align",
+            "code": 200,
+            "body": {"status": "COMPLETED", "executionTime": 12000, "output": output},
+        },
+    ])
+
+    client = RunpodClient(settings, http=rec)
+    result = client.run(
+        _mix_wav(tmp_path), work, align_text="line one\nline two", align_lang="eng"
+    )
+
+    # The /run payload carries align_text + align_lang verbatim.
+    submit = next(c for c in rec.calls if "/run" in c[1] and c[2])
+    payload = submit[2]["input"]
+    assert payload["align_text"] == "line one\nline two"
+    assert payload["align_lang"] == "eng"
+
+    # The aligned LRC was written and surfaced on the result.
+    assert result.aligned_lrc_path is not None
+    assert result.aligned_lrc_path.read_text() == aligned
+
+
+def test_no_align_text_means_no_aligned_path_and_no_payload_key(settings, tmp_path):
+    """Backward-compat: without align_text the payload has no align_* keys and
+    the result carries no aligned_lrc_path even if the handler omitted one."""
+    work = tmp_path / "work"
+    output = {
+        "vocals_b64": _b64(b"v"),
+        "instrumental_b64": _b64(b"i"),
+        "lyrics_txt": "x",
+        "lyrics_json": {},
+        "gpu_model": "L40",
+        "elapsed_s": 5.0,
+    }
+    rec = _Recorder([
+        {"expect_in": "/run", "code": 200, "body": {"id": "rp-noalign"}},
+        {
+            "expect_in": "/status/rp-noalign",
+            "code": 200,
+            "body": {"status": "COMPLETED", "executionTime": 5000, "output": output},
+        },
+    ])
+    client = RunpodClient(settings, http=rec)
+    result = client.run(_mix_wav(tmp_path), work)
+
+    submit = next(c for c in rec.calls if "/run" in c[1] and c[2])
+    payload = submit[2]["input"]
+    assert "align_text" not in payload
+    assert "align_lang" not in payload
+    assert result.aligned_lrc_path is None
+
+
+def test_old_image_ignores_align_text_no_aligned_lrc(settings, tmp_path):
+    """Tolerant: we send align_text but an OLD handler returns no aligned_lrc —
+    the result simply has aligned_lrc_path=None (pipeline falls back to plain)."""
+    work = tmp_path / "work"
+    output = {
+        "vocals_b64": _b64(b"v"),
+        "instrumental_b64": _b64(b"i"),
+        "lyrics_txt": "x",
+        "lyrics_json": {},
+        "gpu_model": "L40",
+        "elapsed_s": 5.0,
+        # NOTE: no aligned_lrc — simulates the current cuda12.4-r3 image.
+    }
+    rec = _Recorder([
+        {"expect_in": "/run", "code": 200, "body": {"id": "rp-old"}},
+        {
+            "expect_in": "/status/rp-old",
+            "code": 200,
+            "body": {"status": "COMPLETED", "executionTime": 5000, "output": output},
+        },
+    ])
+    client = RunpodClient(settings, http=rec)
+    result = client.run(_mix_wav(tmp_path), work, align_text="some lyrics")
+    # align_text WAS sent (handler just ignored it) ...
+    submit = next(c for c in rec.calls if "/run" in c[1] and c[2])
+    assert submit[2]["input"]["align_text"] == "some lyrics"
+    # ... but no aligned LRC came back.
+    assert result.aligned_lrc_path is None
+
+
 def test_run_falls_back_to_base64_when_r2_not_configured(settings, tmp_path):
     # Default fixture has no R2 settings -> base64 path.
     rec = _Recorder([

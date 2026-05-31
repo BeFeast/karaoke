@@ -44,6 +44,9 @@ _DURATION_TOLERANCE_S = 2
 
 # Lyrics-source provenance values recorded in metadata.json.
 SOURCE_LRCLIB_SYNCED = "lrclib_synced"
+# LRCLIB plain text that we force-aligned against the vocal stem into a synced
+# LRC inside the GPU job window (#55). Ranks just below native LRCLIB synced.
+SOURCE_FORCED_ALIGNED = "forced_aligned"
 SOURCE_LRCLIB_PLAIN = "lrclib_plain"
 SOURCE_WHISPER_ASR = "whisper_asr"
 SOURCE_INSTRUMENTAL = "instrumental"

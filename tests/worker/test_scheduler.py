@@ -165,7 +165,7 @@ async def test_run_real_job_completes_with_mocked_gpu(factory, monkeypatch, tmp_
     monkeypatch.setattr(pipeline, "_wav_to_mp3", fake_wav_to_mp3)
 
     # Mock VastClient.run to return a result pointing at on-disk fakes.
-    def fake_run(self, mix_wav, work_dir: Path):
+    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
         work_dir.mkdir(parents=True, exist_ok=True)
         voc = work_dir / "vocals.wav"
         inst = work_dir / "instrumental.wav"
@@ -267,7 +267,7 @@ async def test_run_real_job_prefers_lrclib_synced(factory, monkeypatch, tmp_path
     monkeypatch.setattr(pipeline, "_to_wav", fake_to_wav)
     monkeypatch.setattr(pipeline, "_wav_to_mp3", fake_wav_to_mp3)
 
-    def fake_run(self, mix_wav, work_dir: Path):
+    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
         work_dir.mkdir(parents=True, exist_ok=True)
         voc = work_dir / "vocals.wav"
         inst = work_dir / "instrumental.wav"
@@ -325,3 +325,186 @@ async def test_run_real_job_prefers_lrclib_synced(factory, monkeypatch, tmp_path
     assert metadata["lyrics_source"] == "lrclib_synced"
     assert metadata["synced"] is True
     assert metadata["instrumental"] is False
+
+
+# ---------------------------------------------------------------------------
+# force-align (#55): LRCLIB plain-only → align_text sent → aligned LRC consumed
+# ---------------------------------------------------------------------------
+def _patch_io(monkeypatch, pipeline):
+    """Stub yt-dlp/ffmpeg so run_real_job runs without external binaries."""
+    monkeypatch.setattr(
+        pipeline, "_ytdlp_metadata", lambda url: {"title": "Artist - Song"}
+    )
+
+    def fake_download(url, dest: Path):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"audio")
+        return dest
+
+    def fake_to_wav(src, dest: Path):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"wav")
+        return dest
+
+    def fake_wav_to_mp3(src, dest: Path):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"mp3")
+        return dest
+
+    monkeypatch.setattr(pipeline, "_download_audio", fake_download)
+    monkeypatch.setattr(pipeline, "_to_wav", fake_to_wav)
+    monkeypatch.setattr(pipeline, "_wav_to_mp3", fake_wav_to_mp3)
+
+
+@pytest.mark.asyncio
+async def test_run_real_job_forced_aligns_plain_only(factory, monkeypatch, tmp_path):
+    """LRCLIB plain-only → the pipeline ships the plain text to the GPU as
+    ``align_text``; the GPU returns a force-aligned LRC; finalize writes
+    lyrics.lrc + a lyrics_lrc artifact with provenance ``forced_aligned``."""
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.worker import vast_client
+    from karaoke.worker.lyrics import LyricsSource
+    from karaoke.worker.vast_client import GpuJobResult
+
+    _patch_io(monkeypatch, pipeline)
+
+    aligned = "[00:01.00]plain one\n[00:02.50]plain two"
+    captured: dict = {}
+
+    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+        captured["align_text"] = align_text
+        captured["align_lang"] = align_lang
+        work_dir.mkdir(parents=True, exist_ok=True)
+        voc = work_dir / "vocals.wav"
+        inst = work_dir / "instrumental.wav"
+        ltxt = work_dir / "lyrics.txt"
+        ljson = work_dir / "lyrics.json"
+        for p, c in [(voc, b"v"), (inst, b"i"), (ltxt, b"whisper"), (ljson, b"{}")]:
+            p.write_bytes(c)
+        # The handler force-aligned align_text → an aligned LRC on disk.
+        alrc = work_dir / "aligned.lrc"
+        alrc.write_text(aligned, encoding="utf-8")
+        return GpuJobResult(
+            vast_instance_id=9,
+            vast_cost=0.05,
+            gpu_model="L40",
+            vocals_path=voc,
+            instrumental_path=inst,
+            lyrics_txt_path=ltxt,
+            lyrics_json_path=ljson,
+            aligned_lrc_path=alrc,
+        )
+
+    monkeypatch.setattr(vast_client.VastClient, "run", fake_run)
+
+    # LRCLIB returns plain text but NO synced LRC.
+    def fake_http(method, url, params):
+        if "/api/get" in url:
+            return 200, {"plainLyrics": "plain one\nplain two"}
+        return 404, None
+
+    monkeypatch.setattr(pipeline, "_LYRICS_SOURCE", LyricsSource(http=fake_http))
+
+    job_id = await _make_job(factory)
+    settings = Settings(
+        device_mode="vast", vast_api_key="k-real", artifact_root=str(tmp_path)
+    )
+    await pipeline.run_real_job(factory, job_id, settings)
+
+    # The plain text was forwarded to the GPU as align_text.
+    assert captured["align_text"] == "plain one\nplain two"
+    assert captured["align_lang"] == "eng"
+
+    async with factory() as session:
+        from sqlalchemy import select
+
+        from karaoke.db.models import Artifact
+
+        arts = (
+            await session.scalars(select(Artifact).where(Artifact.job_id == job_id))
+        ).all()
+        kinds = sorted(a.kind for a in arts)
+        assert kinds == ["karaoke", "lyrics", "lyrics_lrc", "vocals"]
+
+    exports = tmp_path / "tok-test" / "exports"
+    assert (exports / "lyrics.lrc").read_text() == aligned
+    assert (exports / "lyrics.txt").read_text() == "plain one\nplain two"
+    metadata = json.loads((exports / "metadata.json").read_text())
+    assert metadata["lyrics_source"] == "forced_aligned"
+    assert metadata["synced"] is True
+    assert metadata["instrumental"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_real_job_plain_only_tolerates_no_aligned_lrc(
+    factory, monkeypatch, tmp_path
+):
+    """Tolerant fallback: align_text is sent, but the GPU (old image / failed
+    alignment) returns NO aligned LRC → provenance stays ``lrclib_plain`` and
+    the untimed plain text is kept. The job still completes."""
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.worker import vast_client
+    from karaoke.worker.lyrics import LyricsSource
+    from karaoke.worker.vast_client import GpuJobResult
+
+    _patch_io(monkeypatch, pipeline)
+
+    captured: dict = {}
+
+    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+        captured["align_text"] = align_text
+        work_dir.mkdir(parents=True, exist_ok=True)
+        voc = work_dir / "vocals.wav"
+        inst = work_dir / "instrumental.wav"
+        ltxt = work_dir / "lyrics.txt"
+        ljson = work_dir / "lyrics.json"
+        for p, c in [(voc, b"v"), (inst, b"i"), (ltxt, b"whisper"), (ljson, b"{}")]:
+            p.write_bytes(c)
+        # NO aligned.lrc written → aligned_lrc_path=None (old image).
+        return GpuJobResult(
+            vast_instance_id=11,
+            vast_cost=0.05,
+            gpu_model="L40",
+            vocals_path=voc,
+            instrumental_path=inst,
+            lyrics_txt_path=ltxt,
+            lyrics_json_path=ljson,
+            aligned_lrc_path=None,
+        )
+
+    monkeypatch.setattr(vast_client.VastClient, "run", fake_run)
+
+    def fake_http(method, url, params):
+        if "/api/get" in url:
+            return 200, {"plainLyrics": "plain one\nplain two"}
+        return 404, None
+
+    monkeypatch.setattr(pipeline, "_LYRICS_SOURCE", LyricsSource(http=fake_http))
+
+    job_id = await _make_job(factory)
+    settings = Settings(
+        device_mode="vast", vast_api_key="k-real", artifact_root=str(tmp_path)
+    )
+    await pipeline.run_real_job(factory, job_id, settings)
+
+    # align_text WAS sent (the pipeline always tries) ...
+    assert captured["align_text"] == "plain one\nplain two"
+
+    async with factory() as session:
+        from sqlalchemy import select
+
+        from karaoke.db.models import Artifact
+
+        arts = (
+            await session.scalars(select(Artifact).where(Artifact.job_id == job_id))
+        ).all()
+        kinds = sorted(a.kind for a in arts)
+        # ... but no lyrics_lrc artifact, since no synced LRC was produced.
+        assert kinds == ["karaoke", "lyrics", "vocals"]
+
+    exports = tmp_path / "tok-test" / "exports"
+    assert not (exports / "lyrics.lrc").exists()
+    assert (exports / "lyrics.txt").read_text() == "plain one\nplain two"
+    metadata = json.loads((exports / "metadata.json").read_text())
+    assert metadata["lyrics_source"] == "lrclib_plain"
+    assert metadata["synced"] is False

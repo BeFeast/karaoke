@@ -77,6 +77,10 @@ class GpuJobResult:
     instrumental_path: Path
     lyrics_txt_path: Path
     lyrics_json_path: Path
+    # Optional synced LRC produced by in-GPU force-alignment of supplied plain
+    # lyrics against the vocal stem (#55). ``None`` when no ``align_text`` was
+    # sent, or the handler/aligner produced nothing (old image, or failure).
+    aligned_lrc_path: Path | None = None
 
 
 # --------------------------------------------------------------------------
@@ -601,14 +605,28 @@ class VastClient:
             )
 
     # -- main entrypoint -----------------------------------------------------
-    def run(self, vocals_input_wav: Path, work_dir: Path) -> GpuJobResult:
+    def run(
+        self,
+        vocals_input_wav: Path,
+        work_dir: Path,
+        *,
+        align_text: str | None = None,
+        align_lang: str | None = None,
+    ) -> GpuJobResult:
         """Provision an instance and run /demucs then /whisper against it.
 
         ``vocals_input_wav`` is the normalized full-mix wav the coordinator
         produced; the GPU image's /demucs splits it into vocals + instrumental,
         and /whisper transcribes the *vocals* stem. The instance is destroyed in
         ``finally`` no matter what.
+
+        ``align_text``/``align_lang`` are accepted for interface parity with the
+        RunPod worker (#55), but the vast.ai HTTP image (``/demucs`` + ``/whisper``)
+        does not implement force-alignment; they are ignored here and the result
+        carries no ``aligned_lrc_path``. vast.ai is the fallback runtime — RunPod
+        is the alignment-capable path.
         """
+        _ = (align_text, align_lang)  # accepted, unused on the vast path
         api_key = self.settings.vast_api_key.strip()
         if not api_key:
             raise VastError("KARAOKE_VAST_API_KEY is not set")
