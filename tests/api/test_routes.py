@@ -308,6 +308,30 @@ def test_share_artifact_serves_file_when_present(client, tmp_path):
     assert r.content.startswith(b"ID3")
 
 
+def test_share_artifact_serves_lyrics_lrc(client, tmp_path):
+    from karaoke.config import Settings, get_settings
+
+    create = client.post("/jobs", json={"url": "https://example.com/x"})
+    token = create.json()["job_token"]
+
+    exports = Path(tmp_path) / token / "exports"
+    exports.mkdir(parents=True, exist_ok=True)
+    (exports / "lyrics.lrc").write_text("[00:12.00]line one\n", encoding="utf-8")
+
+    def fake_settings() -> Settings:
+        return Settings(artifact_root=str(tmp_path))
+
+    client.app.dependency_overrides[get_settings] = fake_settings
+    try:
+        r = client.get(f"/share/{token}/lyrics.lrc")
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+
+    assert r.status_code == 200, r.text
+    assert r.headers.get("content-type", "").startswith("text/plain")
+    assert "[00:12.00]" in r.text
+
+
 def test_me_returns_admin_for_trusted_lan(client):
     """Default conftest is trusted-LAN -> admin identity."""
     r = client.get("/me")

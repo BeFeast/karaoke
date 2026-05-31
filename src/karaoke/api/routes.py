@@ -580,6 +580,7 @@ _ALLOWED_ARTIFACTS: dict[str, tuple[str, str]] = {
     "karaoke.mp3": ("karaoke.mp3", "audio/mpeg"),
     "vocals.mp3": ("vocals.mp3", "audio/mpeg"),
     "lyrics.txt": ("lyrics.txt", "text/plain; charset=utf-8"),
+    "lyrics.lrc": ("lyrics.lrc", "text/plain; charset=utf-8"),
     "metadata.json": ("metadata.json", "application/json"),
 }
 
