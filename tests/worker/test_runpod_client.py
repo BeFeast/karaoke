@@ -434,3 +434,83 @@ def test_run_falls_back_to_base64_when_r2_not_configured(settings, tmp_path):
     payload = submit_call[2]["input"]
     assert "audio_base64" in payload
     assert "audio_url" not in payload
+
+
+def test_queue_ceiling_fails_fast_with_capacity_message(settings, tmp_path, monkeypatch):
+    """A job stuck IN_QUEUE past the queue ceiling fails fast (and is cancelled),
+    with a clear 'capacity busy' message — NOT after the long backstop."""
+    settings.runpod_queue_ceiling_s = 5.0
+    settings.runpod_wall_ceiling_s = 10000.0
+    settings.runpod_max_job_cost = 0.0
+    settings.runpod_daily_cost_cap = 0.0
+
+    import karaoke.worker.runpod_client as mod
+
+    # started=0; iter1 wall=0 (no trip, GET IN_QUEUE); iter2 wall=99 > queue_ceiling.
+    ticks = iter([0.0, 0.0, 99.0, 99.0, 99.0, 99.0])
+
+    class _FakeTime:
+        def monotonic(self):
+            return next(ticks, 99.0)
+
+        def sleep(self, *_):
+            pass
+
+    monkeypatch.setattr(mod, "time", _FakeTime())
+
+    rec = _Recorder([
+        {"expect_in": "/run", "code": 200, "body": {"id": "rp-queue"}},
+        {"expect_in": "/status/rp-queue", "code": 200, "body": {"status": "IN_QUEUE"}},
+        {"expect_in": "/cancel/rp-queue", "code": 200, "body": {}},
+    ])
+    client = RunpodClient(settings, http=rec)
+    with pytest.raises(RunpodTimeoutError, match="capacity busy"):
+        client.run(_mix_wav(tmp_path), tmp_path / "work")
+    assert [c for c in rec.calls if "/cancel/rp-queue" in c[1]], "queue fail must cancel"
+
+
+def test_in_progress_not_killed_by_queue_ceiling(settings, tmp_path, monkeypatch):
+    """Once a job is IN_PROGRESS, the queue ceiling must NOT abort it — even
+    though wall-clock is well past the queue ceiling (it waited in queue, then
+    a worker picked it up). It runs to COMPLETED."""
+    settings.runpod_queue_ceiling_s = 5.0
+    settings.runpod_wall_ceiling_s = 10000.0
+    settings.runpod_max_job_cost = 0.0
+    settings.runpod_daily_cost_cap = 0.0
+
+    import karaoke.worker.runpod_client as mod
+
+    # started=0; iter1 wall=0 -> GET IN_PROGRESS (exec_phase=True);
+    # iter2 wall=500 (>> queue_ceiling) but exec_phase so NO trip -> GET COMPLETED.
+    ticks = iter([0.0, 0.0, 500.0, 500.0, 500.0])
+
+    class _FakeTime:
+        def monotonic(self):
+            return next(ticks, 500.0)
+
+        def sleep(self, *_):
+            pass
+
+    monkeypatch.setattr(mod, "time", _FakeTime())
+
+    output = {
+        "vocals_b64": _b64(b"v"),
+        "instrumental_b64": _b64(b"i"),
+        "lyrics_txt": "x",
+        "lyrics_json": {},
+        "gpu_model": "L40",
+        "elapsed_s": 31.0,
+    }
+    rec = _Recorder([
+        {"expect_in": "/run", "code": 200, "body": {"id": "rp-run"}},
+        {"expect_in": "/status/rp-run", "code": 200,
+         "body": {"status": "IN_PROGRESS", "delayTime": 490000}},
+        {"expect_in": "/status/rp-run", "code": 200,
+         "body": {"status": "COMPLETED", "executionTime": 31000, "output": output}},
+    ])
+    client = RunpodClient(settings, http=rec)
+    result = client.run(_mix_wav(tmp_path), tmp_path / "work")
+    assert (tmp_path / "work" / "vocals.wav").exists()
+    assert result.vast_instance_id == "runpod-rp-run"
+    # A running job that completed must NOT have been cancelled.
+    assert not [c for c in rec.calls if "/cancel/" in c[1]], "must not cancel a running job"

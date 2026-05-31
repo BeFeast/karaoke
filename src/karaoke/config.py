@@ -110,7 +110,14 @@ class Settings(BaseSettings):
     runpod_daily_cost_cap: float = 5.0  # rolling 24h cap (shares Job.vast_cost_micros bookkeeping).
     runpod_poll_interval_s: float = 2.0
     runpod_request_timeout_s: int = 30
-    runpod_wall_ceiling_s: float = 600.0  # max poll-loop wall clock — fail fast on capacity outage; happy-path is ~2 min.
+    # Two-tier timeout. queue_ceiling: how long a job may sit IN_QUEUE
+    # (waiting for a free GPU) before we give up with a clear 'capacity
+    # busy' error — this is the only fail-fast knob. wall_ceiling: a
+    # generous absolute backstop that only trips if status never advances.
+    # We NEVER abort a job once RunPod reports IN_PROGRESS (GPU work is
+    # ~30-90s; killing it would throw away paid compute).
+    runpod_queue_ceiling_s: float = 480.0  # 8 min max queue wait, then fail fast.
+    runpod_wall_ceiling_s: float = 1200.0  # absolute backstop (status wedged).
     # Conservative \$/hr estimate for cost projection mid-poll. RunPod's
     # cheapest 16-24GB Flex is \$0.58-0.68/hr; we use 0.68 (pessimistic).
     runpod_hourly_rate_estimate: float = 0.68
@@ -120,7 +127,7 @@ class Settings(BaseSettings):
     r2_bucket: str = ""  # KARAOKE_R2_BUCKET
     r2_access_key_id: str = ""  # KARAOKE_R2_ACCESS_KEY_ID
     r2_secret_access_key: str = ""  # KARAOKE_R2_SECRET_ACCESS_KEY
-    r2_presign_ttl_s: int = 900  # presigned-URL TTL — outlive wall_ceiling (600s) + a safety margin so the URL is still valid when the worker fetches.
+    r2_presign_ttl_s: int = 1800  # presigned-URL TTL — must outlive the wall_ceiling backstop (1200s) so the URL is valid when the worker finally runs.
 
     # NFS-mounted artifact root inside the coordinator container.
     artifact_root: str = "/srv/artifacts"
