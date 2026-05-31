@@ -198,6 +198,9 @@ def test_share_endpoint_renders_html_for_browsers(client):
     assert f"/share/{token}/karaoke.mp3" in body
     assert f"/share/{token}/vocals.mp3" in body
     assert "TuneHTML" in body
+    # Scribe-styled result page (not the bare 1996 template).
+    assert 'class="player"' in body
+    assert 'class="chip' in body
 
 
 def test_share_artifact_404_for_unknown_artifact_name(client):
