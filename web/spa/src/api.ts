@@ -41,6 +41,25 @@ export interface RuntimeConfig {
   public_base_url: string;
 }
 
+// One output file of a job (server `ArtifactOut`).
+export interface ArtifactOut {
+  kind: string;
+  relative_path: string;
+  content_type: string | null;
+}
+
+// Public share-page payload (server `SharePayload`) — fetched from
+// GET /share/{token} with Accept: application/json. The token itself is the
+// unlisted-access secret, so only owner *display* attributes are exposed.
+export interface SharePayload {
+  job_token: string;
+  title: string | null;
+  status: JobStatus;
+  progress: number;
+  owner_display_name: string | null;
+  artifacts: ArtifactOut[];
+}
+
 export interface CreateJobInput {
   url: string;
   title?: string;
@@ -133,4 +152,24 @@ export function clearFailedJobs(): Promise<{ deleted: number }> {
     method: "POST",
     headers: { Accept: "application/json" },
   });
+}
+
+// Fetch a single job's share payload. Same endpoint as the server-rendered
+// share page, but Accept: application/json returns SharePayload JSON.
+// Possession of the token authorises the read; auth headers are still attached
+// (when present) so owner-scoping stays correct.
+export function getShare(token: string): Promise<SharePayload> {
+  return request<SharePayload>(`/share/${encodeURIComponent(token)}`, {
+    headers: { Accept: "application/json" },
+  });
+}
+
+// Fetch plain lyrics text for a job, or null when not (yet) available.
+// Same-origin relative path; the artifact endpoint authorises on the token.
+export async function getLyricsText(token: string): Promise<string | null> {
+  const resp = await fetch(`/share/${encodeURIComponent(token)}/lyrics.txt`, {
+    headers: { ...(await authHeaders()) },
+  });
+  if (!resp.ok) return null;
+  return await resp.text();
 }

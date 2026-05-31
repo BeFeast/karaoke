@@ -708,6 +708,115 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   filter: brightness(0.95);
 }
 
+/* ─── Item page (/app/#/job/:token) ─────────────────────────────────────── */
+/* Single-column layout: topbar + centered pane, no dashboard sidebar. */
+.app.app-item {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 56px 1fr;
+  grid-template-areas: "topbar" "main";
+}
+.back-link {
+  display: inline-flex;
+  margin-bottom: 16px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+.item-header {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: var(--rule);
+}
+.item-meta-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.item-owner {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.item-title {
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
+}
+.item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+/* Player + lyrics sections. Section label mirrors the server share page. */
+.sec-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.players { margin-bottom: 28px; }
+.player-card {
+  background: var(--bg-card);
+  border: var(--rule);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  box-shadow: var(--shadow-sm);
+}
+.player-label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-soft);
+  margin-bottom: 8px;
+}
+.player-card audio {
+  width: 100%;
+  display: block;
+}
+.lyrics-panel { margin-bottom: 28px; }
+.lyrics-text {
+  background: var(--bg-card);
+  border: var(--rule);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.item-skeleton {
+  padding: 24px 0;
+}
+
+/* Transient "Link copied" toast. */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 80;
+  background: var(--fg);
+  color: var(--bg);
+  padding: 9px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: var(--shadow);
+  animation: toast-in 0.18s ease-out;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
 /* ─── Responsive: collapse sidebar into a horizontal filter bar ─────────── */
 @media (max-width: 880px) {
   .app {
