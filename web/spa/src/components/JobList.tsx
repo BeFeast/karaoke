@@ -1,14 +1,14 @@
 import type { JobOut } from "../api";
-import { sourceLabel, statusMeta } from "../jobStatus";
+import { ARTIFACTS, artifactHref, canRetry, resultHref, sourceLabel, statusMeta } from "../jobStatus";
 import { StatusChip } from "./StatusChip";
 
-function shareHref(job: JobOut, publicBaseUrl: string): string {
-  // Prefer the server-built share_url; fall back to public base + token.
-  if (job.share_url) return job.share_url;
-  return `${publicBaseUrl.replace(/\/$/, "")}/share/${job.job_token}`;
+export interface JobActions {
+  onDelete: (job: JobOut) => void;
+  onCancel: (job: JobOut) => void;
+  onRetry: (job: JobOut) => void;
 }
 
-function JobCard({ job, publicBaseUrl }: { job: JobOut; publicBaseUrl: string }) {
+function JobCard({ job, actions }: { job: JobOut; actions: JobActions }) {
   const meta = statusMeta(job.status);
   const label = job.title?.trim() || job.source_url;
   const pct = Math.max(0, Math.min(100, Math.round(job.progress)));
@@ -20,9 +20,15 @@ function JobCard({ job, publicBaseUrl }: { job: JobOut; publicBaseUrl: string })
       <div className="job-body">
         <div className="job-meta-top">
           <StatusChip status={job.status} />
-          <span className="job-source" title={job.source_url}>
-            {sourceLabel(job.source_url)}
-          </span>
+          <a
+            className="job-source"
+            href={job.source_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={job.source_url}
+          >
+            {sourceLabel(job.source_url)} ↗
+          </a>
         </div>
 
         <h3 className="job-title" title={label}>
@@ -34,26 +40,11 @@ function JobCard({ job, publicBaseUrl }: { job: JobOut; publicBaseUrl: string })
             <div className={`progressbar active${indeterminate ? " indeterminate" : ""}`}>
               <div style={{ width: indeterminate ? undefined : `${pct}%` }} />
             </div>
-            <div className="job-foot">
-              <span className="stage-note">
-                {meta.note}
-                {!indeterminate && ` · ${pct}%`}
-              </span>
+            <div className="stage-note">
+              {meta.note}
+              {!indeterminate && ` · ${pct}%`}
             </div>
           </>
-        )}
-
-        {job.status === "completed" && (
-          <div className="job-foot">
-            <a
-              className="share-link"
-              href={shareHref(job, publicBaseUrl)}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              → Open share page
-            </a>
-          </div>
         )}
 
         {job.status === "failed" && job.error && (
@@ -62,6 +53,52 @@ function JobCard({ job, publicBaseUrl }: { job: JobOut; publicBaseUrl: string })
             {job.error}
           </div>
         )}
+
+        <div className="job-foot">
+          {job.status === "completed" && (
+            <>
+              <a className="btn sm" href={resultHref(job.job_token)} target="_blank" rel="noopener noreferrer">
+                ▶ Open
+              </a>
+              <span className="artifact-links">
+                {ARTIFACTS.map((a, i) => (
+                  <span key={a.name}>
+                    {i > 0 && <span className="sep">·</span>}
+                    <a href={artifactHref(job.job_token, a.name)} target="_blank" rel="noopener noreferrer">
+                      {a.label}
+                    </a>
+                  </span>
+                ))}
+              </span>
+            </>
+          )}
+
+          {meta.active && (
+            <button type="button" className="link-btn" onClick={() => actions.onCancel(job)}>
+              Cancel
+            </button>
+          )}
+
+          {canRetry(job.status) && (
+            <button type="button" className="link-btn" onClick={() => actions.onRetry(job)}>
+              ↻ Retry
+            </button>
+          )}
+
+          {!meta.active && (
+            <>
+              <span className="spacer" />
+              <button
+                type="button"
+                className="link-btn danger"
+                onClick={() => actions.onDelete(job)}
+                title="Remove job + artifacts"
+              >
+                ✕ Remove
+              </button>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -87,13 +124,13 @@ function JobsSkeleton() {
 export function JobList({
   jobs,
   loading,
-  publicBaseUrl,
+  actions,
   emptyTitle = "No jobs yet",
   emptySub = "Paste a URL above to split vocals and transcribe the lyrics.",
 }: {
   jobs: JobOut[];
   loading: boolean;
-  publicBaseUrl: string;
+  actions: JobActions;
   emptyTitle?: string;
   emptySub?: string;
 }) {
@@ -111,7 +148,7 @@ export function JobList({
   return (
     <div className="jobs">
       {jobs.map((job) => (
-        <JobCard key={job.id} job={job} publicBaseUrl={publicBaseUrl} />
+        <JobCard key={job.id} job={job} actions={actions} />
       ))}
     </div>
   );

@@ -37,3 +37,27 @@ export function sourceLabel(url: string): string {
     return url;
   }
 }
+
+// Same-origin links. We deliberately do NOT use job.share_url (the public
+// https://karaoke.oklabs.uk/... base) — on the LAN that 401s through the CF
+// tunnel; the SPA is served from the same host as these routes, so relative
+// paths open correctly. (Real "sharing" only matters once auth is wired.)
+export function resultHref(token: string): string {
+  return `/share/${token}`;
+}
+
+export function artifactHref(token: string, name: string): string {
+  return `/share/${token}/${name}`;
+}
+
+/** Downloadable outputs of a completed job (server allowlist names). */
+export const ARTIFACTS: { name: string; label: string }[] = [
+  { name: "karaoke.mp3", label: "instrumental" },
+  { name: "vocals.mp3", label: "vocals" },
+  { name: "lyrics.txt", label: "lyrics" },
+];
+
+/** A failed/cancelled job can be retried by resubmitting its source URL. */
+export function canRetry(status: JobStatus): boolean {
+  return status === "failed" || status === "cancelled";
+}
