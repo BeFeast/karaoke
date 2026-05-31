@@ -332,6 +332,216 @@ def test_share_artifact_serves_lyrics_lrc(client, tmp_path):
     assert "[00:12.00]" in r.text
 
 
+def _insert_artifact(
+    job_id: int, *, kind: str, relative_path: str, size_bytes: int | None
+) -> None:
+    """Insert an Artifact row directly (the mock worker also creates these)."""
+    db_path = os.environ["KARAOKE_DATABASE_URL"].split("///", 1)[1]
+    con = sqlite3.connect(db_path)
+    try:
+        con.execute("PRAGMA busy_timeout=3000")
+        con.execute(
+            "INSERT INTO artifacts "
+            "(job_id, kind, relative_path, size_bytes, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (job_id, kind, relative_path, size_bytes, "2026-06-01 00:00:00+00:00"),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def test_jobout_exposes_artifacts(client):
+    """``JobOut`` (via /jobs/{id}/status and /jobs) lists the job's artifacts."""
+    job_id, token = _seed_job(JobStatus.completed.value)
+    _insert_artifact(
+        job_id,
+        kind="karaoke",
+        relative_path=f"{token}/exports/karaoke.mp3",
+        size_bytes=12345,
+    )
+    _insert_artifact(
+        job_id,
+        kind="lyrics_lrc",
+        relative_path=f"{token}/exports/lyrics.lrc",
+        size_bytes=None,
+    )
+
+    status_resp = client.get(f"/jobs/{job_id}/status")
+    assert status_resp.status_code == 200, status_resp.text
+    arts = status_resp.json()["artifacts"]
+    by_kind = {a["kind"]: a for a in arts}
+    assert by_kind["karaoke"]["name"] == "karaoke.mp3"
+    assert by_kind["karaoke"]["size"] == 12345
+    assert by_kind["lyrics_lrc"]["name"] == "lyrics.lrc"
+    assert by_kind["lyrics_lrc"]["size"] is None
+
+    list_resp = client.get("/jobs")
+    assert list_resp.status_code == 200, list_resp.text
+    match = next(j for j in list_resp.json() if j["id"] == job_id)
+    assert {a["kind"] for a in match["artifacts"]} == {"karaoke", "lyrics_lrc"}
+
+
+def test_create_job_has_empty_artifacts(client):
+    """A freshly created job projects an empty (not missing) artifacts list."""
+    resp = client.post("/jobs", json={"url": "https://example.com/song"})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["artifacts"] == []
+
+
+def _override_artifact_root(client, tmp_path):
+    from karaoke.config import Settings, get_settings
+
+    def fake_settings() -> Settings:
+        return Settings(artifact_root=str(tmp_path))
+
+    client.app.dependency_overrides[get_settings] = fake_settings
+
+
+def test_share_lyrics_synced_parses_lines(client, tmp_path):
+    from karaoke.config import get_settings
+
+    _, token = _seed_job_with_metadata(artist="A", track="B")
+    exports = Path(tmp_path) / token / "exports"
+    exports.mkdir(parents=True, exist_ok=True)
+    (exports / "lyrics.lrc").write_text(
+        "[ar:Some Artist]\n"
+        "[00:12.50]first line\n"
+        "[01:05.00]second line\n"
+        "[00:30.00]\n",  # blank-text timed line -> dropped
+        encoding="utf-8",
+    )
+    (exports / "lyrics.txt").write_text("first line\nsecond line\n", encoding="utf-8")
+    (exports / "metadata.json").write_text(
+        '{"lyrics_source": "lrclib_synced", "synced": true, "instrumental": false}',
+        encoding="utf-8",
+    )
+
+    _override_artifact_root(client, tmp_path)
+    try:
+        r = client.get(f"/share/{token}/lyrics")
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["synced"] is True
+    assert body["source"] == "lrclib_synced"
+    assert body["lrc"].startswith("[ar:Some Artist]")
+    assert body["plain"] == "first line\nsecond line\n"
+    # Parsed, sorted, blank-text line dropped.
+    assert body["lines"] == [
+        {"t": 12.5, "text": "first line"},
+        {"t": 65.0, "text": "second line"},
+    ]
+
+
+def test_share_lyrics_synced_without_txt_strips_timestamps(client, tmp_path):
+    """No lyrics.txt → plain is derived from the LRC body."""
+    from karaoke.config import get_settings
+
+    _, token = _seed_job_with_metadata(artist="A", track="B")
+    exports = Path(tmp_path) / token / "exports"
+    exports.mkdir(parents=True, exist_ok=True)
+    (exports / "lyrics.lrc").write_text(
+        "[00:01.00]only line\n", encoding="utf-8"
+    )
+
+    _override_artifact_root(client, tmp_path)
+    try:
+        r = client.get(f"/share/{token}/lyrics")
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["synced"] is True
+    assert body["plain"] == "only line"
+    # No metadata.json -> source inferred.
+    assert body["source"] == "lrclib_synced"
+
+
+def test_share_lyrics_plain_only(client, tmp_path):
+    from karaoke.config import get_settings
+
+    _, token = _seed_job_with_metadata(artist="A", track="B")
+    exports = Path(tmp_path) / token / "exports"
+    exports.mkdir(parents=True, exist_ok=True)
+    (exports / "lyrics.txt").write_text("a plain transcript\n", encoding="utf-8")
+    (exports / "metadata.json").write_text(
+        '{"lyrics_source": "whisper_asr", "synced": false, "instrumental": false}',
+        encoding="utf-8",
+    )
+
+    _override_artifact_root(client, tmp_path)
+    try:
+        r = client.get(f"/share/{token}/lyrics")
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["synced"] is False
+    assert body["lrc"] is None
+    assert body["lines"] is None
+    assert body["plain"] == "a plain transcript\n"
+    assert body["source"] == "whisper_asr"
+
+
+def test_share_lyrics_instrumental(client, tmp_path):
+    from karaoke.config import get_settings
+
+    _, token = _seed_job_with_metadata(artist="A", track="B")
+    exports = Path(tmp_path) / token / "exports"
+    exports.mkdir(parents=True, exist_ok=True)
+    (exports / "metadata.json").write_text(
+        '{"lyrics_source": "instrumental", "synced": false, "instrumental": true}',
+        encoding="utf-8",
+    )
+
+    _override_artifact_root(client, tmp_path)
+    try:
+        r = client.get(f"/share/{token}/lyrics")
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["synced"] is False
+    assert body["lrc"] is None
+    assert body["lines"] is None
+    assert body["plain"] is None
+    assert body["source"] == "instrumental"
+
+
+def test_share_lyrics_404_for_unknown_token(client):
+    r = client.get("/share/does-not-exist/lyrics")
+    assert r.status_code == 404
+
+
+def test_share_lyrics_empty_when_no_artifacts(client, tmp_path):
+    """Job with no lyrics files yet -> empty payload, source inferred 'none'."""
+    from karaoke.config import get_settings
+
+    _, token = _seed_job_with_metadata(artist="A", track="B")
+
+    _override_artifact_root(client, tmp_path)
+    try:
+        r = client.get(f"/share/{token}/lyrics")
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body == {
+        "synced": False,
+        "lrc": None,
+        "lines": None,
+        "plain": None,
+        "source": "none",
+    }
+
+
 def test_me_returns_admin_for_trusted_lan(client):
     """Default conftest is trusted-LAN -> admin identity."""
     r = client.get("/me")
