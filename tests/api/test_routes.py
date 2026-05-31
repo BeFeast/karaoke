@@ -139,6 +139,70 @@ def test_status_404_for_missing_job(client):
     assert response.status_code == 404
 
 
+def _seed_job_with_metadata(
+    *, artist: str, track: str, album: str | None = None, duration: int | None = None
+) -> tuple[int, str]:
+    """Insert a job row carrying the new source-metadata columns."""
+    db_path = os.environ["KARAOKE_DATABASE_URL"].split("///", 1)[1]
+    token = secrets.token_urlsafe(16)
+    con = sqlite3.connect(db_path)
+    try:
+        con.execute("PRAGMA busy_timeout=3000")
+        con.execute(
+            "INSERT INTO jobs "
+            "(job_token, owner_subject, source_url, title, artist, track, album, "
+            " duration, status, progress, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                token,
+                "lan-default",
+                "https://example.com/seed",
+                f"{artist} - {track}",
+                artist,
+                track,
+                album,
+                duration,
+                JobStatus.completed.value,
+                100,
+                "2026-06-01 00:00:00+00:00",
+                "2026-06-01 00:00:00+00:00",
+            ),
+        )
+        con.commit()
+        row = con.execute("SELECT id FROM jobs WHERE job_token=?", (token,)).fetchone()
+        return int(row[0]), token
+    finally:
+        con.close()
+
+
+def test_jobout_exposes_artist_and_track(client):
+    """``JobOut`` (via /jobs/{id}/status and /jobs) surfaces artist/track."""
+    job_id, _ = _seed_job_with_metadata(artist="Daft Punk", track="Get Lucky")
+
+    status_resp = client.get(f"/jobs/{job_id}/status")
+    assert status_resp.status_code == 200, status_resp.text
+    body = status_resp.json()
+    assert body["artist"] == "Daft Punk"
+    assert body["track"] == "Get Lucky"
+
+    list_resp = client.get("/jobs")
+    assert list_resp.status_code == 200, list_resp.text
+    match = next(j for j in list_resp.json() if j["id"] == job_id)
+    assert match["artist"] == "Daft Punk"
+    assert match["track"] == "Get Lucky"
+
+
+def test_share_payload_exposes_artist_and_track(client):
+    """The JSON ``SharePayload`` surfaces artist/track too."""
+    _, token = _seed_job_with_metadata(artist="Queen", track="Bohemian Rhapsody")
+
+    share = client.get(f"/share/{token}", headers={"Accept": "application/json"})
+    assert share.status_code == 200, share.text
+    body = share.json()
+    assert body["artist"] == "Queen"
+    assert body["track"] == "Bohemian Rhapsody"
+
+
 def test_mock_worker_completes_job(client):
     """The mocked worker should drive the job to completed within a reasonable window."""
     create = client.post("/jobs", json={"url": "https://example.com/song"})

@@ -53,6 +53,8 @@ class JobOut(BaseModel):
     job_token: str
     source_url: str
     title: str | None
+    artist: str | None
+    track: str | None
     status: JobStatus
     progress: int
     error: str | None
@@ -67,6 +69,8 @@ class JobOut(BaseModel):
             job_token=job.job_token,
             source_url=job.source_url,
             title=job.title,
+            artist=job.artist,
+            track=job.track,
             status=job.status,
             progress=job.progress,
             error=job.error,
@@ -90,6 +94,8 @@ class SharePayload(BaseModel):
 
     job_token: str
     title: str | None
+    artist: str | None
+    track: str | None
     status: JobStatus
     progress: int
     owner_display_name: str | None
@@ -541,6 +547,8 @@ async def share_page(
         return SharePayload(
             job_token=job.job_token,
             title=job.title,
+            artist=job.artist,
+            track=job.track,
             status=job.status,
             progress=job.progress,
             owner_display_name=job.owner_display_name,

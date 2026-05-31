@@ -55,6 +55,14 @@ class Job(Base):
     source_url: Mapped[str] = mapped_column(Text)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Source music metadata (lyrics-lookup foundation). Populated during the
+    # download stage from the yt-dlp info dict; ``artist``/``track`` fall back
+    # to parsing the video title. ``duration`` is the source length in seconds.
+    artist: Mapped[str | None] = mapped_column(Text, nullable=True)
+    track: Mapped[str | None] = mapped_column(Text, nullable=True)
+    album: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus, name="job_status"),
         default=JobStatus.queued,
