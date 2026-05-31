@@ -4,6 +4,7 @@ import { artifactView, statusMeta } from "../jobStatus";
 import { goDashboard, itemUrl } from "../router";
 import { useTheme } from "../theme";
 import { StatusChip } from "./StatusChip";
+import { SyncedLyrics } from "./SyncedLyrics";
 import { Toast } from "./Toast";
 import { TopBar } from "./TopBar";
 
@@ -180,6 +181,28 @@ function ItemBody({
     [audio],
   );
 
+  // ── Player ↔ lyrics transport seam (#59) ─────────────────────────────────
+  // `onTime` pushes the live playhead into state that only feeds the lyrics
+  // highlight (the player owns its own clock, so this doesn't drive playback).
+  // `seekRef` is the player's imperative seek, shared so a lyrics-line click
+  // can drive the transport. Both are stable across renders.
+  const [currentTime, setCurrentTime] = useState(0);
+  const seekRef = useRef<((time: number) => void) | null>(null);
+  const onTime = useCallback((t: number) => {
+    // Quantise to ~10 fps so timeupdate frames don't trigger a re-render storm;
+    // the active-line lookup is far coarser than that anyway.
+    setCurrentTime((prev) => (Math.abs(prev - t) < 0.1 ? prev : t));
+  }, []);
+  const onSeek = useCallback((time: number) => {
+    seekRef.current?.(time);
+  }, []);
+  const reducedMotion = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
+    [],
+  );
+
   return (
     <>
       <div className="item-header">
@@ -233,7 +256,12 @@ function ItemBody({
           <div className="sec-label">player</div>
           {instrumental ? (
             <Suspense fallback={<div className="player-card ksplayer-fallback" aria-hidden />}>
-              <KaraokePlayer instrumentalUrl={instrumental.href} vocalsUrl={vocals?.href ?? null} />
+              <KaraokePlayer
+                instrumentalUrl={instrumental.href}
+                vocalsUrl={vocals?.href ?? null}
+                onTime={onTime}
+                seekRef={seekRef}
+              />
             </Suspense>
           ) : audio.length > 0 ? (
             audio.map((v) => (
@@ -250,17 +278,20 @@ function ItemBody({
         </section>
       )}
 
-      {/* Lyrics slot — plain text for THIS issue. */}
+      {/* Lyrics slot — synced LRC highlight when available (#59), else the
+          plain scroll box. SyncedLyrics fetches /share/{token}/lyrics.lrc and
+          falls back to `plainLyrics` on a 404 / empty body. The active line is
+          driven by the player's playhead; clicking a line seeks the player. */}
       {isComplete && (
         <section className="lyrics-panel">
           <div className="sec-label">lyrics</div>
-          {lyrics ? (
-            <pre className="lyrics-text">{lyrics}</pre>
-          ) : (
-            <div className="empty">
-              <div>No lyrics available for this job.</div>
-            </div>
-          )}
+          <SyncedLyrics
+            token={token}
+            currentTime={currentTime}
+            plainLyrics={lyrics}
+            onSeek={onSeek}
+            reducedMotion={reducedMotion}
+          />
         </section>
       )}
 
