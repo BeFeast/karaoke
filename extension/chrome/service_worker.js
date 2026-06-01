@@ -1,8 +1,20 @@
+import { serializeNetscapeCookies } from "./cookies.js";
+
 const DEFAULT_BASE_URL = "http://10.10.0.13:13140";
 const SOURCE = "chrome-extension";
 const NOTIFICATION_LINKS_KEY = "notificationLinks";
 const NOTIFICATION_ICON = "icons/karaoke-128.png";
 const CLEAR_BADGE_ALARM = "clear-karaoke-badge";
+
+// YouTube cookie rotation (issue #73): keep the coordinator's logged-in jar
+// fresh so session-gated videos keep downloading without a manual re-export.
+const REFRESH_COOKIES_ALARM = "refresh-youtube-cookies";
+const COOKIE_REFRESH_PERIOD_MINUTES = 360; // every 6h
+const COOKIE_SYNC_STATE_KEY = "youtubeCookieSync";
+// Domains whose cookies make up a logged-in YouTube session. youtube.com is the
+// primary jar; google.com carries the shared Google account auth cookies
+// (SAPISID/__Secure-3PSID/…) that strengthen yt-dlp's logged-in requests.
+const COOKIE_DOMAINS = ["youtube.com", "google.com"];
 
 const HTTP_URL = /^https?:\/\//i;
 
@@ -20,6 +32,15 @@ chrome.runtime.onInstalled.addListener(() => {
       contexts: ["link"],
     });
   });
+
+  ensureCookieAlarm();
+  // Best-effort initial sync so a freshly-installed extension hands the
+  // coordinator a jar without waiting for the first submit or alarm.
+  refreshYoutubeCookies().catch(() => {});
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  ensureCookieAlarm();
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
@@ -57,7 +78,22 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === CLEAR_BADGE_ALARM) {
     chrome.action.setBadgeText({ text: "" });
+    return;
   }
+  if (alarm.name === REFRESH_COOKIES_ALARM) {
+    refreshYoutubeCookies().catch(() => {});
+  }
+});
+
+// Let the options page trigger an on-demand "Sync YouTube cookies now".
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "refresh-youtube-cookies") {
+    refreshYoutubeCookies()
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true; // keep the message channel open for the async response
+  }
+  return false;
 });
 
 async function submitToKaraoke(url) {
@@ -69,6 +105,9 @@ async function submitToKaraoke(url) {
     const result = await createJob(config, url);
     await notifySuccess(config.baseUrl, result);
     setBadge("OK", "#137333");
+    // Piggy-back a cookie refresh on every submit (best-effort, non-blocking):
+    // the user is clearly logged in and active right now.
+    refreshYoutubeCookies(config).catch(() => {});
   } catch (error) {
     await notifyFailure(error.message || String(error));
     setBadge("ERR", "#b3261e");
@@ -77,6 +116,17 @@ async function submitToKaraoke(url) {
 
 function isSubmittableUrl(url) {
   return HTTP_URL.test(String(url || ""));
+}
+
+function ensureCookieAlarm() {
+  chrome.alarms.get(REFRESH_COOKIES_ALARM, (existing) => {
+    if (!existing) {
+      chrome.alarms.create(REFRESH_COOKIES_ALARM, {
+        periodInMinutes: COOKIE_REFRESH_PERIOD_MINUTES,
+        delayInMinutes: 1,
+      });
+    }
+  });
 }
 
 async function getConfig() {
@@ -146,6 +196,90 @@ async function createJob(config, url) {
   }
 
   return body || {};
+}
+
+// Collect the logged-in YouTube/Google session cookies and POST them to the
+// coordinator's /cookies/youtube endpoint. Best-effort: failures are recorded
+// for the options page but never surfaced as noisy notifications. Cookie values
+// never touch chrome.storage or the badge — only counts + status.
+async function refreshYoutubeCookies(config) {
+  const cfg = config || (await getConfig());
+  if (!cfg.bearerToken) {
+    await recordCookieSync({ ok: false, reason: "no-token" });
+    return { ok: false, reason: "no-token" };
+  }
+
+  const cookies = await collectSessionCookies();
+  const youtubeCount = cookies.filter((c) => String(c.domain || "").includes("youtube.com")).length;
+  if (youtubeCount === 0) {
+    // Not logged in to YouTube in this browser — nothing useful to send.
+    await recordCookieSync({ ok: false, reason: "not-logged-in" });
+    return { ok: false, reason: "not-logged-in" };
+  }
+
+  const blob = serializeNetscapeCookies(cookies);
+
+  let response;
+  try {
+    await ensureHostPermission(cfg.baseUrl);
+    response = await fetch(`${cfg.baseUrl}/cookies/youtube`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        Authorization: `Bearer ${cfg.bearerToken}`,
+      },
+      body: blob,
+    });
+  } catch (error) {
+    await recordCookieSync({ ok: false, reason: `network: ${error.message}` });
+    return { ok: false, reason: "network" };
+  }
+
+  if (!response.ok) {
+    await recordCookieSync({ ok: false, reason: `http-${response.status}` });
+    return { ok: false, reason: `http-${response.status}` };
+  }
+
+  let result = {};
+  try {
+    result = await response.json();
+  } catch {
+    result = {};
+  }
+  await recordCookieSync({
+    ok: true,
+    cookies: result.cookies ?? cookies.length,
+    youtube: result.youtube_cookies ?? youtubeCount,
+  });
+  return { ok: true, cookies: result.cookies, youtube: result.youtube_cookies };
+}
+
+async function collectSessionCookies() {
+  const seen = new Set();
+  const merged = [];
+  for (const domain of COOKIE_DOMAINS) {
+    let batch = [];
+    try {
+      batch = await chrome.cookies.getAll({ domain });
+    } catch {
+      batch = [];
+    }
+    for (const cookie of batch) {
+      const key = `${cookie.domain}\t${cookie.path}\t${cookie.name}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      merged.push(cookie);
+    }
+  }
+  return merged;
+}
+
+async function recordCookieSync(state) {
+  await chrome.storage.local.set({
+    [COOKIE_SYNC_STATE_KEY]: { ...state, at: Date.now() },
+  });
 }
 
 async function notifySuccess(baseUrl, result) {

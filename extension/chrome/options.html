@@ -30,6 +30,22 @@
           <span id="status" role="status" aria-live="polite"></span>
         </div>
       </form>
+
+      <section id="cookies-section">
+        <h2>YouTube cookies</h2>
+        <p class="help">
+          Karaoke needs a logged-in YouTube session to download videos that ask
+          you to &ldquo;sign in to confirm you&rsquo;re not a bot&rdquo;. This
+          extension reads your browser&rsquo;s YouTube cookies and sends them to
+          the coordinator automatically on every submit and every few hours.
+          Cookie values are never stored by this extension &mdash; they are sent
+          straight to your Karaoke server over the bearer token above.
+        </p>
+        <div class="actions">
+          <button type="button" id="sync-cookies">Sync YouTube cookies now</button>
+          <span id="cookie-status" role="status" aria-live="polite"></span>
+        </div>
+      </section>
     </main>
     <script src="options.js"></script>
   </body>

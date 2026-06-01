@@ -3,24 +3,28 @@
   "name": "Karaoke Submitter",
   "short_name": "Karaoke",
   "description": "Submit the current video page or link to a configured Karaoke queue (vocals + instrumental playback + lyrics).",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "action": {
     "default_title": "Submit video to Karaoke"
   },
   "background": {
-    "service_worker": "service_worker.js"
+    "service_worker": "service_worker.js",
+    "type": "module"
   },
   "options_page": "options.html",
   "permissions": [
     "activeTab",
     "alarms",
     "contextMenus",
+    "cookies",
     "notifications",
     "storage"
   ],
   "host_permissions": [
     "http://10.10.0.13:13140/*",
-    "https://*.oklabs.uk/*"
+    "https://*.oklabs.uk/*",
+    "https://*.youtube.com/*",
+    "https://*.google.com/*"
   ],
   "optional_host_permissions": [
     "http://*/*",
