@@ -120,7 +120,7 @@ async def test_run_real_job_marks_failed_on_download_error(factory, monkeypatch,
     def boom(*a, **k):
         raise pipeline.PipelineError("yt-dlp blew up")
 
-    monkeypatch.setattr(pipeline, "_ytdlp_metadata", lambda url, settings=None: {})
+    monkeypatch.setattr(pipeline, "_ytdlp_metadata", lambda url, settings=None, **_: {})
     monkeypatch.setattr(pipeline, "_download_audio", boom)
 
     job_id = await _make_job(factory)
@@ -144,10 +144,10 @@ async def test_run_real_job_completes_with_mocked_gpu(factory, monkeypatch, tmp_
     from karaoke.worker.vast_client import GpuJobResult
 
     monkeypatch.setattr(
-        pipeline, "_ytdlp_metadata", lambda url, settings=None: {"title": "My Song"}
+        pipeline, "_ytdlp_metadata", lambda url, settings=None, **_: {"title": "My Song"}
     )
 
-    def fake_download(url, dest: Path, settings=None):
+    def fake_download(url, dest: Path, settings=None, **_):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"audio")
         return dest
@@ -247,10 +247,10 @@ async def test_run_real_job_prefers_lrclib_synced(factory, monkeypatch, tmp_path
     from karaoke.worker.vast_client import GpuJobResult
 
     monkeypatch.setattr(
-        pipeline, "_ytdlp_metadata", lambda url, settings=None: {"title": "Artist - Song"}
+        pipeline, "_ytdlp_metadata", lambda url, settings=None, **_: {"title": "Artist - Song"}
     )
 
-    def fake_download(url, dest: Path, settings=None):
+    def fake_download(url, dest: Path, settings=None, **_):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"audio")
         return dest
@@ -335,10 +335,10 @@ async def test_run_real_job_prefers_lrclib_synced(factory, monkeypatch, tmp_path
 def _patch_io(monkeypatch, pipeline):
     """Stub yt-dlp/ffmpeg so run_real_job runs without external binaries."""
     monkeypatch.setattr(
-        pipeline, "_ytdlp_metadata", lambda url, settings=None: {"title": "Artist - Song"}
+        pipeline, "_ytdlp_metadata", lambda url, settings=None, **_: {"title": "Artist - Song"}
     )
 
-    def fake_download(url, dest: Path, settings=None):
+    def fake_download(url, dest: Path, settings=None, **_):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"audio")
         return dest
@@ -510,3 +510,34 @@ async def test_run_real_job_plain_only_tolerates_no_aligned_lrc(
     metadata = json.loads((exports / "metadata.json").read_text())
     assert metadata["lyrics_source"] == "lrclib_plain"
     assert metadata["synced"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_real_job_pops_perjob_cookies_even_when_cancelled(factory):
+    # A cancelled / early-return job must still drop its stashed per-job
+    # cookies so the in-memory registry never leaks (issue #77).
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.worker import job_cookies
+
+    async with factory() as session:
+        job = Job(
+            job_token="tok-cancelled",
+            owner_subject="owner",
+            source_url="https://example.com/song",
+            status=JobStatus.cancelled,
+            progress=0,
+        )
+        session.add(job)
+        await session.commit()
+        await session.refresh(job)
+        job_id = job.id
+
+    job_cookies._PENDING.clear()
+    job_cookies.stash(
+        job_id,
+        "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tv\n",
+    )
+    settings = Settings(device_mode="vast", vast_api_key="k-real")
+    # Cancelled job → run_real_job returns early, but only AFTER popping.
+    await pipeline.run_real_job(factory, job_id, settings)
+    assert job_cookies.pop(job_id) is None

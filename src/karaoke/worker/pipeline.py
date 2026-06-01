@@ -41,6 +41,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from karaoke.db.models import Artifact, Job, JobStatus
 from karaoke.titles import derive_metadata
+from karaoke.worker import job_cookies
 from karaoke.worker.lyrics import (
     SOURCE_FORCED_ALIGNED,
     SOURCE_INSTRUMENTAL,
@@ -134,9 +135,16 @@ def _ytdlp_extractor_args(settings) -> list[str]:
 
 
 @contextlib.contextmanager
-def _ytdlp_aux_args(settings):
+def _ytdlp_aux_args(settings, *, cookies_blob: str | None = None):
     """Yield the yt-dlp flags shared by every YouTube invocation: the EJS
     JS-challenge solver and ``--cookies`` for session-gated videos (issue #68).
+
+    ``cookies_blob`` (issue #77) is an optional per-job Netscape cookie jar the
+    submitting client supplied with the job. When present it is written to a
+    fresh ``0600`` temp and used as ``--cookies`` for THIS invocation only,
+    taking precedence over the shared/central ``ytdlp_cookies_file`` jar. The
+    temp is deleted on context exit (success or failure); the blob is never
+    persisted and never logged.
 
     - ``--remote-components <ytdlp_remote_components>`` enables the external
       n-sig / signature solver (run under deno). Without it YouTube hands back
@@ -161,7 +169,18 @@ def _ytdlp_aux_args(settings):
         args += ["--remote-components", remote]
     tmp_cookies: Path | None = None
     try:
-        if cookies_src:
+        if (cookies_blob or "").strip():
+            # Per-job cookies (issue #77) win over the central jar: a client
+            # that supplied its own logged-in session for THIS job must use
+            # exactly that, not the shared operator jar.
+            fd, name = tempfile.mkstemp(prefix="ytc-job-", suffix=".txt")
+            os.close(fd)
+            tmp_cookies = Path(name)
+            payload = cookies_blob if cookies_blob.endswith("\n") else cookies_blob + "\n"
+            tmp_cookies.write_text(payload, encoding="utf-8")
+            os.chmod(tmp_cookies, 0o600)
+            args += ["--cookies", str(tmp_cookies)]
+        elif cookies_src:
             src = Path(cookies_src)
             if src.is_file() and src.stat().st_size > 0:
                 fd, name = tempfile.mkstemp(prefix="ytc-", suffix=".txt")
@@ -176,10 +195,14 @@ def _ytdlp_aux_args(settings):
                 tmp_cookies.unlink()
 
 
-def _ytdlp_metadata(source_url: str, settings=None) -> dict:
-    """Best-effort yt-dlp metadata dump; returns {} on any failure."""
+def _ytdlp_metadata(source_url: str, settings=None, *, cookies_blob: str | None = None) -> dict:
+    """Best-effort yt-dlp metadata dump; returns {} on any failure.
+
+    ``cookies_blob`` is the optional per-job Netscape jar (issue #77): gated
+    videos need a logged-in session for the player API even to read metadata.
+    """
     try:
-        with _ytdlp_aux_args(settings) as aux:
+        with _ytdlp_aux_args(settings, cookies_blob=cookies_blob) as aux:
             proc = subprocess.run(
                 [
                     "yt-dlp", "--no-playlist", "--skip-download",
@@ -197,7 +220,7 @@ def _ytdlp_metadata(source_url: str, settings=None) -> dict:
     return {}
 
 
-def _download_audio(source_url: str, dest: Path, settings=None) -> Path:
+def _download_audio(source_url: str, dest: Path, settings=None, *, cookies_blob: str | None = None) -> Path:
     """yt-dlp the best audio stream to ``dest`` (no postprocessing).
 
     Retries with exponential backoff when yt-dlp fails with a YouTube bot-check
@@ -208,7 +231,7 @@ def _download_audio(source_url: str, dest: Path, settings=None) -> Path:
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
     max_attempts = len(_BOT_CHECK_BACKOFF_S) + 1
-    with _ytdlp_aux_args(settings) as aux:
+    with _ytdlp_aux_args(settings, cookies_blob=cookies_blob) as aux:
         cmd = [
             "yt-dlp", "--no-playlist",
             *_ytdlp_extractor_args(settings),
@@ -502,6 +525,12 @@ async def run_real_job(
     from karaoke.worker.scheduler import _use_runpod
     from karaoke.worker.vast_client import VastClient
 
+    # Per-job ephemeral cookies (issue #77): claim the in-memory blob the
+    # request handler stashed for this job, if any. Popped FIRST (before any
+    # early return) so a cancelled/missing job never leaves a blob lingering
+    # in the registry. Used only for the download stage below, then dropped.
+    cookies_blob = job_cookies.pop(job_id)
+
     async with session_factory() as session:
         job = await session.get(Job, job_id)
         if job is None or job.status in {JobStatus.cancelled, JobStatus.failed}:
@@ -518,7 +547,9 @@ async def run_real_job(
         # --- downloading ----------------------------------------------------
         if not await _set_stage(session_factory, job_id, JobStatus.downloading, 15):
             return
-        meta = await asyncio.to_thread(_ytdlp_metadata, source_url, settings)
+        meta = await asyncio.to_thread(
+            _ytdlp_metadata, source_url, settings, cookies_blob=cookies_blob
+        )
         title = (meta.get("title") or "").strip() or None
         source_meta = derive_metadata(meta)
         if title or any(source_meta.values()):
@@ -532,9 +563,15 @@ async def run_real_job(
             )
 
         raw_audio = work_dir / "source.audio"
-        await asyncio.to_thread(_download_audio, source_url, raw_audio, settings)
+        await asyncio.to_thread(
+            _download_audio, source_url, raw_audio, settings, cookies_blob=cookies_blob
+        )
         mix_wav = work_dir / "mix.wav"
         await asyncio.to_thread(_to_wav, raw_audio, mix_wav)
+        # Download stage done — drop the per-job cookies from memory. The
+        # per-invocation temp files were already deleted by ``_ytdlp_aux_args``;
+        # nothing past this point needs the cookies (issue #77).
+        cookies_blob = None
 
         # --- lyrics lookup (BEFORE GPU dispatch) ----------------------------
         # We resolve LRCLIB *before* the GPU window so that, when LRCLIB has the

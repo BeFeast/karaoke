@@ -42,6 +42,7 @@ from karaoke.api.cookies_store import (
 from karaoke.config import Settings, get_settings
 from karaoke.db.models import Job, JobStatus
 from karaoke.db.session import get_session, get_session_factory
+from karaoke.worker import job_cookies
 from karaoke.worker.scheduler import schedule_job
 
 _log = logging.getLogger(__name__)
@@ -56,6 +57,41 @@ class JobCreate(BaseModel):
 
     url: str = Field(min_length=1)
     title: str | None = None
+    # OPTIONAL per-job YouTube cookies (issue #77): a Netscape ``cookies.txt``
+    # blob the submitting client (Chrome extension / native app) captured from
+    # the user's logged-in YouTube session, used ONLY for this job's yt-dlp
+    # download and then discarded. Never persisted, never logged. No length
+    # constraint here on purpose — a Pydantic constraint error echoes the
+    # offending value in the 422 body, which would leak the cookie; size and
+    # format are validated by ``_validate_job_cookies`` with value-free errors.
+    youtube_cookies: str | None = None
+
+
+def _validate_job_cookies(raw: str | None) -> str | None:
+    """Validate an optional per-job Netscape cookie blob (issue #77).
+
+    Returns the blob unchanged when usable, or ``None`` when absent (omitted /
+    null / whitespace-only — the caller then falls back to public download or
+    the central jar bridge). Raises ``HTTPException`` with a value-free message
+    on a too-large (413) or malformed (422) blob; the cookie value is NEVER
+    echoed back. ``MAX_COOKIE_BYTES`` / ``validate_netscape_cookies`` are shared
+    with the central ``/cookies/youtube`` path (defined lower in this module).
+    """
+    if raw is None or not raw.strip():
+        return None
+    if len(raw.encode("utf-8")) > MAX_COOKIE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="cookie payload too large",
+        )
+    try:
+        validate_netscape_cookies(raw)
+    except CookieValidationError as exc:
+        # ``exc`` is value-free by construction (see cookies_store).
+        raise HTTPException(
+            status_code=422, detail=f"invalid Netscape cookie file: {exc}"
+        ) from exc
+    return raw
 
 
 class JobArtifactOut(BaseModel):
@@ -216,6 +252,13 @@ async def create_job(
     settings: Settings = Depends(get_settings),
 ) -> JobOut:
     """Create a karaoke job and kick off the (mocked) worker."""
+    # Per-job ephemeral YouTube cookies (issue #77): validate up front so a
+    # malformed jar fails fast WITHOUT creating a junk job. The value is never
+    # persisted (no DB column) and never logged — it is handed to the
+    # in-process worker through the ephemeral ``job_cookies`` registry, used
+    # for this one download, then discarded. Empty / whitespace → absent, so
+    # the existing fallback applies (public video, or the central jar bridge).
+    cookies_blob = _validate_job_cookies(payload.youtube_cookies)
     job = Job(
         job_token=secrets.token_urlsafe(24),
         owner_subject=owner.subject,
@@ -234,6 +277,8 @@ async def create_job(
 
     # Dispatch to the real vast.ai worker, or the in-process mock when no
     # vast key is configured (CI / dev default). See worker.scheduler.
+    if cookies_blob is not None:
+        job_cookies.stash(job.id, cookies_blob)
     schedule_job(get_session_factory(), job.id, settings)
 
     return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
@@ -384,6 +429,10 @@ async def cancel_job(
     job.status = JobStatus.cancelled
     await session.commit()
     await session.refresh(job, attribute_names=["artifacts"])
+    # Drop any per-job cookies still stashed for this job (#77): a cancel
+    # before the worker popped them would otherwise leave the blob lingering
+    # in the in-memory registry.
+    job_cookies.discard(job_id)
     return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
 
 
@@ -408,6 +457,8 @@ async def delete_job(
     await session.delete(job)
     await session.commit()
     _remove_artifact_files(settings, token)
+    # Drop any per-job cookies still stashed for this job (#77).
+    job_cookies.discard(job_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

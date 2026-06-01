@@ -15,6 +15,7 @@ import secrets
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from karaoke.db.models import Artifact, Job, JobStatus
+from karaoke.worker import job_cookies
 
 # Synthetic artifacts produced by the mock worker; mirrors the real shape.
 _MOCK_ARTIFACTS: tuple[tuple[str, str, str], ...] = (
@@ -35,6 +36,10 @@ async def run_mock_job(
     Tests use ``sleep=0`` so the full lifecycle resolves synchronously
     after a single ``await``. Production stubs may pass a small delay.
     """
+    # The mock worker never downloads, so any per-job cookies stashed for this
+    # job (issue #77) are unused — drop them so the in-memory registry can't
+    # accumulate orphans in mock/CI mode.
+    job_cookies.discard(job_id)
     stages = (
         JobStatus.downloading,
         JobStatus.separating,
