@@ -34,6 +34,8 @@ RUN apt-get update \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
       ffmpeg \
+      build-essential \
+      git \
       python3.12 \
       python3.12-venv \
       python3.12-dev \
@@ -61,7 +63,9 @@ RUN uv venv --python python3.12 /opt/karaoke-venv \
         "demucs>=4.0.1" \
         "faster-whisper>=1.1.1" \
         "runpod>=1.7.0" \
-        "ctc-forced-aligner" \
+    && uv pip install --python /opt/karaoke-venv/bin/python \
+        "transformers>=4.44,<5" \
+        "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git" \
     && /opt/karaoke-venv/bin/pip uninstall -y hf_xet 2>/dev/null || true
 
 # Pre-cache Demucs htdemucs model weights at build time so cold-start
