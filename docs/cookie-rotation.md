@@ -236,3 +236,15 @@ to a future Karaoke mobile app) extracts the logged-in YouTube session from a
 - `extension/chrome/cookies.test.js` — serializer unit tests (`bun test`).
 - **`compose.yaml`** — writable `/cookies` dir mount: **not changed here**;
   deploy implication for the operator (see Storage model).
+
+## Operator path — headless cron (prisma supplier)
+
+For the self-host operator, a browserless alternative to the Chrome extension
+keeps the jar fresh: a `launchd` cron on a Mac with a logged-in YouTube session
+in **Firefox** re-exports the jar every 6h (`yt-dlp --cookies-from-browser
+firefox`) and `POST`s it to the same `/cookies/youtube` endpoint with a scoped
+`ktx_` token. No browser process, no GUI, no extension — `yt-dlp` reads
+Firefox's `cookies.sqlite` directly (Firefox cookies are not macOS-keychain
+encrypted, unlike Chrome). See
+[`scripts/cookie-rotation/README.md`](../scripts/cookie-rotation/README.md) for
+the mint + install runbook. The extension (Phase 1) stays the path for end users.
