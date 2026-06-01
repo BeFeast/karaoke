@@ -11,10 +11,11 @@
       <form id="settings-form">
         <label>
           Karaoke base URL
-          <input id="base-url" name="baseUrl" type="url" required placeholder="http://10.10.0.13:13140">
+          <input id="base-url" name="baseUrl" type="url" required placeholder="https://karaoke.oklabs.uk">
           <span class="help">
-            Defaults to the LAN runtime. Public deployments use the URL from
-            <code>KARAOKE_PUBLIC_BASE_URL</code> (Cloudflare / NPM in front of the host).
+            Defaults to the public deployment <code>https://karaoke.oklabs.uk</code>,
+            so the extension works from any machine. On the LAN you can point it at
+            the runtime directly, e.g. <code>http://10.10.0.13:13140</code>.
           </span>
         </label>
         <label>
@@ -36,15 +37,11 @@
         <p class="help">
           Karaoke needs a logged-in YouTube session to download videos that ask
           you to &ldquo;sign in to confirm you&rsquo;re not a bot&rdquo;. This
-          extension reads your browser&rsquo;s YouTube cookies and sends them to
-          the coordinator automatically on every submit and every few hours.
-          Cookie values are never stored by this extension &mdash; they are sent
-          straight to your Karaoke server over the bearer token above.
+          extension reads your browser&rsquo;s YouTube cookies and attaches them
+          to <strong>each submit</strong> &mdash; they are used for that one job
+          only and are never stored by the extension or the server. Just stay
+          signed in to YouTube in this browser; there is nothing to configure.
         </p>
-        <div class="actions">
-          <button type="button" id="sync-cookies">Sync YouTube cookies now</button>
-          <span id="cookie-status" role="status" aria-live="polite"></span>
-        </div>
       </section>
     </main>
     <script src="options.js"></script>

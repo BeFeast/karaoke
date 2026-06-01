@@ -1,20 +1,22 @@
-import { serializeNetscapeCookies } from "./cookies.js";
+import { buildJobBody } from "./cookies.js";
 
-const DEFAULT_BASE_URL = "http://10.10.0.13:13140";
+const DEFAULT_BASE_URL = "https://karaoke.oklabs.uk";
 const SOURCE = "chrome-extension";
 const NOTIFICATION_LINKS_KEY = "notificationLinks";
 const NOTIFICATION_ICON = "icons/karaoke-128.png";
 const CLEAR_BADGE_ALARM = "clear-karaoke-badge";
 
-// YouTube cookie rotation (issue #73): keep the coordinator's logged-in jar
-// fresh so session-gated videos keep downloading without a manual re-export.
-const REFRESH_COOKIES_ALARM = "refresh-youtube-cookies";
-const COOKIE_REFRESH_PERIOD_MINUTES = 360; // every 6h
-const COOKIE_SYNC_STATE_KEY = "youtubeCookieSync";
 // Domains whose cookies make up a logged-in YouTube session. youtube.com is the
 // primary jar; google.com carries the shared Google account auth cookies
-// (SAPISID/__Secure-3PSID/…) that strengthen yt-dlp's logged-in requests.
+// (SAPISID/__Secure-3PSID/…) that strengthen yt-dlp's logged-in requests. The
+// merged jar is attached to each submit as `youtube_cookies` (issue #77).
 const COOKIE_DOMAINS = ["youtube.com", "google.com"];
+
+// Obsolete state from the central-jar rotation model (issues #73/#74), now
+// replaced by per-job ephemeral cookies (#77). Cleared on install/startup so
+// upgraded installs stop firing the 6h alarm and drop the stale sync record.
+const LEGACY_REFRESH_ALARM = "refresh-youtube-cookies";
+const LEGACY_SYNC_STATE_KEY = "youtubeCookieSync";
 
 const HTTP_URL = /^https?:\/\//i;
 
@@ -33,14 +35,11 @@ chrome.runtime.onInstalled.addListener(() => {
     });
   });
 
-  ensureCookieAlarm();
-  // Best-effort initial sync so a freshly-installed extension hands the
-  // coordinator a jar without waiting for the first submit or alarm.
-  refreshYoutubeCookies().catch(() => {});
+  cleanupLegacyCookieSync();
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  ensureCookieAlarm();
+  cleanupLegacyCookieSync();
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
@@ -80,20 +79,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     chrome.action.setBadgeText({ text: "" });
     return;
   }
-  if (alarm.name === REFRESH_COOKIES_ALARM) {
-    refreshYoutubeCookies().catch(() => {});
+  if (alarm.name === LEGACY_REFRESH_ALARM) {
+    // Defensive: an upgraded install may still have the old periodic alarm
+    // queued before cleanup ran. Drop it instead of acting on it.
+    chrome.alarms.clear(LEGACY_REFRESH_ALARM);
   }
-});
-
-// Let the options page trigger an on-demand "Sync YouTube cookies now".
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type === "refresh-youtube-cookies") {
-    refreshYoutubeCookies()
-      .then((result) => sendResponse({ ok: true, ...result }))
-      .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
-    return true; // keep the message channel open for the async response
-  }
-  return false;
 });
 
 async function submitToKaraoke(url) {
@@ -102,12 +92,13 @@ async function submitToKaraoke(url) {
   try {
     const config = await getConfig();
     await ensureHostPermission(config.baseUrl);
-    const result = await createJob(config, url);
+    // Read the user's logged-in YouTube/Google cookies at submit time and send
+    // them with THIS job only (issue #77). No central jar, no always-on sync —
+    // the cookies ride the request and the server never persists them.
+    const cookies = await collectSessionCookies();
+    const result = await createJob(config, url, cookies);
     await notifySuccess(config.baseUrl, result);
     setBadge("OK", "#137333");
-    // Piggy-back a cookie refresh on every submit (best-effort, non-blocking):
-    // the user is clearly logged in and active right now.
-    refreshYoutubeCookies(config).catch(() => {});
   } catch (error) {
     await notifyFailure(error.message || String(error));
     setBadge("ERR", "#b3261e");
@@ -118,15 +109,15 @@ function isSubmittableUrl(url) {
   return HTTP_URL.test(String(url || ""));
 }
 
-function ensureCookieAlarm() {
-  chrome.alarms.get(REFRESH_COOKIES_ALARM, (existing) => {
-    if (!existing) {
-      chrome.alarms.create(REFRESH_COOKIES_ALARM, {
-        periodInMinutes: COOKIE_REFRESH_PERIOD_MINUTES,
-        delayInMinutes: 1,
-      });
-    }
-  });
+// Drop the central-jar rotation alarm + stored sync state left by #73/#74. The
+// per-job model (#77) needs neither. Best-effort and idempotent.
+function cleanupLegacyCookieSync() {
+  try {
+    chrome.alarms.clear(LEGACY_REFRESH_ALARM);
+    chrome.storage.local.remove(LEGACY_SYNC_STATE_KEY);
+  } catch {
+    // Ignore — cleanup is best-effort.
+  }
 }
 
 async function getConfig() {
@@ -162,7 +153,7 @@ async function ensureHostPermission(baseUrl) {
   );
 }
 
-async function createJob(config, url) {
+async function createJob(config, url, cookies) {
   const headers = {
     "Content-Type": "application/json",
   };
@@ -170,90 +161,41 @@ async function createJob(config, url) {
     headers.Authorization = `Bearer ${config.bearerToken}`;
   }
 
+  // buildJobBody attaches `youtube_cookies` only when youtube.com cookies are
+  // present; otherwise the field is omitted and the server does a public fetch.
+  const body = buildJobBody({ url, source: SOURCE, cookies });
+
   let response;
   try {
     response = await fetch(`${config.baseUrl}/jobs`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ url, source: SOURCE }),
+      body: JSON.stringify(body),
     });
   } catch (error) {
     throw new Error(`Could not reach Karaoke at ${config.baseUrl}: ${error.message}`);
   }
 
-  let body = null;
+  let parsed = null;
   const text = await response.text();
   if (text) {
     try {
-      body = JSON.parse(text);
+      parsed = JSON.parse(text);
     } catch {
-      body = { detail: text };
+      parsed = { detail: text };
     }
   }
 
   if (!response.ok) {
-    throw new Error(formatHttpError(response.status, body, Boolean(config.bearerToken)));
+    throw new Error(formatHttpError(response.status, parsed, Boolean(config.bearerToken)));
   }
 
-  return body || {};
+  return parsed || {};
 }
 
-// Collect the logged-in YouTube/Google session cookies and POST them to the
-// coordinator's /cookies/youtube endpoint. Best-effort: failures are recorded
-// for the options page but never surfaced as noisy notifications. Cookie values
-// never touch chrome.storage or the badge — only counts + status.
-async function refreshYoutubeCookies(config) {
-  const cfg = config || (await getConfig());
-  if (!cfg.bearerToken) {
-    await recordCookieSync({ ok: false, reason: "no-token" });
-    return { ok: false, reason: "no-token" };
-  }
-
-  const cookies = await collectSessionCookies();
-  const youtubeCount = cookies.filter((c) => String(c.domain || "").includes("youtube.com")).length;
-  if (youtubeCount === 0) {
-    // Not logged in to YouTube in this browser — nothing useful to send.
-    await recordCookieSync({ ok: false, reason: "not-logged-in" });
-    return { ok: false, reason: "not-logged-in" };
-  }
-
-  const blob = serializeNetscapeCookies(cookies);
-
-  let response;
-  try {
-    await ensureHostPermission(cfg.baseUrl);
-    response = await fetch(`${cfg.baseUrl}/cookies/youtube`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        Authorization: `Bearer ${cfg.bearerToken}`,
-      },
-      body: blob,
-    });
-  } catch (error) {
-    await recordCookieSync({ ok: false, reason: `network: ${error.message}` });
-    return { ok: false, reason: "network" };
-  }
-
-  if (!response.ok) {
-    await recordCookieSync({ ok: false, reason: `http-${response.status}` });
-    return { ok: false, reason: `http-${response.status}` };
-  }
-
-  let result = {};
-  try {
-    result = await response.json();
-  } catch {
-    result = {};
-  }
-  await recordCookieSync({
-    ok: true,
-    cookies: result.cookies ?? cookies.length,
-    youtube: result.youtube_cookies ?? youtubeCount,
-  });
-  return { ok: true, cookies: result.cookies, youtube: result.youtube_cookies };
-}
-
+// Collect the logged-in YouTube/Google session cookies. Cookie values never
+// touch chrome.storage, the badge, or any log — they go straight into the
+// per-job request body and nowhere else.
 async function collectSessionCookies() {
   const seen = new Set();
   const merged = [];
@@ -276,22 +218,25 @@ async function collectSessionCookies() {
   return merged;
 }
 
-async function recordCookieSync(state) {
-  await chrome.storage.local.set({
-    [COOKIE_SYNC_STATE_KEY]: { ...state, at: Date.now() },
-  });
-}
-
 async function notifySuccess(baseUrl, result) {
-  if (!result.job_id) {
+  // The coordinator returns JobOut: { id, job_token, share_url, status, ... }.
+  // Accept the legacy `job_id` too in case an older API is in front.
+  const jobId = result.id ?? result.job_id;
+  if (!jobId) {
     throw new Error("Karaoke responded OK but returned no job ID.");
   }
 
-  const jobUrl = `${baseUrl}/#/jobs/${result.job_id}`;
+  // Prefer the server-provided share_url; otherwise build the SPA item route
+  // (hash-routed `/app/#/job/{token}`) or fall back to the share path.
+  const jobUrl =
+    result.share_url ||
+    (result.job_token
+      ? `${baseUrl}/app/#/job/${result.job_token}`
+      : `${baseUrl}/app/#/jobs/${jobId}`);
   const title = result.deduplicated ? "Already known to Karaoke" : "Submitted to Karaoke";
   const status = result.status ? `Status: ${result.status}. ` : "";
-  const message = `${status}Click to open job #${result.job_id}.`;
-  const notificationId = `karaoke-job-${result.job_id}-${Date.now()}`;
+  const message = `${status}Click to open job #${jobId}.`;
+  const notificationId = `karaoke-job-${jobId}-${Date.now()}`;
 
   const links = await getNotificationLinks();
   links[notificationId] = jobUrl;

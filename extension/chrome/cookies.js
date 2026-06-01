@@ -2,8 +2,8 @@
 //
 // Pure, dependency-free, and free of any `chrome.*` reference so it can be unit
 // tested under `bun test` (see cookies.test.js). The service worker imports
-// `serializeNetscapeCookies` and POSTs the result to the coordinator's
-// `/cookies/youtube` endpoint (issue #73).
+// `serializeNetscapeCookies` to build the per-job `youtube_cookies` blob that
+// rides with each `POST /jobs` submit (issue #77).
 
 const NETSCAPE_HEADER =
   "# Netscape HTTP Cookie File\n" +
@@ -79,9 +79,49 @@ function serializeNetscapeCookies(cookies) {
   return NETSCAPE_HEADER + lines.join("\n") + (lines.length ? "\n" : "");
 }
 
+// Count cookies whose domain belongs to youtube.com. The server requires at
+// least one youtube.com cookie to treat a per-job jar as usable, so the
+// extension uses the same gate to decide whether to attach `youtube_cookies`.
+function countYoutubeCookies(cookies) {
+  let count = 0;
+  for (const cookie of cookies || []) {
+    if (String(cookie?.domain || "").includes("youtube.com")) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+// Build the JSON body for `POST /jobs` (issue #77 — per-job ephemeral cookies).
+//
+// Pure and `chrome.*`-free so the request shape is unit-testable. The
+// `youtube_cookies` field is attached ONLY when the browser holds at least one
+// youtube.com cookie (the user is logged in); otherwise it is omitted entirely
+// and the server falls back to a public (un-authenticated) download. The
+// serialized jar carries the merged youtube.com + google.com cookies — the
+// google.com SAPISID/__Secure-3PSID cookies strengthen yt-dlp's logged-in
+// requests — but inclusion is gated on the youtube.com count so a browser with
+// only stray google.com cookies never sends a useless blob.
+function buildJobBody({ url, source, title, cookies } = {}) {
+  const body = { url };
+  if (source) {
+    body.source = source;
+  }
+  if (title) {
+    body.title = title;
+  }
+  const list = Array.isArray(cookies) ? cookies : [];
+  if (countYoutubeCookies(list) > 0) {
+    body.youtube_cookies = serializeNetscapeCookies(list);
+  }
+  return body;
+}
+
 export {
   serializeNetscapeCookies,
   cookieToNetscapeLine,
   netscapeDomain,
   netscapeExpiry,
+  countYoutubeCookies,
+  buildJobBody,
 };
