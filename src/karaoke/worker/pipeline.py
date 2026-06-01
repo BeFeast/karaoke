@@ -29,8 +29,10 @@ import datetime as dt
 import functools
 import json
 import logging
+import os
 import re
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -131,18 +133,63 @@ def _ytdlp_extractor_args(settings) -> list[str]:
     return args
 
 
+@contextlib.contextmanager
+def _ytdlp_aux_args(settings):
+    """Yield the yt-dlp flags shared by every YouTube invocation: the EJS
+    JS-challenge solver and ``--cookies`` for session-gated videos (issue #68).
+
+    - ``--remote-components <ytdlp_remote_components>`` enables the external
+      n-sig / signature solver (run under deno). Without it YouTube hands back
+      only storyboard formats and the download fails with "Requested format is
+      not available". Defaults to ``ejs:github``; empty disables.
+    - ``--cookies <copy>`` is emitted only when ``ytdlp_cookies_file`` points at
+      an existing non-empty file. yt-dlp rotates the cookie jar and writes it
+      back on close, so we hand it a *per-call writable copy* in a temp file
+      (the mounted secret is read-only and shared) and delete the copy on exit.
+      No cookies file → public videos still download with the solver alone.
+
+    ``settings`` may be ``None`` (legacy callers / tests), in which case we fall
+    back to the same defaults as :class:`karaoke.config.Settings`.
+    """
+    args: list[str] = []
+    if settings is not None:
+        remote = str(getattr(settings, "ytdlp_remote_components", "") or "").strip()
+        cookies_src = str(getattr(settings, "ytdlp_cookies_file", "") or "").strip()
+    else:
+        remote, cookies_src = "ejs:github", ""
+    if remote:
+        args += ["--remote-components", remote]
+    tmp_cookies: Path | None = None
+    try:
+        if cookies_src:
+            src = Path(cookies_src)
+            if src.is_file() and src.stat().st_size > 0:
+                fd, name = tempfile.mkstemp(prefix="ytc-", suffix=".txt")
+                os.close(fd)
+                tmp_cookies = Path(name)
+                tmp_cookies.write_bytes(src.read_bytes())
+                args += ["--cookies", str(tmp_cookies)]
+        yield args
+    finally:
+        if tmp_cookies is not None:
+            with contextlib.suppress(OSError):
+                tmp_cookies.unlink()
+
+
 def _ytdlp_metadata(source_url: str, settings=None) -> dict:
     """Best-effort yt-dlp metadata dump; returns {} on any failure."""
     try:
-        proc = subprocess.run(
-            [
-                "yt-dlp", "--no-playlist", "--skip-download",
-                "--dump-single-json",
-                *_ytdlp_extractor_args(settings),
-                source_url,
-            ],
-            text=True, capture_output=True, timeout=120,
-        )
+        with _ytdlp_aux_args(settings) as aux:
+            proc = subprocess.run(
+                [
+                    "yt-dlp", "--no-playlist", "--skip-download",
+                    "--dump-single-json",
+                    *_ytdlp_extractor_args(settings),
+                    *aux,
+                    source_url,
+                ],
+                text=True, capture_output=True, timeout=120,
+            )
         if proc.returncode == 0 and proc.stdout.strip():
             return json.loads(proc.stdout)
     except Exception:
@@ -160,35 +207,40 @@ def _download_audio(source_url: str, dest: Path, settings=None) -> Path:
     we only burn the backoff budget on errors a cooldown can actually fix.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "yt-dlp", "--no-playlist",
-        *_ytdlp_extractor_args(settings),
-        "-f", "ba/bestaudio/best",
-        "-o", str(dest),
-        source_url,
-    ]
     max_attempts = len(_BOT_CHECK_BACKOFF_S) + 1
-    for attempt in range(1, max_attempts + 1):
-        try:
-            _run(cmd, timeout=900)
-            break
-        except PipelineError as exc:
-            if not _is_bot_check(str(exc)) or attempt == max_attempts:
-                if _is_bot_check(str(exc)):
-                    raise PipelineError(
-                        "yt-dlp hit a YouTube bot-check / rate limit and did not "
-                        f"recover after {max_attempts} attempts. The coordinator IP "
-                        "is likely soft-banned; let it cool down, and verify the "
-                        "bgutil PO-token provider sidecar is reachable. Last error:\n"
-                        f"{exc}"
-                    ) from exc
-                raise
-            delay = _BOT_CHECK_BACKOFF_S[attempt - 1]
-            _log.warning(
-                "yt-dlp bot-check on attempt %d/%d for %s; backing off %.0fs then retrying",
-                attempt, max_attempts, source_url, delay,
-            )
-            _sleep(delay)
+    with _ytdlp_aux_args(settings) as aux:
+        cmd = [
+            "yt-dlp", "--no-playlist",
+            *_ytdlp_extractor_args(settings),
+            *aux,
+            "-f", "ba/bestaudio/best",
+            "-o", str(dest),
+            source_url,
+        ]
+        for attempt in range(1, max_attempts + 1):
+            try:
+                _run(cmd, timeout=900)
+                break
+            except PipelineError as exc:
+                if not _is_bot_check(str(exc)) or attempt == max_attempts:
+                    if _is_bot_check(str(exc)):
+                        raise PipelineError(
+                            "yt-dlp hit a YouTube bot-check and did not recover "
+                            f"after {max_attempts} attempts. This is usually a "
+                            "per-video logged-in-session requirement (NOT an IP "
+                            "ban — other videos download fine from the same IP): "
+                            "export a logged-in YouTube cookies.txt and point "
+                            "KARAOKE_YTDLP_COOKIES_FILE at it. (A genuine HTTP 429 "
+                            "rate-limit clears on its own after a cooldown.) "
+                            f"Last error:\n{exc}"
+                        ) from exc
+                    raise
+                delay = _BOT_CHECK_BACKOFF_S[attempt - 1]
+                _log.warning(
+                    "yt-dlp bot-check on attempt %d/%d for %s; backing off %.0fs then retrying",
+                    attempt, max_attempts, source_url, delay,
+                )
+                _sleep(delay)
     if not dest.is_file() or dest.stat().st_size == 0:
         raise PipelineError(f"yt-dlp produced no audio at {dest}")
     return dest

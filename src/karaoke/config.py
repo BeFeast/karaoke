@@ -91,6 +91,30 @@ class Settings(BaseSettings):
     # No trailing slash — the pipeline normalizes it regardless.
     pot_provider_base_url: str = "http://karaoke-pot:4416"
 
+    # ---- yt-dlp anti-bot: EJS JS-challenge solver (issue #68) ----
+    # YouTube's n-sig / signature challenge is now solved by an external
+    # JavaScript "EJS" solver distribution run under a JS runtime (deno ships
+    # in the coordinator image). yt-dlp will NOT fetch that solver unless told
+    # to, so the n challenge fails and only image/storyboard formats survive
+    # ("Requested format is not available"). Passing this through as
+    # ``--remote-components <value>`` makes the n-sig resolve so real audio
+    # formats become downloadable. "ejs:github" is yt-dlp's recommended
+    # channel; empty disables (then we behave as before — token-free clients
+    # only). See https://github.com/yt-dlp/yt-dlp/wiki/EJS.
+    ytdlp_remote_components: str = "ejs:github"
+
+    # ---- yt-dlp anti-bot: cookies for session-gated videos (issue #68) ----
+    # Path (inside the container) to a Netscape-format cookies.txt exported
+    # from a logged-in YouTube browser. Some videos require a logged-in
+    # *session* even though they are public and un-age-gated — YouTube returns
+    # a per-video "Sign in to confirm you're not a bot" on the player API
+    # regardless of client or PO-token. yt-dlp uses these cookies when the file
+    # is present and non-empty; public videos keep working without it. The
+    # pipeline copies this file to a per-job writable temp before invoking
+    # yt-dlp (yt-dlp rotates + writes the cookie jar back on close, so it must
+    # never target the read-only mounted secret). Empty / missing → no cookies.
+    ytdlp_cookies_file: str = "/secrets/youtube-cookies.txt"
+
     # Offer-selection / budget tunables (mirror scribe naming). Overridable via
     # Infisical (KARAOKE_VAST_*).
     vast_max_price_per_hour: float = 2.0
