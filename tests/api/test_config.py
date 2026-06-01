@@ -1,7 +1,9 @@
 """Tests for the public ``GET /config`` endpoint used by the Submitter SPA."""
 from __future__ import annotations
 
-from karaoke.config import Settings, get_settings
+import os
+
+from karaoke.config import Settings, get_settings, reset_settings_for_tests
 
 
 def test_config_default_has_clerk_disabled(client):
@@ -68,3 +70,17 @@ def test_config_key_set_but_gate_off_stays_disabled(client):
         client.app.dependency_overrides.pop(get_settings, None)
     assert body["clerk_publishable_key"] == "pk_test_xyz"
     assert body["clerk_enabled"] is False
+
+
+def test_pot_provider_base_url_default_and_env_override():
+    """The bgutil PO-token provider base URL defaults to the documented sidecar
+    and is overridable via ``KARAOKE_POT_PROVIDER_BASE_URL`` (issue #68)."""
+    assert Settings().pot_provider_base_url == "http://karaoke-pot:4416"
+
+    os.environ["KARAOKE_POT_PROVIDER_BASE_URL"] = "http://other-host:9999"
+    reset_settings_for_tests()
+    try:
+        assert get_settings().pot_provider_base_url == "http://other-host:9999"
+    finally:
+        os.environ.pop("KARAOKE_POT_PROVIDER_BASE_URL", None)
+        reset_settings_for_tests()

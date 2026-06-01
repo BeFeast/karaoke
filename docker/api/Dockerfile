@@ -26,8 +26,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_SYSTEM_PYTHON=1
 
-# yt-dlp needs a Node JS runtime + the EJS remote-component solver at runtime.
+# yt-dlp needs a JS runtime + the EJS remote-component solver at runtime.
 # ffmpeg normalises the downloaded media before the GPU stage uploads it.
+# nodejs/npm are kept for the EJS solver; deno is added below because yt-dlp
+# 2026 defaults to a deno-only challenge-solver (issue #68).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
@@ -36,7 +38,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         nodejs \
         npm \
         tini \
+        unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install deno (pinned) on PATH. yt-dlp 2026 wants deno specifically for the
+# JS signature / n-challenge solver; the base image only ships node, which
+# degrades signature solving and trips the YouTube bot-check (issue #68).
+# Pinned to a known release binary for reproducibility (bump deliberately).
+ARG DENO_VERSION=v2.8.1
+RUN arch="$(uname -m)" \
+    && case "$arch" in \
+         x86_64)  deno_target="x86_64-unknown-linux-gnu" ;; \
+         aarch64) deno_target="aarch64-unknown-linux-gnu" ;; \
+         *) echo "unsupported arch for deno: $arch" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL -o /tmp/deno.zip \
+         "https://github.com/denoland/deno/releases/download/${DENO_VERSION}/deno-${deno_target}.zip" \
+    && unzip -o /tmp/deno.zip -d /usr/local/bin \
+    && rm /tmp/deno.zip \
+    && chmod +x /usr/local/bin/deno \
+    && deno --version
 
 # Install uv (fast Python resolver) — matches the dev workflow.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv

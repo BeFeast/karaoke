@@ -120,7 +120,7 @@ async def test_run_real_job_marks_failed_on_download_error(factory, monkeypatch,
     def boom(*a, **k):
         raise pipeline.PipelineError("yt-dlp blew up")
 
-    monkeypatch.setattr(pipeline, "_ytdlp_metadata", lambda url: {})
+    monkeypatch.setattr(pipeline, "_ytdlp_metadata", lambda url, settings=None: {})
     monkeypatch.setattr(pipeline, "_download_audio", boom)
 
     job_id = await _make_job(factory)
@@ -143,9 +143,11 @@ async def test_run_real_job_completes_with_mocked_gpu(factory, monkeypatch, tmp_
     import karaoke.worker.pipeline as pipeline
     from karaoke.worker.vast_client import GpuJobResult
 
-    monkeypatch.setattr(pipeline, "_ytdlp_metadata", lambda url: {"title": "My Song"})
+    monkeypatch.setattr(
+        pipeline, "_ytdlp_metadata", lambda url, settings=None: {"title": "My Song"}
+    )
 
-    def fake_download(url, dest: Path):
+    def fake_download(url, dest: Path, settings=None):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"audio")
         return dest
@@ -245,10 +247,10 @@ async def test_run_real_job_prefers_lrclib_synced(factory, monkeypatch, tmp_path
     from karaoke.worker.vast_client import GpuJobResult
 
     monkeypatch.setattr(
-        pipeline, "_ytdlp_metadata", lambda url: {"title": "Artist - Song"}
+        pipeline, "_ytdlp_metadata", lambda url, settings=None: {"title": "Artist - Song"}
     )
 
-    def fake_download(url, dest: Path):
+    def fake_download(url, dest: Path, settings=None):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"audio")
         return dest
@@ -333,10 +335,10 @@ async def test_run_real_job_prefers_lrclib_synced(factory, monkeypatch, tmp_path
 def _patch_io(monkeypatch, pipeline):
     """Stub yt-dlp/ffmpeg so run_real_job runs without external binaries."""
     monkeypatch.setattr(
-        pipeline, "_ytdlp_metadata", lambda url: {"title": "Artist - Song"}
+        pipeline, "_ytdlp_metadata", lambda url, settings=None: {"title": "Artist - Song"}
     )
 
-    def fake_download(url, dest: Path):
+    def fake_download(url, dest: Path, settings=None):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"audio")
         return dest
