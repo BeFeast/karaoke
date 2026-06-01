@@ -11,6 +11,12 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.18.4",
     "asyncpg>=0.31.0",
+    # yt-dlp plugin: auto-fetches GVS PO tokens from the bgutil provider sidecar
+    # (HTTP server mode) so YouTube web/mweb clients aren't skipped/403'd and the
+    # coordinator's residential IP stops tripping the bot-check (issue #68). The
+    # provider server itself runs as a separate docker sidecar — see
+    # docker/api/README.md.
+    "bgutil-ytdlp-pot-provider>=1.3.1",
     "cryptography>=48.0.0",
     "fastapi>=0.136.3",
     "httpx>=0.28.1",

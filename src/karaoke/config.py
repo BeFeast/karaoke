@@ -82,6 +82,15 @@ class Settings(BaseSettings):
     vast_api_key: str = ""  # KARAOKE_VAST_API_KEY; empty + auto → mock path.
     vast_image: str = "ghcr.io/befeast/karaoke-vast:cuda12.4"
 
+    # ---- yt-dlp anti-bot: bgutil PO-token provider (issue #68) ----
+    # Base URL of the bgutil-ytdlp-pot-provider HTTP server sidecar. yt-dlp's
+    # bgutil plugin (installed in the coordinator image) auto-fetches GVS PO
+    # tokens from this URL so YouTube web/mweb clients aren't skipped/403'd.
+    # Default targets the documented sidecar (service ``karaoke-pot`` on the
+    # shared docker network); set empty to disable POT fetching entirely.
+    # No trailing slash — the pipeline normalizes it regardless.
+    pot_provider_base_url: str = "http://karaoke-pot:4416"
+
     # Offer-selection / budget tunables (mirror scribe naming). Overridable via
     # Infisical (KARAOKE_VAST_*).
     vast_max_price_per_hour: float = 2.0

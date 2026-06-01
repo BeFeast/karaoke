@@ -28,8 +28,10 @@ import contextlib
 import datetime as dt
 import functools
 import json
+import logging
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from sqlalchemy import select
@@ -47,6 +49,8 @@ from karaoke.worker.lyrics import (
     LyricsSource,
 )
 
+_log = logging.getLogger(__name__)
+
 # Module-level LRCLIB client so its in-process cache survives across jobs.
 _LYRICS_SOURCE = LyricsSource()
 
@@ -57,6 +61,31 @@ _PLAYER_CLIENTS = "mweb,web_safari,android_vr,web_embedded"
 # Matches an LRC line timestamp tag, e.g. "[01:23.45]" / "[01:23]", including
 # repeated tags on one line. Used to derive a plain-text export from synced LRC.
 _LRC_TIMESTAMP_RE = re.compile(r"\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]")
+
+# YouTube soft-ban / bot-check fingerprints. When yt-dlp prints one of these we
+# back off and retry rather than failing immediately — the devbox residential
+# IP gets transiently flagged under load and recovers after a short cooldown.
+# Matched case-insensitively against the combined stdout+stderr of the failed
+# invocation (issue #68).
+_BOT_CHECK_RE = re.compile(
+    r"sign in to confirm (?:you|that you)(?:'| a)?re not a bot"
+    r"|confirm you'?re not a bot"
+    r"|not a bot"
+    r"|this video is not available|HTTP Error 429|too many requests",
+    re.IGNORECASE,
+)
+
+# Backoff schedule (seconds) for bot-check retries. Exponential with a small,
+# bounded number of attempts so a flagged IP gets a brief cooldown without the
+# job hanging for many minutes. The download itself already has a 900s timeout
+# per attempt; these sleeps sit between attempts.
+_BOT_CHECK_BACKOFF_S = (15.0, 45.0, 120.0)
+
+
+def _is_bot_check(message: str) -> bool:
+    """True when a yt-dlp failure message looks like a YouTube bot-check / rate
+    limit, i.e. the kind of soft-ban that a short cooldown + retry can clear."""
+    return bool(_BOT_CHECK_RE.search(message or ""))
 
 
 class PipelineError(RuntimeError):
@@ -76,14 +105,40 @@ def _run(cmd: list[str], *, timeout: int | None = None) -> subprocess.CompletedP
     return proc
 
 
-def _ytdlp_metadata(source_url: str) -> dict:
+def _pot_base_url(settings) -> str:
+    """Normalized bgutil PO-token provider base URL (no trailing slash), or ""
+    when unset. ``settings`` may be ``None`` (legacy callers / tests)."""
+    raw = getattr(settings, "pot_provider_base_url", "") if settings else ""
+    return str(raw or "").strip().rstrip("/")
+
+
+def _ytdlp_extractor_args(settings) -> list[str]:
+    """Build the ``--extractor-args`` flags for a yt-dlp invocation.
+
+    Always sets the ``youtube`` player-client chain. When a bgutil PO-token
+    provider base URL is configured, also points the ``bgutil-ytdlp-pot-provider``
+    plugin at it via its own extractor-args namespace
+    (``youtubepot-bgutilhttp:base_url``). These are *different* namespaces, so
+    yt-dlp needs two separate ``--extractor-args`` flags — they cannot be merged
+    into one (issue #68). The default ``http://karaoke-pot:4416`` matches the
+    documented sidecar; pointing at a dead/absent provider degrades gracefully
+    (the plugin just fails to fetch a token), so this is safe in dev/CI too.
+    """
+    args = ["--extractor-args", f"youtube:player_client={_PLAYER_CLIENTS}"]
+    base_url = _pot_base_url(settings)
+    if base_url:
+        args += ["--extractor-args", f"youtubepot-bgutilhttp:base_url={base_url}"]
+    return args
+
+
+def _ytdlp_metadata(source_url: str, settings=None) -> dict:
     """Best-effort yt-dlp metadata dump; returns {} on any failure."""
     try:
         proc = subprocess.run(
             [
                 "yt-dlp", "--no-playlist", "--skip-download",
                 "--dump-single-json",
-                "--extractor-args", f"youtube:player_client={_PLAYER_CLIENTS}",
+                *_ytdlp_extractor_args(settings),
                 source_url,
             ],
             text=True, capture_output=True, timeout=120,
@@ -95,22 +150,53 @@ def _ytdlp_metadata(source_url: str) -> dict:
     return {}
 
 
-def _download_audio(source_url: str, dest: Path) -> Path:
-    """yt-dlp the best audio stream to ``dest`` (no postprocessing)."""
+def _download_audio(source_url: str, dest: Path, settings=None) -> Path:
+    """yt-dlp the best audio stream to ``dest`` (no postprocessing).
+
+    Retries with exponential backoff when yt-dlp fails with a YouTube bot-check
+    / rate-limit fingerprint (issue #68): the residential coordinator IP gets
+    transiently soft-banned under load and clears after a short cooldown. Any
+    other failure (private video, network error, etc.) is raised immediately —
+    we only burn the backoff budget on errors a cooldown can actually fix.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    _run(
-        [
-            "yt-dlp", "--no-playlist",
-            "--extractor-args", f"youtube:player_client={_PLAYER_CLIENTS}",
-            "-f", "ba/bestaudio/best",
-            "-o", str(dest),
-            source_url,
-        ],
-        timeout=900,
-    )
+    cmd = [
+        "yt-dlp", "--no-playlist",
+        *_ytdlp_extractor_args(settings),
+        "-f", "ba/bestaudio/best",
+        "-o", str(dest),
+        source_url,
+    ]
+    max_attempts = len(_BOT_CHECK_BACKOFF_S) + 1
+    for attempt in range(1, max_attempts + 1):
+        try:
+            _run(cmd, timeout=900)
+            break
+        except PipelineError as exc:
+            if not _is_bot_check(str(exc)) or attempt == max_attempts:
+                if _is_bot_check(str(exc)):
+                    raise PipelineError(
+                        "yt-dlp hit a YouTube bot-check / rate limit and did not "
+                        f"recover after {max_attempts} attempts. The coordinator IP "
+                        "is likely soft-banned; let it cool down, and verify the "
+                        "bgutil PO-token provider sidecar is reachable. Last error:\n"
+                        f"{exc}"
+                    ) from exc
+                raise
+            delay = _BOT_CHECK_BACKOFF_S[attempt - 1]
+            _log.warning(
+                "yt-dlp bot-check on attempt %d/%d for %s; backing off %.0fs then retrying",
+                attempt, max_attempts, source_url, delay,
+            )
+            _sleep(delay)
     if not dest.is_file() or dest.stat().st_size == 0:
         raise PipelineError(f"yt-dlp produced no audio at {dest}")
     return dest
+
+
+def _sleep(seconds: float) -> None:
+    """Indirection over ``time.sleep`` so tests can patch out the real backoff."""
+    time.sleep(seconds)
 
 
 def _to_wav(src: Path, dest: Path) -> Path:
@@ -380,7 +466,7 @@ async def run_real_job(
         # --- downloading ----------------------------------------------------
         if not await _set_stage(session_factory, job_id, JobStatus.downloading, 15):
             return
-        meta = await asyncio.to_thread(_ytdlp_metadata, source_url)
+        meta = await asyncio.to_thread(_ytdlp_metadata, source_url, settings)
         title = (meta.get("title") or "").strip() or None
         source_meta = derive_metadata(meta)
         if title or any(source_meta.values()):
@@ -394,7 +480,7 @@ async def run_real_job(
             )
 
         raw_audio = work_dir / "source.audio"
-        await asyncio.to_thread(_download_audio, source_url, raw_audio)
+        await asyncio.to_thread(_download_audio, source_url, raw_audio, settings)
         mix_wav = work_dir / "mix.wav"
         await asyncio.to_thread(_to_wav, raw_audio, mix_wav)
 
