@@ -429,6 +429,10 @@ async def cancel_job(
     job.status = JobStatus.cancelled
     await session.commit()
     await session.refresh(job, attribute_names=["artifacts"])
+    # Drop any per-job cookies still stashed for this job (#77): a cancel
+    # before the worker popped them would otherwise leave the blob lingering
+    # in the in-memory registry.
+    job_cookies.discard(job_id)
     return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
 
 
@@ -453,6 +457,8 @@ async def delete_job(
     await session.delete(job)
     await session.commit()
     _remove_artifact_files(settings, token)
+    # Drop any per-job cookies still stashed for this job (#77).
+    job_cookies.discard(job_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

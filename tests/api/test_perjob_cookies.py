@@ -114,3 +114,29 @@ def test_post_jobs_cookie_value_never_logged(client, monkeypatch, caplog):
         )
     assert resp.status_code == 201
     assert _SECRET not in caplog.text
+
+
+def test_cancel_discards_stashed_cookies(client, monkeypatch):
+    # Cancel before the worker pops the blob must clear the registry (#77).
+    _no_worker(monkeypatch)
+    resp = client.post(
+        "/jobs", json={"url": "https://yt/x", "youtube_cookies": _valid_blob()}
+    )
+    job_id = resp.json()["id"]
+    assert job_id in job_cookies._PENDING
+    cancelled = client.post(f"/jobs/{job_id}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    assert job_cookies.pop(job_id) is None
+
+
+def test_delete_discards_stashed_cookies(client, monkeypatch):
+    # Delete before the worker pops the blob must clear the registry (#77).
+    _no_worker(monkeypatch)
+    resp = client.post(
+        "/jobs", json={"url": "https://yt/x", "youtube_cookies": _valid_blob()}
+    )
+    job_id = resp.json()["id"]
+    assert job_id in job_cookies._PENDING
+    deleted = client.delete(f"/jobs/{job_id}")
+    assert deleted.status_code == 204
+    assert job_cookies.pop(job_id) is None
