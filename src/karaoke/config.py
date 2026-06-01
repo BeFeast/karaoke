@@ -113,7 +113,12 @@ class Settings(BaseSettings):
     # pipeline copies this file to a per-job writable temp before invoking
     # yt-dlp (yt-dlp rotates + writes the cookie jar back on close, so it must
     # never target the read-only mounted secret). Empty / missing → no cookies.
-    ytdlp_cookies_file: str = "/secrets/youtube-cookies.txt"
+    #
+    # Opt-in by default (empty): mount a cookies file and point this at it via
+    # KARAOKE_YTDLP_COOKIES_FILE. The mount target must live OUTSIDE the
+    # read-only ``/secrets`` volume — Docker cannot create a nested mountpoint
+    # inside a ``:ro`` mount (the karaoke stack mounts it at ``/cookies/...``).
+    ytdlp_cookies_file: str = ""
 
     # Offer-selection / budget tunables (mirror scribe naming). Overridable via
     # Infisical (KARAOKE_VAST_*).
