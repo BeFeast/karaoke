@@ -77,6 +77,88 @@ _ALIGN_LOCK = threading.Lock()
 _ALIGN_MODEL_ID = "MahmoudAshraf/mms-300m-1130-forced-aligner"
 
 
+def _gpu_used_mb() -> int | None:
+    """Return total GPU memory currently used by device 0, if nvidia-smi exists."""
+    try:
+        proc = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.used",
+                "--format=csv,noheader,nounits",
+                "-i",
+                "0",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    first = (proc.stdout or "").splitlines()[0:1]
+    if not first:
+        return None
+    try:
+        return int(first[0].strip())
+    except ValueError:
+        return None
+
+
+class _StageGpuMeter:
+    """Sample wall time and device-level VRAM for one sequential GPU stage."""
+
+    def __init__(self, stage: str, *, interval_s: float = 0.1) -> None:
+        self.stage = stage
+        self.interval_s = interval_s
+        self.started = 0.0
+        self.elapsed_s = 0.0
+        self.start_vram_mb: int | None = None
+        self.peak_vram_mb: int | None = None
+        self.end_vram_mb: int | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> _StageGpuMeter:
+        self.started = time.monotonic()
+        self.start_vram_mb = _gpu_used_mb()
+        self.peak_vram_mb = self.start_vram_mb
+        self._thread = threading.Thread(
+            target=self._sample_loop,
+            name=f"gpu-meter-{self.stage}",
+            daemon=True,
+        )
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1)
+        self.end_vram_mb = _gpu_used_mb()
+        self._record(self.end_vram_mb)
+        self.elapsed_s = time.monotonic() - self.started
+
+    def _record(self, value: int | None) -> None:
+        if value is None:
+            return
+        if self.peak_vram_mb is None or value > self.peak_vram_mb:
+            self.peak_vram_mb = value
+
+    def _sample_loop(self) -> None:
+        while not self._stop.wait(self.interval_s):
+            self._record(_gpu_used_mb())
+
+    def snapshot(self) -> dict[str, float | int | None]:
+        return {
+            "elapsed_s": round(self.elapsed_s, 3),
+            "start_vram_mb": self.start_vram_mb,
+            "peak_vram_mb": self.peak_vram_mb,
+            "end_vram_mb": self.end_vram_mb,
+        }
+
+
 def _gpu_available() -> bool:
     try:
         import torch  # type: ignore
@@ -389,6 +471,13 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
     use_put = bool(vocals_put_url and instrumental_put_url)
 
     result: dict[str, Any] = {}
+    metrics: dict[str, Any] = {
+        "stages": {},
+        "isolation": {
+            "demucs": "subprocess",
+            "whisper": "in-process-lazy-model",
+        },
+    }
 
     with _GPU_LOCK, tempfile.TemporaryDirectory(prefix="kar-rp-") as tmp:
         tmp_path = Path(tmp)
@@ -400,7 +489,9 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
 
         if mode in ("demucs", "both"):
             out_dir = tmp_path / "out"
-            vocals_path, instrumental_path = _run_demucs(in_wav, out_dir)
+            with _StageGpuMeter("demucs") as meter:
+                vocals_path, instrumental_path = _run_demucs(in_wav, out_dir)
+            metrics["stages"]["demucs"] = meter.snapshot()
             # Force-align supplied plain lyrics against the vocal stem (#55).
             # Best-effort: a failure here must NOT fail the job — the
             # coordinator falls back to the plain text / Whisper transcript.
@@ -426,12 +517,16 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         if mode in ("whisper", "both"):
             target = vocals_path if mode == "both" else in_wav
             assert target is not None
-            lyrics_txt, lyrics_json = _transcribe(target)
+            with _StageGpuMeter("whisper") as meter:
+                lyrics_txt, lyrics_json = _transcribe(target)
+            metrics["stages"]["whisper"] = meter.snapshot()
             result["lyrics_txt"] = lyrics_txt
             result["lyrics_json"] = lyrics_json
 
     result["gpu_model"] = _gpu_model_name()
     result["elapsed_s"] = round(time.monotonic() - started, 3)
+    metrics["total_elapsed_s"] = result["elapsed_s"]
+    result["metrics"] = metrics
     return result
 
 

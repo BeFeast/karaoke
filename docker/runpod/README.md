@@ -49,6 +49,7 @@ coordinator falls back to the plain text / Whisper transcript.
 | `aligned_lang`*   |   x    |         |  x   |
 | `gpu_model`       |   x    |    x    |  x   |
 | `elapsed_s`       |   x    |    x    |  x   |
+| `metrics`         |   x    |    x    |  x   |
 
 `*` only present when `align_text` was supplied **and** alignment
 succeeded.
@@ -75,6 +76,12 @@ succeeded.
 `gpu_model` comes from `torch.cuda.get_device_name(0)` (or `"cpu"` on a
 non-GPU sanity run); `elapsed_s` wraps the entire handler body via
 `time.monotonic()`.
+
+`metrics` is additive telemetry for GPU-stage benchmarking (#15). It includes
+`total_elapsed_s`, the stage isolation pattern, and per-stage `elapsed_s`,
+`start_vram_mb`, `peak_vram_mb`, and `end_vram_mb` sampled from `nvidia-smi`
+for `demucs` and/or `whisper`. VRAM fields are `null` when `nvidia-smi` is not
+available.
 
 ## Build + push
 

@@ -61,3 +61,75 @@ provisioning. The entrypoint script (lives in the karaoke repo, not in this
 image) activates `/opt/karaoke-venv` and runs Demucs + faster-whisper
 against the staged audio. See the karaoke PRD §architecture for the full
 job lifecycle and the cost / `finally`-destroy contract.
+
+## Demucs + Whisper CUDA coexistence
+
+Refs #15. The GPU worker image is intentionally a single CUDA 12.4 runtime
+that runs Demucs (`htdemucs`) followed by faster-whisper (`large-v3-turbo`,
+`float16`) in one GPU window. The accepted floor remains:
+
+- Vast offer filter: `cuda_max_good >= 12.4`, `gpu_ram >= 16000`,
+  `num_gpus == 1`.
+- RunPod pool: 16 GB+ GPUs only for the locked endpoint template.
+- Coordinator-owned work only (`yt-dlp`, JS challenge solvers, cookies) stays
+  outside the GPU image.
+
+### Stage isolation pattern
+
+Keep Demucs behind a separate Python subprocess and run Whisper only after
+that subprocess exits:
+
+- Demucs: `/opt/karaoke-venv/bin/python -m demucs.separate ...`
+- Whisper: lazy in-process `WhisperModel("large-v3-turbo", device="cuda",
+  compute_type="float16")`
+
+This boundary prevents Demucs tensors and its CUDA context from being retained
+by the long-lived worker process. The RunPod handler exposes the same pattern
+and returns additive telemetry under `metrics`:
+
+```json
+{
+  "metrics": {
+    "total_elapsed_s": 123.456,
+    "isolation": {
+      "demucs": "subprocess",
+      "whisper": "in-process-lazy-model"
+    },
+    "stages": {
+      "demucs": {
+        "elapsed_s": 77.1,
+        "start_vram_mb": 423,
+        "peak_vram_mb": 3912,
+        "end_vram_mb": 611
+      },
+      "whisper": {
+        "elapsed_s": 31.4,
+        "start_vram_mb": 611,
+        "peak_vram_mb": 5590,
+        "end_vram_mb": 5450
+      }
+    }
+  }
+}
+```
+
+The VRAM samples come from `nvidia-smi`, so they cover both subprocess and
+in-process stages. A non-GPU smoke run or an image without `nvidia-smi` returns
+`null` VRAM fields while preserving elapsed timings.
+
+### Benchmark protocol for #15
+
+Use one representative 4-minute normalized WAV and run `mode="both"` once per
+GPU class: RTX 4090, A2000, A4000, and L4. Record:
+
+- `gpu_model`
+- `metrics.stages.demucs.peak_vram_mb`
+- `metrics.stages.whisper.peak_vram_mb`
+- `metrics.stages.*.end_vram_mb` to confirm Demucs drops before Whisper starts
+- `metrics.total_elapsed_s`
+
+The issue report should include these measured values and the corresponding
+ceiling recommendation. Until live measurements are posted, keep the current
+conservative budget rails: Vast `MAX_INSTANCE_SECONDS=1800`,
+`KARAOKE_VAST_MAX_JOB_COST=0.35`; RunPod
+`KARAOKE_RUNPOD_WALL_CEILING_S=1200`, `KARAOKE_RUNPOD_MAX_JOB_COST=0.50`.
