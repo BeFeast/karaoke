@@ -28,6 +28,23 @@ progress over WebSocket; a Chrome MV3 extension submits the current tab.
 If `workshop:/mnt/storage/src/karaoke` and the Mac checkout disagree, **workshop is
 authoritative**.
 
+## Provisioning Status
+
+- **Artifact NFS path:** live at TrueNAS Odin `/mnt/Odin/lxc-shared/karaoke`
+  (`Odin/lxc-shared/karaoke`).
+- **Permissions:** provisioned and docker-write tested as UID/GID `1000:1000`, mode `755`
+  on the directory. A worker/container write probe created `karaoke/.probe` as `1000:1000`
+  with mode `644`, read it back, and removed it.
+- **NFS export:** `/mnt/Odin/lxc-shared` is exported by TrueNAS to `10.10.0.0/24`, covering
+  `devbox` at `10.10.0.13`.
+- **Docker NFS volume driver opts:** `type=nfs`, `o=addr=10.10.0.15,nfsvers=4,rw`,
+  `device=:/mnt/Odin/lxc-shared`; mount `/srv/artifacts` to the `karaoke/` subdirectory
+  inside the exported path for runtime artifact storage.
+- **Probe command shape:** create a local Docker volume with the driver opts above, mount it
+  into a throwaway container, write/read/remove `karaoke/.probe`, then remove the volume.
+  See `docs/runbooks/truenas-nfs-artifacts.md` for the exact command transcript pattern and
+  the `[[devbox_docker_nfs_volume_pattern]]` reference.
+
 ## Collaboration defaults
 
 - Communicate with the operator (Oleg) in Russian, with English for technical terms verbatim.
