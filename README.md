@@ -30,10 +30,12 @@ Status: **scaffolding** — just the empty seed; implementation tracked in issue
 - FastAPI + WebSocket; Postgres (Alembic) for owners/jobs/tokens; Valkey/Redis for the queue.
 - Chrome extension (MV3) under `extension/chrome/` *(to add)*.
 - vast.ai GPU image `ghcr.io/befeast/karaoke-vast:cuda12.4` *(to add under `docker/vast/`)*.
-- YouTube anti-bot: the coordinator image bundles `deno` + the
-  `bgutil-ytdlp-pot-provider` yt-dlp plugin and downloads with backoff; a
-  `bgutil-ytdlp-pot-provider` sidecar (`karaoke-pot:4416`) supplies PO tokens.
-  Setup + the sidecar compose snippet: [`docker/api/README.md`](docker/api/README.md).
+- YouTube anti-bot: the coordinator image bundles pinned `yt-dlp`,
+  `yt-dlp-ejs`, `deno`, Node/npm, and the `bgutil-ytdlp-pot-provider` yt-dlp
+  plugin; downloads use backoff, and a `bgutil-ytdlp-pot-provider` sidecar
+  (`karaoke-pot:4416`) supplies PO tokens. Setup, nightly canary, and rollback:
+  [`docker/api/README.md`](docker/api/README.md) and
+  [`docs/yt-dlp-runbook.md`](docs/yt-dlp-runbook.md).
 
 ## Verification gate
 
