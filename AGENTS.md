@@ -28,6 +28,20 @@ progress over WebSocket; a Chrome MV3 extension submits the current tab.
 If `workshop:/mnt/storage/src/karaoke` and the Mac checkout disagree, **workshop is
 authoritative**.
 
+## Provisioning Status
+
+- **Infisical runtime path:** live in project `services`
+  (`5b5038c7-46d5-496f-bfa6-6184cb41e143`), environment `prod`, path `/karaoke`.
+  The path is the source of runtime secrets for a clean container boot.
+- **Infisical key list:** `KARAOKE_SERVICE_TOKEN`, `KARAOKE_PUBLIC_BASE_URL`,
+  `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CLERK_JWKS_ISSUER`, `DATABASE_URL`,
+  and `VAST_API_KEY`.
+- **Clerk mirror strategy:** `services/prod/karaoke/CLERK_*` manually mirrors the shared
+  scribe Clerk app values. On Clerk key rotation, re-copy the current scribe values into
+  karaoke and verify `/karaoke` before restarting the stack.
+- **Vast mirror strategy:** `services/prod/karaoke/VAST_API_KEY` mirrors the same
+  `external/prod/...` source used by scribe; it remains a runtime-only secret.
+
 ## Collaboration defaults
 
 - Communicate with the operator (Oleg) in Russian, with English for technical terms verbatim.
