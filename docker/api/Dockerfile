@@ -40,6 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tini \
         unzip \
     && rm -rf /var/lib/apt/lists/*
+RUN node --version && npm --version
 
 # Install deno (pinned) on PATH. yt-dlp 2026 wants deno specifically for the
 # JS signature / n-challenge solver; the base image only ships node, which

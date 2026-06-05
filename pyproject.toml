@@ -26,7 +26,10 @@ dependencies = [
     "sqlalchemy>=2.0.50",
     "uvicorn[standard]>=0.48.0",
     "websockets>=16.0",
-    "yt-dlp>=2026.3.17",
+    # Known-good YouTube extractor stack. Keep exact pins: the nightly canary
+    # catches breakage, and Dependabot opens deliberate bump PRs.
+    "yt-dlp==2026.3.17",
+    "yt-dlp-ejs==0.8.0",
 ]
 
 [project.scripts]
