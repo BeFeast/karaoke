@@ -22,16 +22,17 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from karaoke.api.auth import (
     AuthState,
     Owner,
-    is_trusted_lan_request,
+    new_extension_token,
     require_owner,
     resolve_owner,
+    token_hash,
 )
 from karaoke.api.cookies_store import (
     CookieValidationError,
@@ -40,7 +41,7 @@ from karaoke.api.cookies_store import (
     write_cookies_atomically,
 )
 from karaoke.config import Settings, get_settings
-from karaoke.db.models import Job, JobStatus
+from karaoke.db.models import ExtensionToken, Job, JobStatus
 from karaoke.db.session import get_session, get_session_factory
 from karaoke.worker import job_cookies
 from karaoke.worker.scheduler import schedule_job
@@ -120,7 +121,7 @@ class JobOut(BaseModel):
 
     @classmethod
     def from_orm_job(cls, job: Job, *, public_base_url: str) -> JobOut:
-        share = public_base_url.rstrip("/") + f"/share/{job.job_token}"
+        share = public_base_url.rstrip("/") + f"/share/{job.id}/{job.job_token}"
         return cls(
             id=job.id,
             job_token=job.job_token,
@@ -206,6 +207,28 @@ class ConfigOut(BaseModel):
     public_base_url: str
 
 
+class ExtensionTokenCreate(BaseModel):
+    label: str | None = Field(default=None, max_length=255)
+
+
+class ExtensionTokenOut(BaseModel):
+    id: int
+    label: str | None
+    token: str | None = None
+    created_at: dt.datetime
+    last_used_at: dt.datetime | None
+
+
+class ShareGrantCreate(BaseModel):
+    subject: str | None = Field(default=None, max_length=255)
+    email: str | None = Field(default=None, max_length=320)
+
+
+class ShareGrantOut(BaseModel):
+    subject: str | None
+    email: str | None
+
+
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
@@ -261,9 +284,11 @@ async def create_job(
     cookies_blob = _validate_job_cookies(payload.youtube_cookies)
     job = Job(
         job_token=secrets.token_urlsafe(24),
+        owner_id=owner.owner_id,
         owner_subject=owner.subject,
         owner_email=owner.email,
         owner_display_name=owner.display_name,
+        share_grants=[],
         source_url=payload.url,
         title=payload.title,
         status=JobStatus.queued,
@@ -334,7 +359,12 @@ async def list_jobs(
         .options(selectinload(Job.artifacts))
     )
     if owner.state not in {AuthState.trusted_lan, AuthState.machine_bearer}:
-        stmt = stmt.where(Job.owner_subject == owner.subject)
+        if owner.owner_id is not None:
+            stmt = stmt.where(
+                or_(Job.owner_id == owner.owner_id, Job.owner_subject == owner.subject)
+            )
+        else:
+            stmt = stmt.where(Job.owner_subject == owner.subject)
     jobs = (await session.scalars(stmt)).all()
     return [
         JobOut.from_orm_job(j, public_base_url=settings.public_base_url) for j in jobs
@@ -352,6 +382,102 @@ async def whoami(owner: Owner = Depends(require_owner)) -> MeOut:
         state=owner.state.value,
         is_admin=owner.state in {AuthState.trusted_lan, AuthState.machine_bearer},
     )
+
+
+def _require_clerk_owner(owner: Owner) -> None:
+    if owner.state != AuthState.clerk_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Clerk authentication required",
+        )
+
+
+@router.post(
+    "/settings/extension-tokens",
+    response_model=ExtensionTokenOut,
+    status_code=status.HTTP_201_CREATED,
+    tags=["settings"],
+)
+async def create_extension_token(
+    payload: ExtensionTokenCreate,
+    owner: Owner = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+) -> ExtensionTokenOut:
+    """Create a Chrome-extension token for the Clerk-authenticated owner."""
+    _require_clerk_owner(owner)
+    raw = new_extension_token()
+    row = ExtensionToken(
+        token_hash=token_hash(raw),
+        owner_id=owner.owner_id,
+        owner_subject=owner.subject,
+        owner_email=owner.email,
+        owner_display_name=owner.display_name,
+        label=payload.label.strip() if payload.label and payload.label.strip() else None,
+        disabled=False,
+    )
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+    return ExtensionTokenOut(
+        id=row.id,
+        label=row.label,
+        token=raw,
+        created_at=row.created_at,
+        last_used_at=row.last_used_at,
+    )
+
+
+@router.delete(
+    "/settings/extension-tokens/{token_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["settings"],
+)
+async def revoke_extension_token(
+    token_id: int,
+    owner: Owner = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    """Revoke one of the caller's extension tokens."""
+    _require_clerk_owner(owner)
+    row = await session.scalar(select(ExtensionToken).where(ExtensionToken.id == token_id))
+    if row is None or row.owner_subject != owner.subject:
+        raise HTTPException(status_code=404, detail="extension token not found")
+    row.disabled = True
+    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/jobs/{job_id}/share-grants",
+    response_model=ShareGrantOut,
+    status_code=status.HTTP_201_CREATED,
+    tags=["share"],
+)
+async def grant_job_share_access(
+    job_id: int,
+    payload: ShareGrantCreate,
+    owner: Owner = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+) -> ShareGrantOut:
+    """Grant another Clerk user owner-scoped access to a job."""
+    _require_clerk_owner(owner)
+    subject = (payload.subject or "").strip() or None
+    email = (payload.email or "").strip().lower() or None
+    if subject is None and email is None:
+        raise HTTPException(status_code=422, detail="subject or email is required")
+    job = await session.scalar(select(Job).where(Job.id == job_id))
+    if job is None or not _can_owner_view(owner, job):
+        raise HTTPException(status_code=404, detail="job not found")
+    grants = list(job.share_grants or [])
+    if not any(
+        (subject and grant.get("subject") == subject)
+        or (email and grant.get("email") == email)
+        for grant in grants
+    ):
+        grants.append({"subject": subject, "email": email})
+        job.share_grants = grants
+        await session.commit()
+    return ShareGrantOut(subject=subject, email=email)
 
 
 _TERMINAL_STATUSES = {JobStatus.completed, JobStatus.failed, JobStatus.cancelled}
@@ -397,7 +523,12 @@ async def clear_failed_jobs(
         .options(selectinload(Job.artifacts))
     )
     if owner.state not in {AuthState.trusted_lan, AuthState.machine_bearer}:
-        stmt = stmt.where(Job.owner_subject == owner.subject)
+        if owner.owner_id is not None:
+            stmt = stmt.where(
+                or_(Job.owner_id == owner.owner_id, Job.owner_subject == owner.subject)
+            )
+        else:
+            stmt = stmt.where(Job.owner_subject == owner.subject)
     jobs = (await session.scalars(stmt)).all()
     tokens = [j.job_token for j in jobs]
     for job in jobs:
@@ -567,11 +698,15 @@ def _html_escape(s: str | None) -> str:
     )
 
 
+def _share_base(job: Job) -> str:
+    return f"/share/{job.id}/{job.job_token}"
+
+
 def _render_share_html(job: Job, lyrics_text: str | None) -> str:
     title = job.title or job.source_url or "karaoke job"
     owner = (job.owner_display_name or "").strip()
     owner_block = f"<span>· {_html_escape(owner)}</span>" if owner else ""
-    base = f"/share/{job.job_token}"
+    base = _share_base(job)
     artifacts_by_kind = {a.kind: a for a in job.artifacts}
 
     def audio_block(kind: str, label: str) -> str:
@@ -634,51 +769,66 @@ def _wants_json(request: Request) -> bool:
     return "application/json" in accept and "text/html" not in accept
 
 
-@router.get("/share/{job_token}", tags=["share"])
-async def share_page(
-    job_token: str,
+def _has_share_grant(owner: Owner | None, job: Job) -> bool:
+    if owner is None or owner.state != AuthState.clerk_user:
+        return False
+    owner_email = (owner.email or "").strip().lower()
+    for grant in job.share_grants or []:
+        if not isinstance(grant, dict):
+            continue
+        subject = str(grant.get("subject") or "").strip()
+        email = str(grant.get("email") or "").strip().lower()
+        if subject and subject == owner.subject:
+            return True
+        if email and owner_email and email == owner_email:
+            return True
+    return False
+
+
+def _can_view_share(
+    *,
+    owner: Owner | None,
     request: Request,
-    owner: Owner | None = Depends(resolve_owner),
-    session: AsyncSession = Depends(get_session),
-    settings: Settings = Depends(get_settings),
-):
-    """Owner-aware + unlisted-token-aware share endpoint.
-
-    Returns HTML for browsers (with embedded ``<audio>`` players), or JSON
-    when ``Accept: application/json`` is sent — keeps API consumers happy.
-    """
-    job = await session.scalar(
-        select(Job)
-        .where(Job.job_token == job_token)
-        .options(selectinload(Job.artifacts))
+    settings: Settings,
+    job: Job,
+    token: str | None,
+) -> bool:
+    holds_unlisted_token = token is not None and secrets.compare_digest(token, job.job_token)
+    return (
+        holds_unlisted_token
+        or (owner is not None and _can_owner_view(owner, job))
+        or _has_share_grant(owner, job)
     )
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
 
-    holds_unlisted_token = True
-    is_owner = owner is not None and _can_owner_view(owner, job)
-    is_lan = is_trusted_lan_request(request, settings)
-    if not (holds_unlisted_token or is_owner or is_lan):  # pragma: no cover
-        raise HTTPException(status_code=404, detail="job not found")
 
+def _share_payload(job: Job) -> SharePayload:
+    return SharePayload(
+        job_token=job.job_token,
+        title=job.title,
+        artist=job.artist,
+        track=job.track,
+        status=job.status,
+        progress=job.progress,
+        owner_display_name=job.owner_display_name,
+        artifacts=[
+            ArtifactOut(
+                kind=a.kind,
+                relative_path=a.relative_path,
+                content_type=a.content_type,
+            )
+            for a in job.artifacts
+        ],
+    )
+
+
+async def _render_share_response(
+    *,
+    job: Job,
+    request: Request,
+    settings: Settings,
+):
     if _wants_json(request):
-        return SharePayload(
-            job_token=job.job_token,
-            title=job.title,
-            artist=job.artist,
-            track=job.track,
-            status=job.status,
-            progress=job.progress,
-            owner_display_name=job.owner_display_name,
-            artifacts=[
-                ArtifactOut(
-                    kind=a.kind,
-                    relative_path=a.relative_path,
-                    content_type=a.content_type,
-                )
-                for a in job.artifacts
-            ],
-        )
+        return _share_payload(job)
 
     # Inline lyrics if they fit comfortably on the page.
     lyrics_text: str | None = None
@@ -691,6 +841,67 @@ async def share_page(
             lyrics_text = None
 
     return HTMLResponse(_render_share_html(job, lyrics_text))
+
+
+@router.get("/share/{job_id:int}/{share_token}", tags=["share"])
+async def share_page(
+    job_id: int,
+    share_token: str,
+    request: Request,
+    owner: Owner | None = Depends(resolve_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    """Owner-aware + unlisted-token-aware share endpoint.
+
+    Returns HTML for browsers (with embedded ``<audio>`` players), or JSON
+    when ``Accept: application/json`` is sent — keeps API consumers happy.
+    """
+    job = await session.scalar(
+        select(Job)
+        .where(Job.id == job_id)
+        .options(selectinload(Job.artifacts))
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    if not _can_view_share(
+        owner=owner,
+        request=request,
+        settings=settings,
+        job=job,
+        token=share_token,
+    ):
+        raise HTTPException(status_code=404, detail="job not found")
+
+    return await _render_share_response(job=job, request=request, settings=settings)
+
+
+@router.get("/share/{job_token}", tags=["share"])
+async def legacy_share_page(
+    job_token: str,
+    request: Request,
+    owner: Owner | None = Depends(resolve_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    """Compatibility endpoint for existing SPA/extension links using token-only URLs."""
+    job = await session.scalar(
+        select(Job)
+        .where(Job.job_token == job_token)
+        .options(selectinload(Job.artifacts))
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if not _can_view_share(
+        owner=owner,
+        request=request,
+        settings=settings,
+        job=job,
+        token=job_token,
+    ):
+        raise HTTPException(status_code=404, detail="job not found")
+    return await _render_share_response(job=job, request=request, settings=settings)
 
 
 # One LRC timestamp tag, e.g. "[01:23.45]" / "[1:23]" / "[01:23:456]". Multiple
@@ -801,10 +1012,13 @@ async def share_lyrics(
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
-    holds_unlisted_token = True
-    is_owner = owner is not None and _can_owner_view(owner, job)
-    is_lan = is_trusted_lan_request(request, settings)
-    if not (holds_unlisted_token or is_owner or is_lan):  # pragma: no cover
+    if not _can_view_share(
+        owner=owner,
+        request=request,
+        settings=settings,
+        job=job,
+        token=job_token,
+    ):
         raise HTTPException(status_code=404, detail="job not found")
 
     exports_dir = _PathLib(settings.artifact_root) / job_token / "exports"
@@ -866,6 +1080,49 @@ _ALLOWED_ARTIFACTS: dict[str, tuple[str, str]] = {
 }
 
 
+def _artifact_response(job_token: str, artifact_name: str, settings: Settings) -> Response:
+    rel, ctype = _ALLOWED_ARTIFACTS[artifact_name]
+    artifact_root = _PathLib(settings.artifact_root)
+    file_path = artifact_root / job_token / "exports" / rel
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="artifact not yet ready")
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=ctype,
+        filename=rel,
+    )
+
+
+@router.get("/share/{job_id:int}/{share_token}/{artifact_name}", tags=["share"])
+async def share_artifact_by_job_id(
+    job_id: int,
+    share_token: str,
+    artifact_name: str,
+    request: Request,
+    owner: Owner | None = Depends(resolve_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    """Stream an artifact via the owner-scoped share URL form."""
+    if artifact_name not in _ALLOWED_ARTIFACTS:
+        raise HTTPException(status_code=404, detail="artifact not found")
+
+    job = await session.scalar(select(Job).where(Job.id == job_id))
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if not _can_view_share(
+        owner=owner,
+        request=request,
+        settings=settings,
+        job=job,
+        token=share_token,
+    ):
+        raise HTTPException(status_code=404, detail="job not found")
+
+    return _artifact_response(job.job_token, artifact_name, settings)
+
+
 @router.get("/share/{job_token}/{artifact_name}", tags=["share"])
 async def share_artifact(
     job_token: str,
@@ -889,23 +1146,16 @@ async def share_artifact(
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
-    holds_unlisted_token = True
-    is_owner = owner is not None and _can_owner_view(owner, job)
-    is_lan = is_trusted_lan_request(request, settings)
-    if not (holds_unlisted_token or is_owner or is_lan):  # pragma: no cover
+    if not _can_view_share(
+        owner=owner,
+        request=request,
+        settings=settings,
+        job=job,
+        token=job_token,
+    ):
         raise HTTPException(status_code=404, detail="job not found")
 
-    rel, ctype = _ALLOWED_ARTIFACTS[artifact_name]
-    artifact_root = _PathLib(settings.artifact_root)
-    file_path = artifact_root / job_token / "exports" / rel
-    if not file_path.is_file():
-        raise HTTPException(status_code=404, detail="artifact not yet ready")
-
-    return FileResponse(
-        path=str(file_path),
-        media_type=ctype,
-        filename=rel,
-    )
+    return _artifact_response(job.job_token, artifact_name, settings)
 
 
 # ---------------------------------------------------------------------------
@@ -976,6 +1226,8 @@ def _can_owner_view(owner: Owner, job: Job) -> bool:
     """Owner is allowed to see jobs they own, plus trusted-LAN/machine bypass."""
     if owner.state in {AuthState.trusted_lan, AuthState.machine_bearer}:
         return True
+    if owner.owner_id is not None and job.owner_id is not None:
+        return owner.owner_id == job.owner_id
     return owner.subject == job.owner_subject
 
 

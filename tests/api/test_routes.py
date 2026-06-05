@@ -98,6 +98,36 @@ def test_get_status_owner_isolation(client):
     assert other.status_code == 404
 
 
+def test_get_jobs_is_owner_scoped_for_clerk_users(client):
+    alice_auth = {"Authorization": f"Bearer {_clerk_jwt('alice')}"}
+    bob_auth = {"Authorization": f"Bearer {_clerk_jwt('bob')}"}
+
+    alice_job = client.post(
+        "/jobs",
+        json={"url": "https://example.com/alice"},
+        headers=alice_auth,
+    ).json()
+    bob_job = client.post(
+        "/jobs",
+        json={"url": "https://example.com/bob"},
+        headers=bob_auth,
+    ).json()
+
+    alice_jobs = client.get("/jobs", headers=alice_auth)
+    assert alice_jobs.status_code == 200, alice_jobs.text
+    alice_ids = {job["id"] for job in alice_jobs.json()}
+    assert alice_job["id"] in alice_ids
+    assert bob_job["id"] not in alice_ids
+
+    admin_jobs = client.get(
+        "/jobs",
+        headers={"Authorization": "Bearer test-service-token"},
+    )
+    assert admin_jobs.status_code == 200, admin_jobs.text
+    admin_ids = {job["id"] for job in admin_jobs.json()}
+    assert {alice_job["id"], bob_job["id"]}.issubset(admin_ids)
+
+
 def test_share_endpoint_works_with_unlisted_token(client):
     """Anyone holding the job_token can fetch the share payload (it IS the secret)."""
     # Create as LAN-trusted (default conftest).
@@ -127,6 +157,50 @@ def test_share_endpoint_works_with_unlisted_token(client):
         JobStatus.downloading.value,
         JobStatus.queued.value,
     }
+
+
+def test_share_endpoint_accepts_job_id_and_unlisted_token(client):
+    create = client.post("/jobs", json={"url": "https://example.com/x", "title": "Tune"})
+    assert create.status_code == 201
+    body = create.json()
+
+    share = client.get(
+        f"/share/{body['id']}/{body['job_token']}",
+        headers={"Accept": "application/json"},
+    )
+
+    assert share.status_code == 200, share.text
+    assert share.json()["job_token"] == body["job_token"]
+
+
+def test_share_grant_allows_different_clerk_user_with_wrong_unlisted_token(client):
+    alice_auth = {"Authorization": f"Bearer {_clerk_jwt('alice')}"}
+    bob_auth = {
+        "Authorization": f"Bearer {_clerk_jwt('bob')}",
+        "Accept": "application/json",
+    }
+    create = client.post(
+        "/jobs",
+        json={"url": "https://example.com/grant", "title": "Grant Me"},
+        headers=alice_auth,
+    )
+    assert create.status_code == 201, create.text
+    job = create.json()
+
+    wrong_token = "wrong-token"
+    denied = client.get(f"/share/{job['id']}/{wrong_token}", headers=bob_auth)
+    assert denied.status_code == 404
+
+    grant = client.post(
+        f"/jobs/{job['id']}/share-grants",
+        json={"subject": "bob"},
+        headers=alice_auth,
+    )
+    assert grant.status_code == 201, grant.text
+
+    allowed = client.get(f"/share/{job['id']}/{wrong_token}", headers=bob_auth)
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["title"] == "Grant Me"
 
 
 def test_share_endpoint_404_for_unknown_token(client):
@@ -245,7 +319,8 @@ def test_share_endpoint_renders_html_for_browsers(client):
     """Default Accept (or text/html) returns the HTML share page with audio tags."""
     create = client.post("/jobs", json={"url": "https://example.com/x", "title": "TuneHTML"})
     assert create.status_code == 201
-    token = create.json()["job_token"]
+    created = create.json()
+    token = created["job_token"]
 
     # Wait for the mock worker to populate Artifact rows.
     deadline = time.monotonic() + 2.0
@@ -259,8 +334,8 @@ def test_share_endpoint_renders_html_for_browsers(client):
     assert resp.status_code == 200, resp.text
     body = resp.text
     assert "<audio" in body, "expected an <audio> player in HTML share page"
-    assert f"/share/{token}/karaoke.mp3" in body
-    assert f"/share/{token}/vocals.mp3" in body
+    assert f"/share/{created['id']}/{token}/karaoke.mp3" in body
+    assert f"/share/{created['id']}/{token}/vocals.mp3" in body
     assert "TuneHTML" in body
     # Scribe-styled result page (not the bare 1996 template).
     assert 'class="player"' in body

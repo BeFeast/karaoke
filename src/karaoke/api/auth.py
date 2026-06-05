@@ -34,7 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from karaoke.config import Settings, get_settings
-from karaoke.db.models import ExtensionToken
+from karaoke.db.models import ExtensionToken, OwnerRecord, UserRecord
 from karaoke.db.session import get_session
 
 EXTENSION_TOKEN_PREFIX = "ktx_"
@@ -61,6 +61,7 @@ class Owner:
     email: str | None = None
     display_name: str | None = None
     state: AuthState = AuthState.public
+    owner_id: int | None = None
 
 
 def token_hash(token: str) -> str:
@@ -179,6 +180,60 @@ def _default_owner(settings: Settings, *, state: AuthState) -> Owner:
         # synthetic identity so jobs can be attributed.
         subject = f"karaoke:{state.value}"
     return Owner(subject=subject, email=email, display_name=None, state=state)
+
+
+async def ensure_owner_record(
+    session: AsyncSession,
+    owner: Owner,
+    *,
+    clerk_user: bool = False,
+) -> Owner:
+    """Upsert relational owner/user rows and return ``owner`` with ``owner_id``."""
+    row = (
+        await session.execute(
+            select(OwnerRecord).where(OwnerRecord.subject == owner.subject)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = OwnerRecord(
+            subject=owner.subject,
+            email=owner.email,
+            display_name=owner.display_name,
+        )
+        session.add(row)
+        await session.flush()
+    else:
+        row.email = owner.email or row.email
+        row.display_name = owner.display_name or row.display_name
+
+    if clerk_user:
+        user = (
+            await session.execute(
+                select(UserRecord).where(UserRecord.clerk_subject == owner.subject)
+            )
+        ).scalar_one_or_none()
+        if user is None:
+            session.add(
+                UserRecord(
+                    owner_id=row.id,
+                    clerk_subject=owner.subject,
+                    email=owner.email,
+                    display_name=owner.display_name,
+                )
+            )
+        else:
+            user.owner_id = row.id
+            user.email = owner.email or user.email
+            user.display_name = owner.display_name or user.display_name
+
+    await session.flush()
+    return Owner(
+        subject=owner.subject,
+        email=owner.email,
+        display_name=owner.display_name,
+        state=owner.state,
+        owner_id=row.id,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -349,12 +404,26 @@ async def _owner_from_extension_token(
             detail="invalid extension token",
         )
     row.last_used_at = dt.datetime.now(dt.UTC)
+    owner_id = row.owner_id
+    if owner_id is None:
+        owner = await ensure_owner_record(
+            session,
+            Owner(
+                subject=row.owner_subject,
+                email=row.owner_email,
+                display_name=row.owner_display_name,
+                state=AuthState.extension_token,
+            ),
+        )
+        owner_id = owner.owner_id
+        row.owner_id = owner_id
     await session.commit()
     return Owner(
         subject=row.owner_subject,
         email=row.owner_email,
         display_name=row.owner_display_name,
         state=AuthState.extension_token,
+        owner_id=owner_id,
     )
 
 
@@ -381,7 +450,8 @@ async def resolve_owner(
         # 1a. Machine bearer.
         machine = settings.service_token.strip()
         if machine and secrets.compare_digest(bearer, machine):
-            return _default_owner(settings, state=AuthState.machine_bearer)
+            owner = _default_owner(settings, state=AuthState.machine_bearer)
+            return await ensure_owner_record(session, owner)
 
         # 1b. Extension token (ktx_… prefix shortcuts the Clerk path).
         if bearer.startswith(EXTENSION_TOKEN_PREFIX):
@@ -394,7 +464,7 @@ async def resolve_owner(
             claims = _validate_clerk_jwt(bearer, settings)
             owner = _owner_from_clerk_claims(claims)
             if owner is not None:
-                return owner
+                return await ensure_owner_record(session, owner, clerk_user=True)
 
         # Bearer was supplied but matched no scheme — refuse explicitly so we
         # never silently fall back to LAN-trust on a malformed header.
@@ -405,7 +475,8 @@ async def resolve_owner(
 
     # 2. Trusted-LAN bypass.
     if is_trusted_lan_request(request, settings):
-        return _default_owner(settings, state=AuthState.trusted_lan)
+        owner = _default_owner(settings, state=AuthState.trusted_lan)
+        return await ensure_owner_record(session, owner)
 
     # 3. Anonymous.
     return None

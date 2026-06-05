@@ -10,7 +10,10 @@ import os
 import sqlite3
 import time
 
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt.algorithms import RSAAlgorithm
 
 from karaoke.api.auth import (
     AuthState,
@@ -27,6 +30,21 @@ def _unverified_jwt(claims: dict) -> str:
     body = base64.urlsafe_b64encode(json.dumps(claims).encode()).rstrip(b"=").decode()
     sig = base64.urlsafe_b64encode(b"sig").rstrip(b"=").decode()
     return f"{header}.{body}.{sig}"
+
+
+def _signed_clerk_jwt(claims: dict, *, issuer: str = "https://clerk.test") -> tuple[str, str]:
+    """Return (token, jwks_json) for a locally signed Clerk-style JWT."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    kid = "test-kid"
+    token = jwt.encode(
+        {"iss": issuer, **claims},
+        key,
+        algorithm="RS256",
+        headers={"kid": kid},
+    )
+    jwk = json.loads(RSAAlgorithm.to_jwk(key.public_key()))
+    jwk["kid"] = kid
+    return token, json.dumps({"keys": [jwk]})
 
 
 def _sqlite_path() -> str:
@@ -140,6 +158,32 @@ def test_clerk_jwt_in_test_mode_is_accepted(client):
     assert payload["owner_subject"] == "user_clerk_abc"
 
 
+def test_clerk_jwt_is_verified_with_mocked_jwks(monkeypatch, client):
+    issuer = "https://clerk.test"
+    token, jwks = _signed_clerk_jwt(
+        {
+            "sub": "user_clerk_verified",
+            "email": "verified@example.com",
+            "name": "Verified User",
+            "exp": int(time.time()) + 3600,
+        },
+        issuer=issuer,
+    )
+    monkeypatch.setenv("KARAOKE_AUTH_TEST_MODE", "false")
+    monkeypatch.setenv("KARAOKE_CLERK_ISSUER", issuer)
+    monkeypatch.setenv("KARAOKE_CLERK_JWKS_JSON", jwks)
+    reset_settings_for_tests()
+
+    response = client.post(
+        "/jobs",
+        json={"url": "https://example.com/song"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["owner_subject"] == "user_clerk_verified"
+
+
 # ---------------------------------------------------------------------------
 # Extension tokens
 # ---------------------------------------------------------------------------
@@ -174,6 +218,45 @@ def test_disabled_extension_token_is_rejected(client):
         headers={"Authorization": f"Bearer {raw}"},
     )
     assert response.status_code == 401
+
+
+def test_clerk_user_can_create_and_revoke_extension_token(client):
+    clerk = _unverified_jwt(
+        {
+            "sub": "user_clerk_tokens",
+            "email": "tokens@example.com",
+            "exp": int(time.time()) + 3600,
+        }
+    )
+    auth = {"Authorization": f"Bearer {clerk}"}
+
+    created = client.post(
+        "/settings/extension-tokens",
+        json={"label": "Chrome"},
+        headers=auth,
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    raw = body["token"]
+    assert raw.startswith("ktx_")
+
+    submitted = client.post(
+        "/jobs",
+        json={"url": "https://example.com/from-extension"},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert submitted.status_code == 201, submitted.text
+    assert submitted.json()["owner_subject"] == "user_clerk_tokens"
+
+    revoked = client.delete(f"/settings/extension-tokens/{body['id']}", headers=auth)
+    assert revoked.status_code == 204, revoked.text
+
+    rejected = client.post(
+        "/jobs",
+        json={"url": "https://example.com/revoked"},
+        headers={"Authorization": f"Bearer {raw}"},
+    )
+    assert rejected.status_code == 401
 
 
 # ---------------------------------------------------------------------------

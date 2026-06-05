@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import datetime as dt
 import enum
+from typing import Any
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     DateTime,
@@ -47,10 +49,21 @@ class Job(Base):
     # Public, unguessable token used by /share/{job_token} for unlisted access.
     job_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
 
-    # Owner attribution — Clerk subject is the canonical identity.
+    owner_id: Mapped[int | None] = mapped_column(
+        ForeignKey("owners.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    # Owner attribution projection — Clerk subject is the canonical identity.
     owner_subject: Mapped[str] = mapped_column(String(255), index=True)
     owner_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     owner_display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Clerk subjects/emails granted owner-scoped share access to this job.
+    share_grants: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON,
+        default=list,
+        nullable=True,
+    )
 
     source_url: Mapped[str] = mapped_column(Text)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -73,6 +86,7 @@ class Job(Base):
 
     # vast.ai bookkeeping (mocked in this skeleton).
     vast_instance_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    vast_cost: Mapped[str | None] = mapped_column(String(32), nullable=True)
     vast_cost_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
@@ -90,10 +104,58 @@ class Job(Base):
         back_populates="job",
         cascade="all, delete-orphan",
     )
+    owner: Mapped[OwnerRecord | None] = relationship(back_populates="jobs")
 
     __table_args__ = (
         Index("ix_jobs_owner_status", "owner_subject", "status"),
     )
+
+
+class OwnerRecord(Base):
+    """Canonical owner account for Clerk, LAN, machine, and extension-token jobs."""
+
+    __tablename__ = "owners"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subject: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        onupdate=_utcnow,
+    )
+
+    users: Mapped[list[UserRecord]] = relationship(
+        back_populates="owner",
+        cascade="all, delete-orphan",
+    )
+    jobs: Mapped[list[Job]] = relationship(back_populates="owner")
+    extension_tokens: Mapped[list[ExtensionToken]] = relationship(back_populates="owner")
+
+
+class UserRecord(Base):
+    """Clerk user bound to an owner record."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(
+        ForeignKey("owners.id", ondelete="CASCADE"),
+        index=True,
+    )
+    clerk_subject: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utcnow,
+        onupdate=_utcnow,
+    )
+
+    owner: Mapped[OwnerRecord] = relationship(back_populates="users")
 
 
 class Artifact(Base):
@@ -124,7 +186,12 @@ class ExtensionToken(Base):
     # SHA-256 of the raw token; we never persist the raw value.
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
 
-    # Owner attribution — same shape as Job.
+    owner_id: Mapped[int | None] = mapped_column(
+        ForeignKey("owners.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
+    # Owner attribution projection — same shape as Job.
     owner_subject: Mapped[str] = mapped_column(String(255), index=True)
     owner_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     owner_display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -137,3 +204,5 @@ class ExtensionToken(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+
+    owner: Mapped[OwnerRecord | None] = relationship(back_populates="extension_tokens")

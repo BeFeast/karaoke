@@ -7,6 +7,8 @@ from karaoke.db.models import (
     ExtensionToken,
     Job,
     JobStatus,
+    OwnerRecord,
+    UserRecord,
 )
 from karaoke.db.session import (
     create_engine_and_sessionmaker,
@@ -21,6 +23,8 @@ __all__ = [
     "ExtensionToken",
     "Job",
     "JobStatus",
+    "OwnerRecord",
+    "UserRecord",
     "create_engine_and_sessionmaker",
     "get_session",
     "init_engine",
