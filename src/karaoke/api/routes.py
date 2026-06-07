@@ -22,7 +22,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -39,6 +39,8 @@ from karaoke.api.cookies_store import (
     validate_netscape_cookies,
     write_cookies_atomically,
 )
+from karaoke.api.queue import RedisQueue
+from karaoke.api.schemas import HealthOut, JobStatusOut, JobSubmitOut
 from karaoke.config import Settings, get_settings
 from karaoke.db.models import Job, JobStatus
 from karaoke.db.session import get_session, get_session_factory
@@ -56,6 +58,9 @@ class JobCreate(BaseModel):
     """Body for ``POST /jobs`` — submit a URL for separation."""
 
     url: str = Field(min_length=1)
+    profile: str | None = None
+    lyrics_mode: str | None = None
+    keep_full_stems: bool = False
     title: str | None = None
     # OPTIONAL per-job YouTube cookies (issue #77): a Netscape ``cookies.txt``
     # blob the submitting client (Chrome extension / native app) captured from
@@ -120,7 +125,7 @@ class JobOut(BaseModel):
 
     @classmethod
     def from_orm_job(cls, job: Job, *, public_base_url: str) -> JobOut:
-        share = public_base_url.rstrip("/") + f"/share/{job.job_token}"
+        share = public_base_url.rstrip("/") + f"/share/{job.id}/{job.job_token}"
         return cls(
             id=job.id,
             job_token=job.job_token,
@@ -214,10 +219,45 @@ class ConfigOut(BaseModel):
 router = APIRouter()
 
 
-@router.get("/health", tags=["meta"])
-async def health() -> dict[str, str]:
-    """Liveness probe — no auth, no DB hit."""
-    return {"status": "ok"}
+def _redis_queue(settings: Settings) -> RedisQueue:
+    return RedisQueue(
+        settings.redis_url,
+        queue_key=settings.redis_queue_key,
+        running_key=settings.redis_running_key,
+    )
+
+
+def _status_device(job: Job, settings: Settings) -> str:
+    if job.vast_instance_id:
+        mode = (settings.device_mode or "auto").strip().lower()
+        if mode == "runpod":
+            return "runpod"
+        if mode in {"vast", "auto"} and settings.vast_api_key.strip():
+            return "vast"
+    return "cpu-local"
+
+
+@router.get("/health", response_model=HealthOut, tags=["meta"])
+async def health(
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> HealthOut:
+    """Liveness probe with dependency reachability."""
+    db_ok = True
+    try:
+        await session.execute(text("SELECT 1"))
+    except Exception:
+        db_ok = False
+
+    redis_ok = _redis_queue(settings).ping()
+    return HealthOut(
+        ok=db_ok,
+        service="karaoke-api",
+        redis=redis_ok,
+        db=db_ok,
+        device_mode=settings.device_mode,
+        vast_configured=bool(settings.vast_api_key.strip()),
+    )
 
 
 @router.get("/config", response_model=ConfigOut, tags=["meta"])
@@ -241,8 +281,8 @@ async def runtime_config(
 
 @router.post(
     "/jobs",
-    response_model=JobOut,
-    status_code=status.HTTP_201_CREATED,
+    response_model=JobSubmitOut,
+    status_code=status.HTTP_202_ACCEPTED,
     tags=["jobs"],
 )
 async def create_job(
@@ -250,7 +290,7 @@ async def create_job(
     owner: Owner = Depends(require_owner),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
-) -> JobOut:
+) -> JobSubmitOut:
     """Create a karaoke job and kick off the (mocked) worker."""
     # Per-job ephemeral YouTube cookies (issue #77): validate up front so a
     # malformed jar fails fast WITHOUT creating a junk job. The value is never
@@ -279,9 +319,13 @@ async def create_job(
     # vast key is configured (CI / dev default). See worker.scheduler.
     if cookies_blob is not None:
         job_cookies.stash(job.id, cookies_blob)
+    try:
+        _redis_queue(settings).enqueue(job.id)
+    except Exception as exc:  # pragma: no cover - depends on local Redis
+        _log.warning("Redis enqueue failed for job %s: %s", job.id, exc)
     schedule_job(get_session_factory(), job.id, settings)
 
-    return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
+    return JobSubmitOut.from_job(job, public_base_url=settings.public_base_url)
 
 
 @router.get("/jobs/{job_id}/status", response_model=JobOut, tags=["jobs"])
@@ -301,6 +345,28 @@ async def job_status(
         # Hide existence on cross-owner reads.
         raise HTTPException(status_code=404, detail="job not found")
     return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
+
+
+@router.get("/status/{job_id}", response_model=JobStatusOut, tags=["jobs"])
+async def job_status_prd(
+    job_id: int,
+    owner: Owner = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> JobStatusOut:
+    """PRD status endpoint with lifecycle, device, vast, and share fields."""
+    job = await session.scalar(
+        select(Job).where(Job.id == job_id).options(selectinload(Job.artifacts))
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if not _can_owner_view(owner, job):
+        raise HTTPException(status_code=404, detail="job not found")
+    return JobStatusOut.from_job(
+        job,
+        public_base_url=settings.public_base_url,
+        device=_status_device(job, settings),
+    )
 
 
 class MeOut(BaseModel):
@@ -567,11 +633,16 @@ def _html_escape(s: str | None) -> str:
     )
 
 
-def _render_share_html(job: Job, lyrics_text: str | None) -> str:
+def _render_share_html(
+    job: Job,
+    lyrics_text: str | None,
+    *,
+    share_base: str | None = None,
+) -> str:
     title = job.title or job.source_url or "karaoke job"
     owner = (job.owner_display_name or "").strip()
     owner_block = f"<span>· {_html_escape(owner)}</span>" if owner else ""
-    base = f"/share/{job.job_token}"
+    base = share_base or f"/share/{job.job_token}"
     artifacts_by_kind = {a.kind: a for a in job.artifacts}
 
     def audio_block(kind: str, label: str) -> str:
@@ -691,6 +762,67 @@ async def share_page(
             lyrics_text = None
 
     return HTMLResponse(_render_share_html(job, lyrics_text))
+
+
+@router.get("/share/{job_id:int}/{job_token}", tags=["share"])
+async def share_page_by_id(
+    job_id: int,
+    job_token: str,
+    request: Request,
+    owner: Owner | None = Depends(resolve_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+):
+    """PRD share endpoint: owner-aware plus unlisted-token-aware by id/token."""
+    job = await session.scalar(
+        select(Job)
+        .where(Job.id == job_id, Job.job_token == job_token)
+        .options(selectinload(Job.artifacts))
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    holds_unlisted_token = True
+    is_owner = owner is not None and _can_owner_view(owner, job)
+    is_lan = is_trusted_lan_request(request, settings)
+    if not (holds_unlisted_token or is_owner or is_lan):  # pragma: no cover
+        raise HTTPException(status_code=404, detail="job not found")
+
+    if _wants_json(request):
+        return SharePayload(
+            job_token=job.job_token,
+            title=job.title,
+            artist=job.artist,
+            track=job.track,
+            status=job.status,
+            progress=job.progress,
+            owner_display_name=job.owner_display_name,
+            artifacts=[
+                ArtifactOut(
+                    kind=a.kind,
+                    relative_path=a.relative_path,
+                    content_type=a.content_type,
+                )
+                for a in job.artifacts
+            ],
+        )
+
+    lyrics_text: str | None = None
+    artifact_root = _PathLib(settings.artifact_root)
+    lyrics_path = artifact_root / job.job_token / "exports" / "lyrics.txt"
+    if lyrics_path.is_file() and lyrics_path.stat().st_size < 64 * 1024:
+        try:
+            lyrics_text = lyrics_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            lyrics_text = None
+
+    return HTMLResponse(
+        _render_share_html(
+            job,
+            lyrics_text,
+            share_base=f"/share/{job.id}/{job.job_token}",
+        )
+    )
 
 
 # One LRC timestamp tag, e.g. "[01:23.45]" / "[1:23]" / "[01:23:456]". Multiple
@@ -863,7 +995,43 @@ _ALLOWED_ARTIFACTS: dict[str, tuple[str, str]] = {
     "lyrics.txt": ("lyrics.txt", "text/plain; charset=utf-8"),
     "lyrics.lrc": ("lyrics.lrc", "text/plain; charset=utf-8"),
     "metadata.json": ("metadata.json", "application/json"),
+    "worker.log": ("worker.log", "text/plain; charset=utf-8"),
+    "source.mp3": ("source.mp3", "audio/mpeg"),
 }
+
+
+@router.get("/share/{job_id:int}/{job_token}/{artifact_name}", tags=["share"])
+async def share_artifact_by_id(
+    job_id: int,
+    job_token: str,
+    artifact_name: str,
+    request: Request,
+    owner: Owner | None = Depends(resolve_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    """PRD artifact endpoint scoped by job id plus unlisted token."""
+    if artifact_name not in _ALLOWED_ARTIFACTS:
+        raise HTTPException(status_code=404, detail="artifact not found")
+
+    job = await session.scalar(
+        select(Job).where(Job.id == job_id, Job.job_token == job_token)
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    holds_unlisted_token = True
+    is_owner = owner is not None and _can_owner_view(owner, job)
+    is_lan = is_trusted_lan_request(request, settings)
+    if not (holds_unlisted_token or is_owner or is_lan):  # pragma: no cover
+        raise HTTPException(status_code=404, detail="job not found")
+
+    rel, ctype = _ALLOWED_ARTIFACTS[artifact_name]
+    file_path = _PathLib(settings.artifact_root) / job_token / "exports" / rel
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="artifact not yet ready")
+
+    return FileResponse(path=str(file_path), media_type=ctype, filename=rel)
 
 
 @router.get("/share/{job_token}/{artifact_name}", tags=["share"])

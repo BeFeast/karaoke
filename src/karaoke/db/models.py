@@ -29,6 +29,7 @@ class JobStatus(enum.StrEnum):
     downloading = "downloading"
     separating = "separating"
     transcribing = "transcribing"
+    finalizing = "finalizing"
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"

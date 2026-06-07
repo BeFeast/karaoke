@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite+aiosqlite:///./karaoke.db"
 
+    # Valkey / Redis FIFO queue used by the coordinator skeleton.
+    redis_url: str = "redis://localhost:6379/0"
+    redis_queue_key: str = "karaoke:jobs"
+    redis_running_key: str = "karaoke:running"
+
     # HTTP / CORS
     cors_origins: str = ""  # comma-separated; empty = none
 

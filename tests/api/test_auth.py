@@ -82,7 +82,7 @@ def test_anonymous_post_jobs_is_rejected_without_lan_trust(monkeypatch, client):
 def test_trusted_lan_caller_can_create_job(client):
     # conftest grants testclient LAN trust.
     response = client.post("/jobs", json={"url": "https://example.com/song"})
-    assert response.status_code == 201, response.text
+    assert response.status_code == 202, response.text
     payload = response.json()
     assert payload["owner_subject"] == "lan-default"
     assert payload["share_url"].startswith("http://test.local/share/")
@@ -94,7 +94,7 @@ def test_machine_bearer_token_is_accepted(client):
         json={"url": "https://example.com/song"},
         headers={"Authorization": "Bearer test-service-token"},
     )
-    assert response.status_code == 201, response.text
+    assert response.status_code == 202, response.text
     assert response.json()["owner_subject"] == "lan-default"
 
 
@@ -135,7 +135,7 @@ def test_clerk_jwt_in_test_mode_is_accepted(client):
         json={"url": "https://example.com/song"},
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert response.status_code == 201, response.text
+    assert response.status_code == 202, response.text
     payload = response.json()
     assert payload["owner_subject"] == "user_clerk_abc"
 
@@ -160,7 +160,7 @@ def test_extension_token_is_accepted(client):
         json={"url": "https://example.com/song"},
         headers={"Authorization": f"Bearer {raw}"},
     )
-    assert response.status_code == 201, response.text
+    assert response.status_code == 202, response.text
     assert response.json()["owner_subject"] == "user_ext_42"
 
 

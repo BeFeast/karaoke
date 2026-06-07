@@ -46,7 +46,7 @@ def test_post_jobs_accepts_and_stashes_cookies(client, monkeypatch):
     _no_worker(monkeypatch)
     blob = _valid_blob()
     resp = client.post("/jobs", json={"url": "https://yt/x", "youtube_cookies": blob})
-    assert resp.status_code == 201, resp.text
+    assert resp.status_code == 202, resp.text
     job_id = resp.json()["id"]
     # Carried in the ephemeral registry keyed by job id — popping it proves the
     # blob was held in memory (never the DB) and is exactly what was submitted.
@@ -58,7 +58,7 @@ def test_post_jobs_accepts_and_stashes_cookies(client, monkeypatch):
 def test_post_jobs_without_cookies_stashes_nothing(client, monkeypatch):
     _no_worker(monkeypatch)
     resp = client.post("/jobs", json={"url": "https://yt/x"})
-    assert resp.status_code == 201
+    assert resp.status_code == 202
     assert job_cookies.pop(resp.json()["id"]) is None
     assert job_cookies._PENDING == {}
 
@@ -68,7 +68,7 @@ def test_post_jobs_blank_cookies_treated_as_absent(client, monkeypatch):
     resp = client.post(
         "/jobs", json={"url": "https://yt/x", "youtube_cookies": "   \n  "}
     )
-    assert resp.status_code == 201
+    assert resp.status_code == 202
     assert job_cookies.pop(resp.json()["id"]) is None
 
 
@@ -112,7 +112,7 @@ def test_post_jobs_cookie_value_never_logged(client, monkeypatch, caplog):
         resp = client.post(
             "/jobs", json={"url": "https://yt/x", "youtube_cookies": _valid_blob()}
         )
-    assert resp.status_code == 201
+    assert resp.status_code == 202
     assert _SECRET not in caplog.text
 
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
-import secrets
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -44,6 +43,7 @@ async def run_mock_job(
         JobStatus.downloading,
         JobStatus.separating,
         JobStatus.transcribing,
+        JobStatus.finalizing,
     )
     for stage in stages:
         async with session_factory() as session:
@@ -55,6 +55,7 @@ async def run_mock_job(
                 JobStatus.downloading: 25,
                 JobStatus.separating: 60,
                 JobStatus.transcribing: 90,
+                JobStatus.finalizing: 95,
             }[stage]
             await session.commit()
         if sleep:
@@ -67,9 +68,6 @@ async def run_mock_job(
         job.status = JobStatus.completed
         job.progress = 100
         job.completed_at = dt.datetime.now(dt.UTC)
-        # Mock vast.ai bookkeeping.
-        job.vast_instance_id = f"mock-{secrets.token_hex(4)}"
-        job.vast_cost_micros = 0
         for kind, rel, ctype in _MOCK_ARTIFACTS:
             session.add(
                 Artifact(

@@ -58,18 +58,30 @@ def _seed_job(status: str, *, owner_subject: str = "lan-default") -> tuple[int, 
 def test_health_is_public(client):
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["ok"] is True
+    assert body["service"] == "karaoke-api"
+    assert set(body) == {
+        "ok",
+        "service",
+        "redis",
+        "db",
+        "device_mode",
+        "vast_configured",
+    }
 
 
 def test_post_jobs_returns_initial_payload(client):
     response = client.post("/jobs", json={"url": "https://example.com/song", "title": "Song"})
-    assert response.status_code == 201, response.text
+    assert response.status_code == 202, response.text
     body = response.json()
+    assert body["job_id"] == body["id"]
     assert body["source_url"] == "https://example.com/song"
     assert body["title"] == "Song"
     assert body["progress"] == 0
     assert body["status"] in {JobStatus.queued.value, JobStatus.downloading.value}
-    assert body["share_url"].startswith("http://test.local/share/")
+    assert body["share"].startswith("http://test.local/share/")
+    assert body["share_url"] == body["share"]
     assert body["job_token"] in body["share_url"]
 
 
@@ -80,7 +92,7 @@ def test_get_status_owner_isolation(client):
         json={"url": "https://x"},
         headers={"Authorization": f"Bearer {_clerk_jwt('alice')}"},
     )
-    assert create.status_code == 201, create.text
+    assert create.status_code == 202, create.text
     job = create.json()
 
     # Alice can read it.
@@ -98,11 +110,28 @@ def test_get_status_owner_isolation(client):
     assert other.status_code == 404
 
 
+def test_prd_status_endpoint_shape(client):
+    create = client.post("/jobs", json={"url": "https://example.com/song"})
+    assert create.status_code == 202, create.text
+    job_id = create.json()["job_id"]
+
+    response = client.get(f"/status/{job_id}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["job_id"] == job_id
+    assert body["status"] in {s.value for s in JobStatus}
+    assert body["stage"] == body["status"]
+    assert body["device"] == "cpu-local"
+    assert body["vast_cost"] is None
+    assert body["vast_instance_id"] is None
+    assert body["share"].startswith(f"http://test.local/share/{job_id}/")
+
+
 def test_share_endpoint_works_with_unlisted_token(client):
     """Anyone holding the job_token can fetch the share payload (it IS the secret)."""
     # Create as LAN-trusted (default conftest).
     create = client.post("/jobs", json={"url": "https://example.com/x", "title": "Tune"})
-    assert create.status_code == 201
+    assert create.status_code == 202
     token = create.json()["job_token"]
 
     # JSON path — same auth, but explicit Accept negotiates to the API payload.
@@ -244,7 +273,7 @@ def test_websocket_streams_progress_to_completion(client):
 def test_share_endpoint_renders_html_for_browsers(client):
     """Default Accept (or text/html) returns the HTML share page with audio tags."""
     create = client.post("/jobs", json={"url": "https://example.com/x", "title": "TuneHTML"})
-    assert create.status_code == 201
+    assert create.status_code == 202
     token = create.json()["job_token"]
 
     # Wait for the mock worker to populate Artifact rows.
@@ -265,6 +294,44 @@ def test_share_endpoint_renders_html_for_browsers(client):
     # Scribe-styled result page (not the bare 1996 template).
     assert 'class="player"' in body
     assert 'class="chip' in body
+
+
+def test_prd_share_endpoint_renders_html_and_inline_lyrics(client, tmp_path):
+    from karaoke.config import Settings, get_settings
+
+    job_id, token = _seed_job(JobStatus.completed.value)
+    _insert_artifact(
+        job_id,
+        kind="karaoke",
+        relative_path=f"{token}/exports/karaoke.mp3",
+        size_bytes=3,
+    )
+    _insert_artifact(
+        job_id,
+        kind="vocals",
+        relative_path=f"{token}/exports/vocals.mp3",
+        size_bytes=3,
+    )
+    exports = Path(tmp_path) / token / "exports"
+    exports.mkdir(parents=True, exist_ok=True)
+    (exports / "lyrics.txt").write_text("line one\nline two\n", encoding="utf-8")
+
+    def fake_settings() -> Settings:
+        return Settings(artifact_root=str(tmp_path), public_base_url="http://test.local")
+
+    client.app.dependency_overrides[get_settings] = fake_settings
+    try:
+        resp = client.get(f"/share/{job_id}/{token}", headers={"Accept": "text/html"})
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.text
+    assert f"/share/{job_id}/{token}/karaoke.mp3" in body
+    assert f"/share/{job_id}/{token}/vocals.mp3" in body
+    assert "<audio" in body
+    assert "line one" in body
+    assert "line two" in body
 
 
 def test_share_artifact_404_for_unknown_artifact_name(client):
@@ -385,7 +452,7 @@ def test_jobout_exposes_artifacts(client):
 def test_create_job_has_empty_artifacts(client):
     """A freshly created job projects an empty (not missing) artifacts list."""
     resp = client.post("/jobs", json={"url": "https://example.com/song"})
-    assert resp.status_code == 201, resp.text
+    assert resp.status_code == 202, resp.text
     assert resp.json()["artifacts"] == []
 
 
@@ -555,7 +622,7 @@ def test_me_returns_admin_for_trusted_lan(client):
 def test_list_jobs_returns_created_jobs(client):
     """A freshly created job shows up in the owner's job list."""
     create = client.post("/jobs", json={"url": "https://example.com/a", "title": "ListMe"})
-    assert create.status_code == 201
+    assert create.status_code == 202
     token = create.json()["job_token"]
 
     r = client.get("/jobs")
