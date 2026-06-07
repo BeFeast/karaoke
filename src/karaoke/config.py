@@ -156,6 +156,12 @@ class Settings(BaseSettings):
     # ~30-90s; killing it would throw away paid compute).
     runpod_queue_ceiling_s: float = 480.0  # 8 min max queue wait, then fail fast.
     runpod_wall_ceiling_s: float = 1200.0  # absolute backstop (status wedged).
+    # Transient GPU-capacity stalls (the job never leaves IN_QUEUE before the
+    # queue ceiling) are retriable: RunPod was cancelled before any compute
+    # ran, so re-submitting costs nothing and is idempotent. The coordinator
+    # re-submits up to this many times with a capped backoff before giving up.
+    # 0 restores the legacy fail-fast behaviour (one shot, then failed).
+    runpod_capacity_retries: int = 5
     # Conservative \$/hr estimate for cost projection mid-poll. RunPod's
     # cheapest 16-24GB Flex is \$0.58-0.68/hr; we use 0.68 (pessimistic).
     runpod_hourly_rate_estimate: float = 0.68

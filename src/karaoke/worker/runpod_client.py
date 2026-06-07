@@ -62,6 +62,14 @@ class RunpodTimeoutError(RunpodError):
     """The poll loop wall-clock exceeded the per-job ceiling without terminal."""
 
 
+class RunpodCapacityError(RunpodTimeoutError):
+    """The job never left IN_QUEUE before the queue ceiling — a transient GPU
+    capacity outage. The queued job is cancelled (no compute ran, no cost), so
+    this is safe to retry: the coordinator re-submits with backoff. Subclasses
+    RunpodTimeoutError so existing ``except RunpodTimeoutError`` callers and the
+    queue-ceiling tests keep working."""
+
+
 # ---------------------------------------------------------------------------
 # tiny http helper (urllib only — no extra runtime dep). Inject for tests.
 # ---------------------------------------------------------------------------
@@ -233,7 +241,7 @@ class RunpodClient:
                 # queue ceiling is a GPU capacity outage. NEVER applied once the
                 # job is IN_PROGRESS (we don't kill paid, running compute).
                 if not exec_phase and wall >= queue_ceiling:
-                    raise RunpodTimeoutError(
+                    raise RunpodCapacityError(
                         f"runpod job stuck in queue {wall:.0f}s > "
                         f"{queue_ceiling:.0f}s — GPU capacity busy, retry shortly "
                         f"(job_id={job_id})"
