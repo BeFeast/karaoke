@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # Public base URL used when constructing share links.
     public_base_url: str = "http://localhost:13140"
 
+    # WebSocket progress stream. The default FastAPI listener serves /ws on
+    # the HTTP port (:13140); :13141 is reserved if deployment later splits WS.
+    ws_heartbeat_interval_s: float = 5.0
+    ws_port: int = 13141
+
     # ---- Auth: machine bearer ----
     service_token: str = ""  # KARAOKE_SERVICE_TOKEN; empty disables.
 

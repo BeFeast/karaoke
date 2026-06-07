@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import datetime as dt
 import json
 import logging
@@ -16,8 +15,6 @@ from fastapi import (
     Depends,
     HTTPException,
     Request,
-    WebSocket,
-    WebSocketDisconnect,
     status,
 )
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -906,65 +903,6 @@ async def share_artifact(
         media_type=ctype,
         filename=rel,
     )
-
-
-# ---------------------------------------------------------------------------
-# WebSocket — live progress
-# ---------------------------------------------------------------------------
-
-
-@router.websocket("/ws")
-async def websocket_progress(websocket: WebSocket) -> None:
-    """Live-progress channel.
-
-    The client subscribes with ``{"action": "subscribe", "job_id": N}``
-    and receives status snapshots until the job is terminal or the
-    socket disconnects. Polling /jobs/{id}/status remains the
-    fallback channel.
-    """
-    await websocket.accept()
-    try:
-        msg = await websocket.receive_json()
-    except WebSocketDisconnect:
-        return
-
-    job_id = msg.get("job_id") if isinstance(msg, dict) else None
-    if not isinstance(job_id, int):
-        await websocket.send_json({"error": "expected {action: subscribe, job_id: int}"})
-        await websocket.close(code=1003)
-        return
-
-    factory = get_session_factory()
-    last_status: JobStatus | None = None
-    last_progress: int | None = None
-    terminal = {JobStatus.completed, JobStatus.failed, JobStatus.cancelled}
-
-    try:
-        while True:
-            async with factory() as session:
-                job = await session.get(Job, job_id)
-            if job is None:
-                await websocket.send_json({"error": "job not found"})
-                break
-            if job.status != last_status or job.progress != last_progress:
-                await websocket.send_json(
-                    {
-                        "job_id": job.id,
-                        "status": job.status.value,
-                        "progress": job.progress,
-                        "error": job.error,
-                    }
-                )
-                last_status = job.status
-                last_progress = job.progress
-            if job.status in terminal:
-                break
-            await asyncio.sleep(0.1)
-    except WebSocketDisconnect:
-        return
-    finally:
-        with contextlib.suppress(Exception):  # pragma: no cover - already closed
-            await websocket.close()
 
 
 # ---------------------------------------------------------------------------

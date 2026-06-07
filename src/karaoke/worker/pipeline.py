@@ -1,7 +1,6 @@
 """Real karaoke worker — async orchestrator.
 
-Lifecycle (mirrors the mock's status transitions so the existing ``/ws`` poller
-in ``routes.py`` keeps working):
+Lifecycle mirrors the WebSocket progress stream:
 
   queued
     → downloading   yt-dlp the source_url → audio; ffmpeg → working wav
@@ -10,10 +9,11 @@ in ``routes.py`` keeps working):
                     → vocals.wav + instrumental.wav.
     → transcribing  reuse the SAME instance window, POST /whisper on vocals.wav
                     → lyrics.txt + lyrics.json.
-    → completed     ffmpeg-encode instrumental→karaoke.mp3, vocals→vocals.mp3;
+    → finalizing    ffmpeg-encode instrumental→karaoke.mp3, vocals→vocals.mp3;
                     write lyrics.txt + metadata.json under
                     {artifact_root}/{job_token}/...; insert Artifact rows; set
                     Job completed/100/completed_at/vast_instance_id/vast_cost.
+    → completed
 
 On any exception the Job is marked failed (with ``error``) and the vast instance
 is guaranteed destroyed (``VastClient.run`` owns a ``finally`` teardown).
@@ -39,6 +39,12 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from karaoke.api.ws import (
+    publish_cost_update,
+    publish_cost_update_threadsafe,
+    publish_error,
+    publish_stage,
+)
 from karaoke.db.models import Artifact, Job, JobStatus
 from karaoke.titles import derive_metadata
 from karaoke.worker import job_cookies
@@ -356,6 +362,7 @@ async def _set_stage(
                 if value is not None and getattr(job, field) is None:
                     setattr(job, field, value)
         await session.commit()
+    await publish_stage(job_id, status, progress)
     return True
 
 
@@ -385,6 +392,8 @@ async def _mark_failed(
         job.status = JobStatus.failed
         job.error = error[:4000]
         await session.commit()
+    await publish_stage(job_id, JobStatus.failed, 100, error=error[:4000])
+    await publish_error(job_id, error[:4000])
 
 
 # ---------------------------------------------------------------------------
@@ -558,6 +567,9 @@ async def run_real_job(
             return
         source_url = job.source_url
         job_token = job.job_token
+        initial_progress = job.progress
+
+    await publish_stage(job_id, JobStatus.queued, initial_progress)
 
     artifact_root = Path(settings.artifact_root)
     job_root = artifact_root / job_token
@@ -623,9 +635,21 @@ async def run_real_job(
         if _use_runpod(settings):
             from karaoke.worker.runpod_client import RunpodClient
 
-            client = RunpodClient(settings, prior_24h_cost_micros=prior)
+            client = RunpodClient(
+                settings,
+                prior_24h_cost_micros=prior,
+                on_job_submitted=lambda runpod_id: publish_cost_update_threadsafe(
+                    job_id, 0.0, vast_instance_id=runpod_id
+                ),
+            )
         else:
-            client = VastClient(settings, prior_24h_cost_micros=prior)
+            client = VastClient(
+                settings,
+                prior_24h_cost_micros=prior,
+                on_instance_created=lambda instance_id: publish_cost_update_threadsafe(
+                    job_id, 0.0, vast_instance_id=instance_id
+                ),
+            )
 
         # VastClient.run is synchronous (urllib + ssh + httpx); offload it. It
         # runs BOTH /demucs (separating) and /whisper (transcribing) in one
@@ -648,6 +672,7 @@ async def run_real_job(
         )
 
         # --- finalize -------------------------------------------------------
+        await publish_stage(job_id, "finalizing", 95)
         exports_dir.mkdir(parents=True, exist_ok=True)
         karaoke_mp3 = exports_dir / "karaoke.mp3"
         vocals_mp3 = exports_dir / "vocals.mp3"
@@ -720,6 +745,10 @@ async def run_real_job(
             job.vast_instance_id = str(gpu.vast_instance_id)
             job.vast_cost_micros = round(gpu.vast_cost * 1_000_000)
             await session.commit()
+        await publish_cost_update(
+            job_id, gpu.vast_cost, vast_instance_id=gpu.vast_instance_id
+        )
+        await publish_stage(job_id, JobStatus.completed, 100)
     except Exception as exc:  # noqa: BLE001 — surface as a failed job, never crash the loop
         await _mark_failed(session_factory, job_id, f"{type(exc).__name__}: {exc}")
 

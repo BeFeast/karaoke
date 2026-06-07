@@ -14,6 +14,7 @@ import secrets
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from karaoke.api.ws import publish_cost_update, publish_stage
 from karaoke.db.models import Artifact, Job, JobStatus
 from karaoke.worker import job_cookies
 
@@ -45,6 +46,7 @@ async def run_mock_job(
         JobStatus.separating,
         JobStatus.transcribing,
     )
+    await publish_stage(job_id, JobStatus.queued, 0)
     for stage in stages:
         async with session_factory() as session:
             job = await session.get(Job, job_id)
@@ -56,10 +58,14 @@ async def run_mock_job(
                 JobStatus.separating: 60,
                 JobStatus.transcribing: 90,
             }[stage]
+            progress = job.progress
             await session.commit()
+        await publish_stage(job_id, stage, progress)
         if sleep:
             await asyncio.sleep(sleep)
 
+    await publish_stage(job_id, "finalizing", 95)
+    vast_instance_id: str | None = None
     async with session_factory() as session:
         job = await session.get(Job, job_id)
         if job is None or job.status in {JobStatus.cancelled, JobStatus.failed}:
@@ -69,6 +75,7 @@ async def run_mock_job(
         job.completed_at = dt.datetime.now(dt.UTC)
         # Mock vast.ai bookkeeping.
         job.vast_instance_id = f"mock-{secrets.token_hex(4)}"
+        vast_instance_id = job.vast_instance_id
         job.vast_cost_micros = 0
         for kind, rel, ctype in _MOCK_ARTIFACTS:
             session.add(
@@ -81,6 +88,8 @@ async def run_mock_job(
                 )
             )
         await session.commit()
+    await publish_cost_update(job_id, 0, vast_instance_id=vast_instance_id)
+    await publish_stage(job_id, JobStatus.completed, 100)
 
 
 def schedule_mock_job(

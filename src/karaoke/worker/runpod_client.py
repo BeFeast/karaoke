@@ -117,11 +117,15 @@ class RunpodClient:
         prior_24h_cost_micros: int = 0,
         http: Callable[..., tuple[int, dict]] | None = None,
         r2_uploader: Callable[..., str] | None = None,
+        on_job_submitted: Callable[[str], None] | None = None,
+        on_cost_update: Callable[[float], None] | None = None,
     ) -> None:
         self.settings = settings
         self.prior_24h_cost_micros = prior_24h_cost_micros
         self._http = http or _http
         self._r2_uploader = r2_uploader
+        self._on_job_submitted = on_job_submitted
+        self._on_cost_update = on_cost_update
         self._r2_put_urls: dict[str, str] = {}
         self._r2_output_keys: dict[str, str] = {}
 
@@ -227,6 +231,8 @@ class RunpodClient:
                     f"runpod /run failed: HTTP {code} body={body!r}"
                 )
             job_id = str(body["id"])
+            if self._on_job_submitted is not None:
+                self._on_job_submitted(job_id)
 
             # --- poll until terminal --------------------------------------
             while True:
@@ -249,6 +255,8 @@ class RunpodClient:
                 # Per-job cost guard. We check BEFORE each poll so a runaway
                 # job is killed before the next billing tick.
                 projected = self._project_cost(last_execution_ms, wall)
+                if self._on_cost_update is not None:
+                    self._on_cost_update(projected)
                 if max_job_cost > 0 and projected > max_job_cost:
                     raise RunpodBudgetError(
                         f"runpod per-job cost cap breached: projected "

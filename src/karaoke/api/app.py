@@ -11,6 +11,8 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from karaoke.api.routes import router
+from karaoke.api.ws import bind_event_loop, hub
+from karaoke.api.ws import router as ws_router
 from karaoke.config import Settings, get_settings
 from karaoke.db.session import init_engine, shutdown_engine
 
@@ -40,10 +42,13 @@ def _warm_jwks(settings: Settings) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     await init_engine(settings.database_url)
+    hub.reset()
+    bind_event_loop()
     _warm_jwks(settings)
     try:
         yield
     finally:
+        await hub.close()
         await shutdown_engine()
 
 
@@ -68,6 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.include_router(router)
+    app.include_router(ws_router)
 
     # Root redirect → Submitter SPA. Exact-path only, so it never shadows
     # /health, /jobs, /share, /me, /config, or /ws.

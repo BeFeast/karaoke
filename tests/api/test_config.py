@@ -84,3 +84,9 @@ def test_pot_provider_base_url_default_and_env_override():
     finally:
         os.environ.pop("KARAOKE_POT_PROVIDER_BASE_URL", None)
         reset_settings_for_tests()
+
+
+def test_ws_defaults_document_heartbeat_and_reserved_port():
+    settings = Settings()
+    assert settings.ws_heartbeat_interval_s == 5.0
+    assert settings.ws_port == 13141
