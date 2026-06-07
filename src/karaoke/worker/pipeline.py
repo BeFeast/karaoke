@@ -274,6 +274,25 @@ def _sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
+async def _asleep(seconds: float) -> None:
+    """Async indirection over ``asyncio.sleep`` so tests can patch the backoff."""
+    await asyncio.sleep(seconds)
+
+
+# Capped exponential backoff between RunPod re-submissions when GPU capacity
+# is busy. Index = retry attempt (0-based). Beyond the table we clamp to the
+# last value, so a large ``runpod_capacity_retries`` just keeps polling slowly.
+_CAPACITY_BACKOFF_S = (20.0, 40.0, 80.0, 120.0, 120.0)
+
+
+def _capacity_backoff(attempt: int) -> float:
+    """Backoff (seconds) before re-submitting after capacity stall ``attempt``."""
+    if attempt < 0:
+        attempt = 0
+    idx = min(attempt, len(_CAPACITY_BACKOFF_S) - 1)
+    return _CAPACITY_BACKOFF_S[idx]
+
+
 def _to_wav(src: Path, dest: Path) -> Path:
     """Normalize ``src`` to a 44.1 kHz stereo wav for separation."""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -359,7 +378,9 @@ async def _mark_failed(
 ) -> None:
     async with session_factory() as session:
         job = await session.get(Job, job_id)
-        if job is None:
+        # Never resurrect a job the user already cancelled (or one already
+        # failed) into a fresh 'failed' — that would clobber a terminal state.
+        if job is None or job.status in {JobStatus.cancelled, JobStatus.failed}:
             return
         job.status = JobStatus.failed
         job.error = error[:4000]
@@ -615,11 +636,15 @@ async def run_real_job(
         # aligns it against the vocal stem and returns a synced LRC (#55).
         if not await _set_stage(session_factory, job_id, JobStatus.transcribing, 75):
             return
-        gpu = await asyncio.to_thread(
-            functools.partial(
-                client.run, mix_wav, work_dir,
-                align_text=align_text, align_lang=align_lang,
-            )
+        gpu = await _run_gpu_with_capacity_retry(
+            session_factory,
+            job_id,
+            settings,
+            client,
+            mix_wav,
+            work_dir,
+            align_text=align_text,
+            align_lang=align_lang,
         )
 
         # --- finalize -------------------------------------------------------
@@ -697,6 +722,62 @@ async def run_real_job(
             await session.commit()
     except Exception as exc:  # noqa: BLE001 — surface as a failed job, never crash the loop
         await _mark_failed(session_factory, job_id, f"{type(exc).__name__}: {exc}")
+
+
+async def _run_gpu_with_capacity_retry(
+    session_factory: async_sessionmaker,
+    job_id: int,
+    settings,
+    client,
+    mix_wav: Path,
+    work_dir: Path,
+    *,
+    align_text: str | None,
+    align_lang: str | None,
+):
+    """Run the GPU stage, auto-retrying transient RunPod capacity stalls.
+
+    A ``RunpodCapacityError`` means the job sat IN_QUEUE past the queue
+    ceiling and was cancelled before any compute ran — no cost, idempotent.
+    Re-submitting after a short backoff almost always clears it (a busy GPU
+    pool frees up within seconds-to-minutes). Only after exhausting
+    ``settings.runpod_capacity_retries`` do we let the error propagate and
+    fail the job. Any other error (real GPU failure, budget, wall backstop)
+    is NOT retried. Honours user cancellation while we wait between attempts.
+    """
+    from karaoke.worker.runpod_client import RunpodCapacityError
+
+    retries = max(0, int(getattr(settings, "runpod_capacity_retries", 0) or 0))
+    for attempt in range(retries + 1):
+        try:
+            return await asyncio.to_thread(
+                functools.partial(
+                    client.run, mix_wav, work_dir,
+                    align_text=align_text, align_lang=align_lang,
+                )
+            )
+        except RunpodCapacityError as exc:
+            if attempt >= retries:
+                # Out of retries — surface the capacity error so the job
+                # fails with a clear, actionable message (Retry still works).
+                raise
+            # Stop retrying if the user cancelled the job while we waited.
+            async with session_factory() as session:
+                job = await session.get(Job, job_id)
+                if job is None or job.status in {
+                    JobStatus.cancelled,
+                    JobStatus.failed,
+                }:
+                    raise
+            delay = _capacity_backoff(attempt)
+            _log.warning(
+                "RunPod GPU capacity busy for job %s (attempt %d/%d): %s; "
+                "backing off %.0fs then re-submitting",
+                job_id, attempt + 1, retries + 1, exc, delay,
+            )
+            await _asleep(delay)
+    # Unreachable: the loop either returns a result or raises.
+    raise RuntimeError("capacity retry loop exited without result")
 
 
 def schedule_real_job(
