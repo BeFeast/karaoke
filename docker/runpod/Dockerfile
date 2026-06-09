@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.6
-# karaoke RunPod Serverless worker — GPU stages ONLY (Demucs separation + Whisper lyrics).
+# karaoke RunPod Serverless worker — GPU stages ONLY (BS-Roformer separation + Whisper lyrics).
 #
 # Mirrors docker/vast/Dockerfile but targets RunPod Serverless:
 #   - drops openssh-client (no SSH-tunneled HTTP path on Serverless)
@@ -7,7 +7,9 @@
 #   - adds the `runpod` SDK and a JSON-in/JSON-out handler entrypoint
 #
 # yt-dlp + ffmpeg-decode stays on the coordinator (devbox); this image
-# only runs Demucs (vocal/instrumental) + faster-whisper (lyrics).
+# only runs stem separation (BS-Roformer via audio-separator) +
+# faster-whisper (lyrics). The handler JSON I/O contract is unchanged from
+# the previous Demucs-based image — the "demucs" mode name is kept verbatim.
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -18,11 +20,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     HF_HUB_DISABLE_XET=1 \
     HF_HUB_DOWNLOAD_TIMEOUT=120 \
     TORCH_HOME="/root/.cache/torch" \
+    KARAOKE_SEP_MODEL_DIR="/opt/audio-separator-models" \
+    KARAOKE_SEP_MODEL="model_bs_roformer_ep_317_sdr_12.9755.ckpt" \
     PIP_NO_CACHE_DIR=1 \
     UV_NO_CACHE=1
 
-# ffmpeg stays: Demucs and faster-whisper both decode through it.
-# Demucs htdemucs needs torchaudio's ffmpeg backend.
+# ffmpeg stays: audio-separator and faster-whisper both decode through it.
 # Ubuntu 22.04 ships python3.10; pull python3.12 from deadsnakes PPA.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -50,30 +53,56 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/b
     && uv --version
 
 # Build the Python venv with what the worker imports at runtime:
-#   - torch / torchaudio CUDA 12.4 wheels (PyTorch official cu124 index)
-#   - demucs (htdemucs separation)
+#   - torch / torchaudio / torchvision CUDA 12.4 wheels (PyTorch cu124 index)
+#   - audio-separator[gpu] (BS-Roformer separation; replaces demucs htdemucs)
 #   - faster-whisper (large-v3-turbo lyrics transcription)
 #   - runpod (Serverless SDK; entrypoint calls runpod.serverless.start)
+#
+# Dependency-conflict resolution (#98):
+#   * audio-separator>=0.32 requires numpy>=2 and torch>=2.3. torch==2.4.* is
+#     the first torch release with numpy-2 ABI support (2.3 is NOT numpy-2
+#     safe), so numpy 2 is safe across torch/torchaudio/torchvision. numpy 2 +
+#     a numpy-2-built ctranslate2 (4.8, faster-whisper's backend) co-resolve.
+#   * audio-separator pulls onnx2torch-py313, which pulls torchvision. The
+#     latest torchvision pins torch==2.12, which would silently drag torch off
+#     the cu124 pin (uv re-resolves installed deps, unlike pip). We therefore
+#     PIN torch/torchaudio/torchvision to the 2.4 / 0.19 cu124 line in EVERY
+#     install that can touch them, and resolve with the cu124 index as primary
+#     + PyPI as extra under `unsafe-best-match` so the cu124 local wheels win
+#     while everything else comes from PyPI. Verified torch==2.4.1+cu124,
+#     torchaudio==2.4.1+cu124, torchvision==0.19.1+cu124, numpy==2.4.6.
+# Demucs is intentionally REMOVED: nothing else in this image imports it.
 RUN uv venv --python python3.12 /opt/karaoke-venv \
     && /opt/karaoke-venv/bin/python -m ensurepip --upgrade \
     && uv pip install --python /opt/karaoke-venv/bin/python \
         --index-url https://download.pytorch.org/whl/cu124 \
-        "torch==2.4.*" "torchaudio==2.4.*" \
-    && uv pip install --python /opt/karaoke-venv/bin/python \
-        "demucs>=4.0.1" \
+        --extra-index-url https://pypi.org/simple \
+        --index-strategy unsafe-best-match \
+        "torch==2.4.*" "torchaudio==2.4.*" "torchvision==0.19.*" \
+        "audio-separator[gpu]" \
         "faster-whisper>=1.1.1" \
         "runpod>=1.7.0" \
     && uv pip install --python /opt/karaoke-venv/bin/python \
+        --index-url https://download.pytorch.org/whl/cu124 \
+        --extra-index-url https://pypi.org/simple \
+        --index-strategy unsafe-best-match \
+        "torch==2.4.*" "torchaudio==2.4.*" "torchvision==0.19.*" \
         "transformers>=4.44,<5" \
         "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git" \
     && /opt/karaoke-venv/bin/pip uninstall -y hf_xet 2>/dev/null || true
 
-# Pre-cache Demucs htdemucs model weights at build time so cold-start
-# does not pay a model-download cost.
+# Pre-cache the BS-Roformer checkpoint (+ its arch config) at build time so
+# cold-start does not pay a model-download cost. load_model on CPU only
+# downloads/loads weights; runtime uses GPU when torch.cuda is available.
 RUN /opt/karaoke-venv/bin/python - <<'PY'
-from demucs.pretrained import get_model
-model = get_model("htdemucs")
-print("htdemucs cached:", type(model).__name__)
+import os
+from audio_separator.separator import Separator
+
+model_dir = os.environ["KARAOKE_SEP_MODEL_DIR"]
+model = os.environ["KARAOKE_SEP_MODEL"]
+sep = Separator(model_file_dir=model_dir, output_format="WAV")
+sep.load_model(model_filename=model)
+print("BS-Roformer cached:", model, "->", model_dir)
 PY
 
 # Pre-cache the large-v3-turbo Whisper model. CPU+int8 init only
@@ -108,21 +137,22 @@ RUN ffmpeg -version >/dev/null \
     && /opt/karaoke-venv/bin/python - <<'PY'
 import os
 import torch
-from demucs.pretrained import get_model
-from faster_whisper import WhisperModel
+from audio_separator.separator import Separator
+from faster_whisper import WhisperModel  # noqa: F401
 import runpod  # noqa: F401
 import ctc_forced_aligner  # noqa: F401
 print("torch version:", torch.__version__)
 print("torch cuda built:", torch.version.cuda)
-print("demucs htdemucs loadable:", type(get_model("htdemucs")).__name__)
+print("audio-separator import ok; Separator:", Separator.__name__)
 print("faster-whisper import ok")
 print("runpod sdk import ok")
 print("ctc-forced-aligner import ok")
 hf = os.environ.get("HF_HOME", "/root/.cache/huggingface")
-assert os.path.isdir(hf + "/hub"), "whisper model cache missing"
-th = os.environ.get("TORCH_HOME", "/root/.cache/torch")
-assert os.path.isdir(th), "torch model cache missing"
-print("model caches present:", hf, th)
+assert os.path.isdir(hf + "/hub"), "whisper/aligner model cache missing"
+sep_dir = os.environ["KARAOKE_SEP_MODEL_DIR"]
+sep_model = os.environ["KARAOKE_SEP_MODEL"]
+assert os.path.isfile(os.path.join(sep_dir, sep_model)), "BS-Roformer ckpt cache missing"
+print("model caches present:", hf, sep_dir)
 PY
 
 # Install the Serverless handler entrypoint. RunPod Serverless invokes
@@ -135,7 +165,8 @@ COPY handler.py /work/handler.py
 RUN /opt/karaoke-venv/bin/python -c "import py_compile; py_compile.compile('/work/handler.py', doraise=True)"
 
 LABEL org.opencontainers.image.title="karaoke RunPod Serverless worker" \
-      org.opencontainers.image.description="CUDA 12.4 GPU worker for karaoke on RunPod Serverless: pre-cached htdemucs (separation) + large-v3-turbo (lyrics). Coordinator owns yt-dlp/ffmpeg; this image runs GPU stages only via a JSON-in/JSON-out handler." \
+      org.opencontainers.image.description="CUDA 12.4 GPU worker for karaoke on RunPod Serverless: pre-cached BS-Roformer (model_bs_roformer_ep_317_sdr_12.9755, stem separation via audio-separator) + large-v3-turbo (lyrics). Coordinator owns yt-dlp/ffmpeg; this image runs GPU stages only via a JSON-in/JSON-out handler." \
+      org.opencontainers.image.version="cuda12.4-r5" \
       org.opencontainers.image.source="https://github.com/BeFeast/karaoke"
 
 ENTRYPOINT ["/opt/karaoke-venv/bin/python", "/work/handler.py"]
