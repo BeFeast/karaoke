@@ -13,6 +13,7 @@ FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ENV DEBIAN_FRONTEND=noninteractive \
+    VIRTUAL_ENV="/opt/karaoke-venv" \
     PATH="/opt/karaoke-venv/bin:/usr/local/bin:/root/.local/bin:${PATH}" \
     HF_HOME="/root/.cache/huggingface" \
     HF_HUB_DISABLE_XET=1 \
@@ -62,7 +63,7 @@ RUN uv venv --python python3.12 /opt/karaoke-venv \
     && uv pip install --python /opt/karaoke-venv/bin/python \
         "demucs>=4.0.1" \
         "faster-whisper>=1.1.1" \
-    && /opt/karaoke-venv/bin/pip uninstall -y hf_xet 2>/dev/null || true
+    && uv pip uninstall --python /opt/karaoke-venv/bin/python hf_xet 2>/dev/null || true
 
 # Pre-cache Demucs htdemucs model weights at build time so cold-start on
 # Vast does not pay a model-download cost. `demucs --help` triggers the
@@ -106,18 +107,18 @@ assert os.path.isdir(th), "torch model cache missing"
 print("model caches present:", hf, th)
 PY
 
-# Install the HTTP server entrypoint. The coordinator (devbox) SSH-tunnels
-# 8000 to this container and POSTs work to /demucs and /whisper.
+# Install the single-invocation entrypoint. The coordinator stages one
+# normalized input audio file and invokes this container once; the script runs
+# Demucs then faster-whisper sequentially and writes stable artifacts to the
+# provided output directory.
 WORKDIR /work
-COPY server.py /work/server.py
-
-EXPOSE 8000
+COPY entrypoint.py /work/entrypoint.py
 
 # Sanity-check the entrypoint imports cleanly (no model load).
-RUN /opt/karaoke-venv/bin/python -c "import py_compile; py_compile.compile('/work/server.py', doraise=True)"
+RUN /opt/karaoke-venv/bin/python -c "import py_compile; py_compile.compile('/work/entrypoint.py', doraise=True)"
 
 LABEL org.opencontainers.image.title="karaoke Vast worker (Demucs + Whisper)" \
       org.opencontainers.image.description="CUDA 12.4 GPU worker for karaoke: pre-cached htdemucs (separation) + large-v3-turbo (lyrics). Coordinator owns yt-dlp/ffmpeg; this image runs GPU stages only." \
       org.opencontainers.image.source="https://github.com/BeFeast/karaoke"
 
-ENTRYPOINT ["/opt/karaoke-venv/bin/python", "/work/server.py"]
+ENTRYPOINT ["uv", "run", "--no-project", "--active", "python", "/work/entrypoint.py"]
