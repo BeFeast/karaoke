@@ -69,6 +69,34 @@ purely code/docs and every acceptance criterion — including runtime/deploy ver
 is proven. Health-only / empty-queue / 404 screenshots do not satisfy a runtime acceptance
 criterion.
 
+## Releases & deploy
+
+Versioned-image release pipeline (#99), ported from scribe-service and adapted
+for the Dockhand-managed stack.
+
+- **Version surface:** `GET /health` returns `{"status":"ok","version":"X.Y.Z"}`,
+  read from the installed package metadata (`importlib.metadata.version("karaoke")`,
+  driven by `pyproject.toml`). The release-deploy verify step polls it.
+- **`scripts/release-deploy.sh <X.Y.Z>`** (runs on devbox): check out `vX.Y.Z`,
+  `docker build` -> `karaoke:X.Y.Z`, re-tag the served alias `karaoke:current`,
+  prune to keep-last-5, recreate via Dockhand, then verify `/health` version +
+  an optional authed `GET /jobs` canary; auto-rollback to the prior tag on
+  failure. `--rollback X.Y.Z` re-points without a rebuild. Idempotent + flock.
+- **HARD RULE:** the script (and any deploy) MUST recreate through Dockhand
+  (`KARAOKE_RECREATE_CMD`, default `/opt/stacks/karaoke/deploy.sh start`), never
+  `docker compose up/down/restart`. `docker build` / `docker tag` are allowed.
+- **Compose repoint (deploy-time, on devbox -- not in this repo):** the stack
+  `compose.yaml` must serve `image: karaoke:current` instead of building
+  `karaoke:local`, so deploy/rollback are re-tag + recreate. See
+  [`docs/runbooks/release-rollback.md`](docs/runbooks/release-rollback.md).
+- **CHANGELOG.md** carries one `vX.Y.Z` section per release, generated from the
+  merged PR titles in the tag range.
+- **Maestro auto-release (staged):** the operator's
+  `~/.maestro/maestro.d/karaoke.yaml` carries a staged (disabled) `versioning:`
+  + `deploy_cmd` block mirroring scribe's. When enabled, every merge auto-bumps
+  `pyproject.toml`, tags, releases, and deploys via the script. Until then,
+  releases are cut manually with `scripts/release-deploy.sh`.
+
 ## More context
 
 - Full PRD, architecture diagram, surfaces table, and provisioning status:

@@ -56,9 +56,11 @@ def _seed_job(status: str, *, owner_subject: str = "lan-default") -> tuple[int, 
 
 
 def test_health_is_public(client):
+    import karaoke
+
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json() == {"status": "ok", "version": karaoke.__version__}
 
 
 def test_post_jobs_returns_initial_payload(client):
