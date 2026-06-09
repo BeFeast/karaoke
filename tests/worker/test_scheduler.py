@@ -10,6 +10,7 @@ monkeypatched. Covers:
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 from pathlib import Path
 
@@ -356,6 +357,117 @@ def _patch_io(monkeypatch, pipeline):
     monkeypatch.setattr(pipeline, "_download_audio", fake_download)
     monkeypatch.setattr(pipeline, "_to_wav", fake_to_wav)
     monkeypatch.setattr(pipeline, "_wav_to_mp3", fake_wav_to_mp3)
+
+
+def _fake_cpu_result(work_dir: Path):
+    from karaoke.worker.vast_client import GpuJobResult
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    voc = work_dir / "cpu-vocals.wav"
+    inst = work_dir / "cpu-instrumental.wav"
+    ltxt = work_dir / "cpu-lyrics.txt"
+    ljson = work_dir / "cpu-lyrics.json"
+    for p, c in [(voc, b"v"), (inst, b"i"), (ltxt, b"cpu transcript"), (ljson, b"{}")]:
+        p.write_bytes(c)
+    return GpuJobResult(
+        vast_instance_id="cpu-local",
+        vast_cost=0.0,
+        gpu_model="cpu-local",
+        vocals_path=voc,
+        instrumental_path=inst,
+        lyrics_txt_path=ltxt,
+        lyrics_json_path=ljson,
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_real_job_falls_back_to_cpu_local_when_vast_key_missing(
+    factory, monkeypatch, tmp_path
+):
+    """Forced real path with no Vast key falls back to local CPU and records it."""
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.worker.cpu_local_client import CpuLocalClient
+    from karaoke.worker.lyrics import LyricsSource
+
+    _patch_io(monkeypatch, pipeline)
+    monkeypatch.setattr(
+        pipeline, "_LYRICS_SOURCE", LyricsSource(http=lambda *a, **k: (404, None))
+    )
+    monkeypatch.setattr(
+        CpuLocalClient,
+        "run",
+        lambda self, mix_wav, work_dir, *, align_text=None, align_lang=None: _fake_cpu_result(
+            work_dir
+        ),
+    )
+
+    job_id = await _make_job(factory)
+    settings = Settings(device_mode="vast", vast_api_key="", artifact_root=str(tmp_path))
+    await pipeline.run_real_job(factory, job_id, settings)
+
+    async with factory() as session:
+        job = await session.get(Job, job_id)
+        assert job.status == JobStatus.completed
+        assert job.vast_instance_id == "cpu-local"
+        assert job.vast_cost_micros == 0
+
+    metadata = json.loads((tmp_path / "tok-test" / "exports" / "metadata.json").read_text())
+    assert metadata["device"] == "cpu-local"
+    assert metadata["vast_instance_id"] == "cpu-local"
+    assert metadata["vast_cost"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_run_real_job_falls_back_to_cpu_local_when_vast_cap_exceeded(
+    factory, monkeypatch, tmp_path
+):
+    """A Vast budget refusal does not fail the job; CPU-local completes it."""
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.worker.cpu_local_client import CpuLocalClient
+    from karaoke.worker.lyrics import LyricsSource
+
+    _patch_io(monkeypatch, pipeline)
+    monkeypatch.setattr(
+        pipeline, "_LYRICS_SOURCE", LyricsSource(http=lambda *a, **k: (404, None))
+    )
+    monkeypatch.setattr(
+        CpuLocalClient,
+        "run",
+        lambda self, mix_wav, work_dir, *, align_text=None, align_lang=None: _fake_cpu_result(
+            work_dir
+        ),
+    )
+
+    async with factory() as session:
+        completed = Job(
+            job_token="tok-old",
+            owner_subject="owner",
+            source_url="https://example.com/old",
+            status=JobStatus.completed,
+            progress=100,
+            completed_at=dt.datetime.now(dt.UTC),
+            vast_cost_micros=1_000_000,
+        )
+        session.add(completed)
+        await session.commit()
+
+    job_id = await _make_job(factory)
+    settings = Settings(
+        device_mode="vast",
+        vast_api_key="k-real",
+        vast_daily_cost_cap=1.0,
+        vast_max_job_cost=0.35,
+        artifact_root=str(tmp_path),
+    )
+    await pipeline.run_real_job(factory, job_id, settings)
+
+    async with factory() as session:
+        job = await session.get(Job, job_id)
+        assert job.status == JobStatus.completed
+        assert job.vast_instance_id == "cpu-local"
+
+    metadata = json.loads((tmp_path / "tok-test" / "exports" / "metadata.json").read_text())
+    assert metadata["device"] == "cpu-local"
 
 
 @pytest.mark.asyncio

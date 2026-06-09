@@ -122,10 +122,11 @@ class Settings(BaseSettings):
 
     # Offer-selection / budget tunables (mirror scribe naming). Overridable via
     # Infisical (KARAOKE_VAST_*).
-    vast_max_price_per_hour: float = 2.0
+    vast_max_price_per_hour: float = 1.0
     vast_max_job_cost: float = 0.35  # per-job USD ceiling; refuse/abort beyond.
+    vast_max_instance_seconds: int = 1800  # hard wall-clock ceiling per rental.
     vast_min_cuda: float = 12.4  # never land on a host whose driver < CUDA 12.4.
-    vast_instance_ready_timeout: int = 600  # per-attempt startup budget (s); 10GB image cold-start.
+    vast_instance_ready_timeout: int = 360  # per-attempt startup budget (s).
     vast_offer_attempts: int = 12  # distinct offers tried per job.
     # GPU model allowlist (mirror scribe's regex shape, narrowed to the cards
     # that comfortably run htdemucs + faster-whisper large-v3-turbo).

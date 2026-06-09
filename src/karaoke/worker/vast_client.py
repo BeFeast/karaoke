@@ -14,7 +14,7 @@ Do not regress this.
 
 Budget rails honored here:
 - ``vast_max_job_cost`` — per-job USD ceiling (cost-budget deadline).
-- ``MAX_INSTANCE_SECONDS`` (= 1800) — hard wall-clock upper bound per instance.
+- ``vast_max_instance_seconds`` — hard wall-clock upper bound per instance.
 - ``vast_daily_cost_cap`` — rolling 24h USD ceiling; the job is REFUSED (no
   instance is provisioned) when the prior-24h spend would breach it.
 """
@@ -39,8 +39,8 @@ import httpx
 
 VAST_API = "https://console.vast.ai/api/v0"
 
-# Hard upper bound on a single instance's wall-clock budget; the per-job cost
-# guard (vast_max_job_cost) usually trips well before this.
+# Default hard upper bound on a single instance's wall-clock budget; the
+# env-backed settings value normally supplies this.
 MAX_INSTANCE_SECONDS = 1800
 
 # Vast instance status fields that mean the container will not become ready —
@@ -188,6 +188,8 @@ def _select_offers(
     for offer in offers:
         price = float(offer.get("dph_total") or 999)
         cuda = float(offer.get("cuda_max_good") or 0)
+        gpu_ram = float(offer.get("gpu_ram") or 16000)
+        num_gpus = int(offer.get("num_gpus") or 1)
         reliability = float(
             offer.get("reliability") or offer.get("reliability2") or 0
         )
@@ -197,6 +199,10 @@ def _select_offers(
         except (TypeError, ValueError):
             host_id = None
         if host_id is not None and host_id in excluded:
+            continue
+        if offer.get("verified") is False or offer.get("rentable") is False:
+            continue
+        if offer.get("rented") is True or num_gpus != 1 or gpu_ram < 16000:
             continue
         if (
             price <= max_price
@@ -637,6 +643,10 @@ class VastClient:
         max_price = float(self.settings.vast_max_price_per_hour)
         min_cuda = float(self.settings.vast_min_cuda)
         max_job_cost = float(self.settings.vast_max_job_cost)
+        max_instance_seconds = int(
+            getattr(self.settings, "vast_max_instance_seconds", MAX_INSTANCE_SECONDS)
+            or MAX_INSTANCE_SECONDS
+        )
         ready_timeout = int(self.settings.vast_instance_ready_timeout)
         offer_attempts = max(1, int(self.settings.vast_offer_attempts))
         image = self.settings.vast_image
@@ -658,7 +668,7 @@ class VastClient:
         host = port = None
         price = 0.0
         gpu_model = ""
-        deadline = started + MAX_INSTANCE_SECONDS
+        deadline = started + max_instance_seconds
         last_err: Exception | None = None
         attempts = 0
         excluded_hosts: set[int] = set()
@@ -680,7 +690,7 @@ class VastClient:
                 price = float(offer.get("dph_total") or 0)
                 gpu_model = str(offer.get("gpu_name") or "")
                 deadline = _budget_deadline(
-                    started, price, max_job_cost, MAX_INSTANCE_SECONDS
+                    started, price, max_job_cost, max_instance_seconds
                 )
                 try:
                     instance_id = self._create_instance(

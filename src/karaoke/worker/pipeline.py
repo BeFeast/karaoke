@@ -544,7 +544,7 @@ async def run_real_job(
     state (completed / failed) and never leaks a vast instance."""
     # Import here so the module is importable in CI without the worker deps.
     from karaoke.worker.scheduler import _use_runpod
-    from karaoke.worker.vast_client import VastClient
+    from karaoke.worker.vast_client import VastClient, VastError
 
     # Per-job ephemeral cookies (issue #77): claim the in-memory blob the
     # request handler stashed for this job, if any. Popped FIRST (before any
@@ -620,10 +620,18 @@ async def run_real_job(
         if not await _set_stage(session_factory, job_id, JobStatus.separating, 45):
             return
         prior = await _prior_24h_cost_micros(session_factory)
-        if _use_runpod(settings):
+        mode = (getattr(settings, "device_mode", "auto") or "auto").strip().lower()
+        provider_device = "vast"
+        if mode == "cpu-local":
+            from karaoke.worker.cpu_local_client import CpuLocalClient
+
+            client = CpuLocalClient(settings)
+            provider_device = "cpu-local"
+        elif _use_runpod(settings):
             from karaoke.worker.runpod_client import RunpodClient
 
             client = RunpodClient(settings, prior_24h_cost_micros=prior)
+            provider_device = "runpod"
         else:
             client = VastClient(settings, prior_24h_cost_micros=prior)
 
@@ -636,16 +644,38 @@ async def run_real_job(
         # aligns it against the vocal stem and returns a synced LRC (#55).
         if not await _set_stage(session_factory, job_id, JobStatus.transcribing, 75):
             return
-        gpu = await _run_gpu_with_capacity_retry(
-            session_factory,
-            job_id,
-            settings,
-            client,
-            mix_wav,
-            work_dir,
-            align_text=align_text,
-            align_lang=align_lang,
-        )
+        try:
+            gpu = await _run_gpu_with_capacity_retry(
+                session_factory,
+                job_id,
+                settings,
+                client,
+                mix_wav,
+                work_dir,
+                align_text=align_text,
+                align_lang=align_lang,
+            )
+        except VastError:
+            if provider_device == "cpu-local":
+                raise
+            from karaoke.worker.cpu_local_client import CpuLocalClient
+
+            _log.warning(
+                "Vast GPU stage failed for job %s; falling back to cpu-local",
+                job_id,
+                exc_info=True,
+            )
+            provider_device = "cpu-local"
+            gpu = await _run_gpu_with_capacity_retry(
+                session_factory,
+                job_id,
+                settings,
+                CpuLocalClient(settings),
+                mix_wav,
+                work_dir,
+                align_text=align_text,
+                align_lang=align_lang,
+            )
 
         # --- finalize -------------------------------------------------------
         exports_dir.mkdir(parents=True, exist_ok=True)
@@ -674,7 +704,7 @@ async def run_real_job(
             "album": source_meta.get("album"),
             "duration": source_meta.get("duration"),
             "source_url": source_url,
-            "device": "vast",
+            "device": provider_device,
             "gpu_model": gpu.gpu_model,
             "vast_instance_id": gpu.vast_instance_id,
             "vast_cost": round(gpu.vast_cost, 6),

@@ -65,6 +65,11 @@ def test_select_offers_filters_low_cuda_and_wrong_gpu(monkeypatch):
         _offer(id=5, gpu_name="L40S", cuda_max_good=12.5),       # keep
         _offer(id=6, gpu_name="RTX 4090", cuda_max_good=12.6, reliability=0.5),  # drop: reliability
         _offer(id=7, gpu_name="RTX 4090", cuda_max_good=12.6, dph_total=99.0),   # drop: price
+        _offer(id=8, verified=False),                            # drop: not verified
+        _offer(id=9, rentable=False),                             # drop: not rentable
+        _offer(id=10, rented=True),                               # drop: already rented
+        _offer(id=11, num_gpus=2),                                # drop: multi-GPU
+        _offer(id=12, gpu_ram=12000),                             # drop: <16GB
     ]
 
     def fake_vast(api_key, method, path, payload=None, timeout=45):
@@ -82,6 +87,29 @@ def test_select_offers_filters_low_cuda_and_wrong_gpu(monkeypatch):
     assert kept_ids == {1, 5}, kept_ids
     # Cheapest first ordering preserved.
     assert kept[0]["dph_total"] <= kept[-1]["dph_total"]
+
+
+def test_vast_max_instance_seconds_is_env_configurable(monkeypatch, tmp_path):
+    settings = _settings(vast_max_instance_seconds=7)
+    _wire_ready(monkeypatch)
+    captured: dict[str, object] = {}
+
+    def fake_budget_deadline(started, price, max_cost, max_seconds):
+        captured["max_seconds"] = max_seconds
+        return started + 60
+
+    monkeypatch.setattr(vc, "_budget_deadline", fake_budget_deadline)
+
+    client = VastClient(
+        settings,
+        vast_call=_create_returns(123),
+        destroy_fn=lambda api_key, iid: None,
+        forward_cls=_FakeForward,
+        post_zip=_make_post_zip([]),
+    )
+    client.run(tmp_path / "mix.wav", tmp_path / "work")
+
+    assert captured["max_seconds"] == 7
 
 
 def test_select_offers_raises_when_none_match(monkeypatch):
