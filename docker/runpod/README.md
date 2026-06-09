@@ -158,4 +158,3 @@ or pass smaller `mdxc`/`roformer` segment params to the `Separator` in
   large-v3-turbo pre-cache so cold-start does not re-download weights.
   (`docker/vast/` still runs Demucs htdemucs; the BS-Roformer swap is
   RunPod-only for now.)
-```

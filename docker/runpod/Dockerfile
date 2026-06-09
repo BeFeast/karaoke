@@ -72,6 +72,16 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/b
 #     while everything else comes from PyPI. Verified torch==2.4.1+cu124,
 #     torchaudio==2.4.1+cu124, torchvision==0.19.1+cu124, numpy==2.4.6.
 # Demucs is intentionally REMOVED: nothing else in this image imports it.
+#
+# Reproducibility: audio-separator and the ctc-forced-aligner git ref are
+# pinned to the exact versions that resolved in the verified build. NOTE: the
+# pushed r5 image (manifest
+# sha256:330e7d7926c47f49deeeccaa9f5ad8273c80447cda16b1426328b08058b1d65e) was
+# built from the then-unpinned specs just BEFORE these pins were written down;
+# the pins record exactly what that image contains -- audio-separator 0.44.2,
+# ctc-forced-aligner @ 264e7a1 (upstream default-branch HEAD as of the
+# 2026-06-09 build), torch 2.4.1+cu124 / torchaudio 2.4.1+cu124 /
+# torchvision 0.19.1+cu124, numpy 2.4.6, ctranslate2 4.8.0.
 RUN uv venv --python python3.12 /opt/karaoke-venv \
     && /opt/karaoke-venv/bin/python -m ensurepip --upgrade \
     && uv pip install --python /opt/karaoke-venv/bin/python \
@@ -79,7 +89,7 @@ RUN uv venv --python python3.12 /opt/karaoke-venv \
         --extra-index-url https://pypi.org/simple \
         --index-strategy unsafe-best-match \
         "torch==2.4.*" "torchaudio==2.4.*" "torchvision==0.19.*" \
-        "audio-separator[gpu]" \
+        "audio-separator[gpu]==0.44.2" \
         "faster-whisper>=1.1.1" \
         "runpod>=1.7.0" \
     && uv pip install --python /opt/karaoke-venv/bin/python \
@@ -88,7 +98,7 @@ RUN uv venv --python python3.12 /opt/karaoke-venv \
         --index-strategy unsafe-best-match \
         "torch==2.4.*" "torchaudio==2.4.*" "torchvision==0.19.*" \
         "transformers>=4.44,<5" \
-        "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git" \
+        "ctc-forced-aligner @ git+https://github.com/MahmoudAshraf97/ctc-forced-aligner.git@264e7a1f81bff9ff5e787a5537020c2ad0b0df02" \
     && /opt/karaoke-venv/bin/pip uninstall -y hf_xet 2>/dev/null || true
 
 # Pre-cache the BS-Roformer checkpoint (+ its arch config) at build time so
