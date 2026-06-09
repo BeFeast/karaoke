@@ -45,6 +45,17 @@ submitters, and `metadata.json` shows a real `vast_instance_id` + `vast_cost` an
 instance has been destroyed. Health-only / empty-queue / 404 screenshots are not acceptance
 evidence.
 
+## Releases
+
+Releases use versioned images (`karaoke:X.Y.Z`) with a moving `karaoke:current`
+alias. A release is cut on devbox with
+[`scripts/release-deploy.sh`](scripts/release-deploy.sh) `<X.Y.Z>`: build ->
+re-tag `karaoke:current` -> Dockhand recreate -> verify `GET /health` reports
+the deployed version (auto-rollback on failure). `--rollback <X.Y.Z>` re-points
+to a prior tag with no rebuild. Per-release notes live in
+[`CHANGELOG.md`](CHANGELOG.md); rollback + the one-time compose repoint in
+[`docs/runbooks/release-rollback.md`](docs/runbooks/release-rollback.md).
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE).

@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from karaoke import __version__
 from karaoke.api.routes import router
 from karaoke.config import Settings, get_settings
 from karaoke.db.session import init_engine, shutdown_engine
@@ -52,7 +53,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     app = FastAPI(
         title="karaoke",
-        version="0.1.0",
+        # Deploy-truth version (driven by pyproject.toml via importlib.metadata)
+        # so the OpenAPI doc and /health both report the released tag.
+        version=__version__,
         description="URL → vocals + instrumental playback + lyrics. Coordinator API.",
         lifespan=lifespan,
     )
