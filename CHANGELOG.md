@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.2.0] - 2026-06-09
+
+_Bump: minor_
+
+- feat(release): port scribe-service release pipeline (#100)
+
 ## [v0.1.0] - 2026-06-09
 
 _Baseline release — first tag. Aggregates every merged PR up to `e4f81be`._
