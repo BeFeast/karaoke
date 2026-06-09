@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from karaoke import __version__
 from karaoke.api.auth import (
     AuthState,
     Owner,
@@ -213,8 +214,8 @@ router = APIRouter()
 
 @router.get("/health", tags=["meta"])
 async def health() -> dict[str, str]:
-    """Liveness probe — no auth, no DB hit."""
-    return {"status": "ok"}
+    """Liveness probe — no auth, no DB hit. Reports the running version."""
+    return {"status": "ok", "version": __version__}
 
 
 @router.get("/config", response_model=ConfigOut, tags=["meta"])
