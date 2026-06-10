@@ -4,6 +4,13 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.3.0] - 2026-06-10
+
+_Bump: minor_
+
+- feat(gpu): upgrade stem separation htdemucs → BS-Roformer via audio-separator (#103)
+- chore(runpod): repoint template image to cuda12.4-r5 (BS-Roformer) (#106)
+
 ## [v0.2.0] - 2026-06-09
 
 _Bump: minor_
