@@ -69,6 +69,7 @@ class Job(Base):
         index=True,
     )
     progress: Mapped[int] = mapped_column(Integer, default=0)  # 0..100
+    stage_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # vast.ai bookkeeping (mocked in this skeleton).

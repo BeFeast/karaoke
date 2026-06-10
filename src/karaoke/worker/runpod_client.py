@@ -70,6 +70,14 @@ class RunpodCapacityError(RunpodTimeoutError):
     queue-ceiling tests keep working."""
 
 
+class RunpodColdStartError(RunpodCapacityError):
+    """RunPod reports workers initializing, usually while pulling the image."""
+
+    def __init__(self, message: str, *, workers_initializing: int) -> None:
+        super().__init__(message)
+        self.workers_initializing = workers_initializing
+
+
 # ---------------------------------------------------------------------------
 # tiny http helper (urllib only — no extra runtime dep). Inject for tests.
 # ---------------------------------------------------------------------------
@@ -97,6 +105,31 @@ def _http(
         except Exception:  # pragma: no cover - non-JSON error body
             payload = {}
         return exc.code, payload
+
+
+def _extract_workers_initializing(body: dict) -> int:
+    """Return RunPod endpoint health ``workers.initializing`` defensively."""
+    workers = body.get("workers")
+    if isinstance(workers, dict):
+        value = workers.get("initializing")
+        if isinstance(value, (int, float)):
+            return max(0, int(value))
+        return 0
+    if isinstance(workers, list):
+        total = 0
+        for worker in workers:
+            if not isinstance(worker, dict):
+                continue
+            state = str(
+                worker.get("status")
+                or worker.get("state")
+                or worker.get("desiredStatus")
+                or ""
+            ).lower()
+            if state == "initializing":
+                total += 1
+        return total
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +238,7 @@ class RunpodClient:
         run_url = f"{RUNPOD_REST}/{endpoint_id}/run"
         cancel_url_tpl = f"{RUNPOD_REST}/{endpoint_id}/cancel/{{id}}"
         status_url_tpl = f"{RUNPOD_REST}/{endpoint_id}/status/{{id}}"
+        health_url = f"{RUNPOD_REST}/{endpoint_id}/health"
 
         job_id: str | None = None
         terminal = False
@@ -241,6 +275,18 @@ class RunpodClient:
                 # queue ceiling is a GPU capacity outage. NEVER applied once the
                 # job is IN_PROGRESS (we don't kill paid, running compute).
                 if not exec_phase and wall >= queue_ceiling:
+                    initializing = self._workers_initializing(
+                        health_url, api_key, request_timeout
+                    )
+                    if initializing > 0:
+                        raise RunpodColdStartError(
+                            f"runpod job stuck in queue {wall:.0f}s > "
+                            f"{queue_ceiling:.0f}s while "
+                            f"{initializing} worker(s) initialize — GPU image "
+                            f"pull in progress, retry without burning capacity "
+                            f"budget (job_id={job_id})",
+                            workers_initializing=initializing,
+                        )
                     raise RunpodCapacityError(
                         f"runpod job stuck in queue {wall:.0f}s > "
                         f"{queue_ceiling:.0f}s — GPU capacity busy, retry shortly "
@@ -303,6 +349,13 @@ class RunpodClient:
                         timeout=request_timeout,
                     )
 
+    def _workers_initializing(
+        self, health_url: str, api_key: str, request_timeout: int
+    ) -> int:
+        code, body = self._http("GET", health_url, api_key, None, timeout=request_timeout)
+        if code != 200:
+            return 0
+        return _extract_workers_initializing(body)
 
     # -- R2 upload (presigned audio URL bypasses RunPod's ~10MB body cap) ----
     def _r2_configured(self) -> bool:
