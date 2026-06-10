@@ -52,6 +52,8 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/b
         || (mkdir -p /root/.local/bin && ln -sf /usr/local/bin/uv /root/.local/bin/uv)) \
     && uv --version
 
+# runpod PINNED to 1.9.0: 1.9.1 workers go ready on the platform but never
+# consume the queue (#98 r5 wedge). Never float the SDK again.
 # Build the Python venv with what the worker imports at runtime:
 #   - torch / torchaudio / torchvision CUDA 12.4 wheels (PyTorch cu124 index)
 #   - audio-separator[gpu] (BS-Roformer separation; replaces demucs htdemucs)
@@ -91,7 +93,7 @@ RUN uv venv --python python3.12 /opt/karaoke-venv \
         "torch==2.4.*" "torchaudio==2.4.*" "torchvision==0.19.*" \
         "audio-separator[gpu]==0.44.2" \
         "faster-whisper>=1.1.1" \
-        "runpod>=1.7.0" \
+        "runpod==1.9.0" \
     && uv pip install --python /opt/karaoke-venv/bin/python \
         --index-url https://download.pytorch.org/whl/cu124 \
         --extra-index-url https://pypi.org/simple \
@@ -176,7 +178,7 @@ RUN /opt/karaoke-venv/bin/python -c "import py_compile; py_compile.compile('/wor
 
 LABEL org.opencontainers.image.title="karaoke RunPod Serverless worker" \
       org.opencontainers.image.description="CUDA 12.4 GPU worker for karaoke on RunPod Serverless: pre-cached BS-Roformer (model_bs_roformer_ep_317_sdr_12.9755, stem separation via audio-separator) + large-v3-turbo (lyrics). Coordinator owns yt-dlp/ffmpeg; this image runs GPU stages only via a JSON-in/JSON-out handler." \
-      org.opencontainers.image.version="cuda12.4-r5" \
+      org.opencontainers.image.version="cuda12.4-r6" \
       org.opencontainers.image.source="https://github.com/BeFeast/karaoke"
 
 ENTRYPOINT ["/opt/karaoke-venv/bin/python", "/work/handler.py"]

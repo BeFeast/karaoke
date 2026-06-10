@@ -50,7 +50,7 @@ TEMPLATE_NAME = "karaoke-poc-tmpl"
 # Locked per issue #33. Coordinate with the lead before changing.
 TEMPLATE_SPEC: dict[str, Any] = {
     "name": TEMPLATE_NAME,
-    "imageName": "ghcr.io/befeast/karaoke-runpod:cuda12.4-r4",
+    "imageName": "ghcr.io/befeast/karaoke-runpod:cuda12.4-r6",
     "isServerless": True,
     "containerDiskInGb": 30,
     # The handler doesn't write a workspace; tiny volume is fine, but RunPod
