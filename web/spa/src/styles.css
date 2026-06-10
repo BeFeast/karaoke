@@ -958,6 +958,9 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   max-height: 420px;
   overflow: auto;
   scroll-behavior: smooth;
+  /* Anchor offsetParent here: the autoscroll centers lines via li.offsetTop,
+     which must be list-relative, not page-relative (#113). */
+  position: relative;
 }
 .synced-lyrics-line {
   text-align: center;
