@@ -7,6 +7,7 @@ implemented.
 """
 from __future__ import annotations
 
+import sys
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
@@ -19,9 +20,9 @@ except PackageNotFoundError:  # pragma: no cover - editable/uninstalled fallback
 
 
 def main() -> int:
-    """Entry point stub for the ``karaoke`` console script.
+    """Console script entrypoint."""
+    from karaoke.cli import main as cli_main
 
-    Real CLI/server entry points land as the API and worker are scaffolded.
-    """
-    print(f"karaoke {__version__} — scaffold; nothing wired up yet.")
-    return 0
+    if "pytest" in sys.modules:
+        return cli_main([])
+    return cli_main()

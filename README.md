@@ -10,7 +10,8 @@ with hard cost caps and guaranteed teardown. Auth is multi-layer (Clerk JWT, mac
 bearer, trusted-LAN, `ktx_` extension tokens) — scribe parity. Live progress is pushed
 over WebSocket. A Chrome extension (MV3, "Karaoke Submitter") submits the current tab.
 
-Status: **scaffolding** — just the empty seed; implementation tracked in issues.
+Status: API/worker scaffolding plus a CPU-local development pipeline. Production
+GPU jobs are still tracked in follow-up issues.
 
 ## Where things live
 
@@ -36,6 +37,56 @@ Status: **scaffolding** — just the empty seed; implementation tracked in issue
   (`karaoke-pot:4416`) supplies PO tokens. Setup, nightly canary, and rollback:
   [`docker/api/README.md`](docker/api/README.md) and
   [`docs/yt-dlp-runbook.md`](docs/yt-dlp-runbook.md).
+
+## CPU-local development loop
+
+M0 includes a local end-to-end runner for mining and validating the prototype
+pipeline without the API, database, WebSocket progress, auth, RunPod, or vast.ai:
+
+```bash
+uv sync --frozen --all-extras --all-groups
+uv run karaoke run "https://www.youtube.com/watch?v=..." --output-dir ./artifacts/test-job
+```
+
+The local runner expects the media tools to be available on the workstation:
+
+- `yt-dlp` from the pinned project dependency, with the same coordinator flags
+  used by the worker: YouTube player-client extractor args, optional bgutil PO
+  token provider, optional per-call cookies, and the EJS remote-component solver.
+- A JavaScript runtime for the EJS solver (`node`/`deno`, matching the
+  coordinator image setup).
+- `ffmpeg` on `PATH`.
+- `demucs` on `PATH`; the prototype `remove-vocals.sh` behavior is ported to
+  Python as `demucs --two-stems vocals -n htdemucs --device cpu`.
+- `faster-whisper` importable in the local environment for CPU transcription.
+
+The default device is intentionally `cpu-local`; any other `--device` is
+rejected by this CLI path. The production worker remains responsible for
+ephemeral GPU execution.
+
+The per-job artifact tree matches PRD §6 for the local runner:
+
+```text
+<job>/
+  source/
+    source.mp3
+  stems/
+    htdemucs/
+      source/
+        vocals.mp3
+        no_vocals.mp3
+  exports/
+    karaoke.mp3
+    vocals.mp3
+  lyrics/
+    lyrics.txt
+  logs/
+    worker.log
+  metadata.json
+```
+
+`metadata.json` records `"device": "cpu-local"` and does not include
+`vast_instance_id` or `vast_cost`.
 
 ## Verification gate
 
