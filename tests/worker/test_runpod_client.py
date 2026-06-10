@@ -20,6 +20,7 @@ from karaoke.config import Settings
 from karaoke.worker.runpod_client import (
     RunpodBudgetError,
     RunpodClient,
+    RunpodColdStartError,
     RunpodError,
     RunpodFailedError,
     RunpodTimeoutError,
@@ -562,12 +563,48 @@ def test_queue_ceiling_fails_fast_with_capacity_message(settings, tmp_path, monk
     rec = _Recorder([
         {"expect_in": "/run", "code": 200, "body": {"id": "rp-queue"}},
         {"expect_in": "/status/rp-queue", "code": 200, "body": {"status": "IN_QUEUE"}},
+        {"expect_in": "/health", "code": 200, "body": {"workers": {"initializing": 0}}},
         {"expect_in": "/cancel/rp-queue", "code": 200, "body": {}},
     ])
     client = RunpodClient(settings, http=rec)
     with pytest.raises(RunpodTimeoutError, match="capacity busy"):
         client.run(_mix_wav(tmp_path), tmp_path / "work")
     assert [c for c in rec.calls if "/cancel/rp-queue" in c[1]], "queue fail must cancel"
+
+
+def test_queue_ceiling_reports_cold_start_when_workers_initializing(
+    settings, tmp_path, monkeypatch
+):
+    """Workers initializing means image pull/cold start, not real capacity exhaustion."""
+    settings.runpod_queue_ceiling_s = 5.0
+    settings.runpod_wall_ceiling_s = 10000.0
+    settings.runpod_max_job_cost = 0.0
+    settings.runpod_daily_cost_cap = 0.0
+
+    import karaoke.worker.runpod_client as mod
+
+    ticks = iter([0.0, 0.0, 99.0, 99.0, 99.0, 99.0])
+
+    class _FakeTime:
+        def monotonic(self):
+            return next(ticks, 99.0)
+
+        def sleep(self, *_):
+            pass
+
+    monkeypatch.setattr(mod, "time", _FakeTime())
+
+    rec = _Recorder([
+        {"expect_in": "/run", "code": 200, "body": {"id": "rp-cold"}},
+        {"expect_in": "/status/rp-cold", "code": 200, "body": {"status": "IN_QUEUE"}},
+        {"expect_in": "/health", "code": 200, "body": {"workers": {"initializing": 2}}},
+        {"expect_in": "/cancel/rp-cold", "code": 200, "body": {}},
+    ])
+    client = RunpodClient(settings, http=rec)
+    with pytest.raises(RunpodColdStartError, match="image pull"):
+        client.run(_mix_wav(tmp_path), tmp_path / "work")
+    assert [c for c in rec.calls if "/health" in c[1]], "queue ceiling must peek health"
+    assert [c for c in rec.calls if "/cancel/rp-cold" in c[1]], "queued job is re-queued"
 
 
 def test_in_progress_not_killed_by_queue_ceiling(settings, tmp_path, monkeypatch):

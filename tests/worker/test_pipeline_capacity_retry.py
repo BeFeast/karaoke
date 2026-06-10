@@ -149,6 +149,61 @@ async def test_capacity_stall_retries_then_completes(factory, monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_cold_start_wait_does_not_burn_capacity_retry(
+    factory, monkeypatch, tmp_path
+):
+    """workers.initializing waits do not consume the capacity retry budget."""
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.worker.runpod_client import RunpodColdStartError
+
+    delays: list[float] = []
+    _patch_pipeline_io(pipeline, monkeypatch, delays)
+
+    job_id = await _make_job(factory)
+
+    async def assert_note_asleep(seconds: float) -> None:
+        delays.append(seconds)
+        async with factory() as session:
+            job = await session.get(Job, job_id)
+            assert job.status == JobStatus.transcribing
+            assert "GPU worker warming up" in (job.stage_note or "")
+
+    monkeypatch.setattr(pipeline, "_asleep", assert_note_asleep)
+
+    calls = {"n": 0}
+
+    def cold_then_ok(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RunpodColdStartError(
+                "runpod worker initializing during image pull",
+                workers_initializing=1,
+            )
+        return _gpu_result(work_dir)
+
+    from karaoke.worker.runpod_client import RunpodClient
+
+    monkeypatch.setattr(RunpodClient, "run", cold_then_ok)
+
+    await pipeline.run_real_job(
+        factory,
+        job_id,
+        _runpod_settings(
+            tmp_path,
+            runpod_capacity_retries=0,
+            runpod_queue_ceiling_s=7.0,
+        ),
+    )
+
+    assert calls["n"] == 2, "cold start re-queued despite zero capacity retries"
+    assert delays == [20.0]
+    async with factory() as session:
+        job = await session.get(Job, job_id)
+        assert job.status == JobStatus.completed
+        assert job.stage_note is None
+
+
+@pytest.mark.asyncio
 async def test_capacity_stall_exhausts_retries_then_fails(factory, monkeypatch, tmp_path):
     """Persistent capacity outage → fails only after exhausting retries, with a
     clear capacity message; re-submitted exactly retries+1 times."""
@@ -249,7 +304,7 @@ async def test_cancel_during_capacity_wait_stops_retry_and_keeps_cancelled(
         factory, job_id, _runpod_settings(tmp_path, runpod_capacity_retries=5)
     )
 
-    assert calls["n"] == 2, "one real attempt, one post-cancel attempt that aborts"
+    assert calls["n"] == 1, "cancelled during backoff before another RunPod submit"
     async with factory() as session:
         job = await session.get(Job, job_id)
         assert job.status == JobStatus.cancelled, "must NOT be flipped to failed"

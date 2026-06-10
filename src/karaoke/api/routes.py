@@ -114,6 +114,7 @@ class JobOut(BaseModel):
     track: str | None
     status: JobStatus
     progress: int
+    stage_note: str | None
     error: str | None
     share_url: str
     owner_subject: str
@@ -131,6 +132,7 @@ class JobOut(BaseModel):
             track=job.track,
             status=job.status,
             progress=job.progress,
+            stage_note=job.stage_note,
             error=job.error,
             share_url=share,
             owner_subject=job.owner_subject,
@@ -164,6 +166,7 @@ class SharePayload(BaseModel):
     track: str | None
     status: JobStatus
     progress: int
+    stage_note: str | None
     owner_display_name: str | None
     artifacts: list[ArtifactOut]
 
@@ -670,6 +673,7 @@ async def share_page(
             track=job.track,
             status=job.status,
             progress=job.progress,
+            stage_note=job.stage_note,
             owner_display_name=job.owner_display_name,
             artifacts=[
                 ArtifactOut(
@@ -938,6 +942,7 @@ async def websocket_progress(websocket: WebSocket) -> None:
     factory = get_session_factory()
     last_status: JobStatus | None = None
     last_progress: int | None = None
+    last_stage_note: str | None = None
     terminal = {JobStatus.completed, JobStatus.failed, JobStatus.cancelled}
 
     try:
@@ -947,17 +952,23 @@ async def websocket_progress(websocket: WebSocket) -> None:
             if job is None:
                 await websocket.send_json({"error": "job not found"})
                 break
-            if job.status != last_status or job.progress != last_progress:
+            if (
+                job.status != last_status
+                or job.progress != last_progress
+                or job.stage_note != last_stage_note
+            ):
                 await websocket.send_json(
                     {
                         "job_id": job.id,
                         "status": job.status.value,
                         "progress": job.progress,
+                        "stage_note": job.stage_note,
                         "error": job.error,
                     }
                 )
                 last_status = job.status
                 last_progress = job.progress
+                last_stage_note = job.stage_note
             if job.status in terminal:
                 break
             await asyncio.sleep(0.1)

@@ -334,6 +334,7 @@ async def _set_stage(
     *,
     title: str | None = None,
     metadata: dict | None = None,
+    stage_note: str | None = None,
 ) -> bool:
     """Advance the job to ``status``/``progress``. Returns False if the job is
     gone or already terminal (cancelled/failed) — the caller should stop.
@@ -348,6 +349,7 @@ async def _set_stage(
             return False
         job.status = status
         job.progress = progress
+        job.stage_note = stage_note
         if title and not job.title:
             job.title = title
         if metadata:
@@ -383,6 +385,7 @@ async def _mark_failed(
         if job is None or job.status in {JobStatus.cancelled, JobStatus.failed}:
             return
         job.status = JobStatus.failed
+        job.stage_note = None
         job.error = error[:4000]
         await session.commit()
 
@@ -716,6 +719,7 @@ async def run_real_job(
                 )
             job.status = JobStatus.completed
             job.progress = 100
+            job.stage_note = None
             job.completed_at = dt.datetime.now(dt.UTC)
             job.vast_instance_id = str(gpu.vast_instance_id)
             job.vast_cost_micros = round(gpu.vast_cost * 1_000_000)
@@ -745,17 +749,59 @@ async def _run_gpu_with_capacity_retry(
     fail the job. Any other error (real GPU failure, budget, wall backstop)
     is NOT retried. Honours user cancellation while we wait between attempts.
     """
-    from karaoke.worker.runpod_client import RunpodCapacityError
+    from karaoke.worker.runpod_client import RunpodCapacityError, RunpodColdStartError
 
     retries = max(0, int(getattr(settings, "runpod_capacity_retries", 0) or 0))
-    for attempt in range(retries + 1):
+    attempt = 0
+    cold_start_waits = 0
+    while attempt <= retries:
         try:
+            async with session_factory() as session:
+                job = await session.get(Job, job_id)
+                if job is None or job.status in {
+                    JobStatus.cancelled,
+                    JobStatus.failed,
+                }:
+                    raise PipelineError("job cancelled before RunPod retry")
+                job.status = JobStatus.transcribing
+                job.progress = 75
+                await session.commit()
             return await asyncio.to_thread(
                 functools.partial(
                     client.run, mix_wav, work_dir,
                     align_text=align_text, align_lang=align_lang,
                 )
             )
+        except RunpodColdStartError as exc:
+            cold_start_waits += 1
+            if not await _set_stage(
+                session_factory,
+                job_id,
+                JobStatus.transcribing,
+                75,
+                stage_note=(
+                    "GPU worker warming up (image pull) -- may take 10-30 min "
+                    "on first run"
+                ),
+            ):
+                raise
+            delay = max(
+                float(getattr(settings, "runpod_queue_ceiling_s", 480.0) or 480.0),
+                _capacity_backoff(min(cold_start_waits - 1, 5)),
+            )
+            _log.warning(
+                "RunPod GPU worker warming for job %s (workers.initializing=%s; "
+                "capacity attempt %d/%d unchanged): %s; waiting %.0fs then "
+                "re-submitting",
+                job_id,
+                exc.workers_initializing,
+                attempt + 1,
+                retries + 1,
+                exc,
+                delay,
+            )
+            await _asleep(delay)
+            continue
         except RunpodCapacityError as exc:
             if attempt >= retries:
                 # Out of retries — surface the capacity error so the job
@@ -769,12 +815,15 @@ async def _run_gpu_with_capacity_retry(
                     JobStatus.failed,
                 }:
                     raise
+                job.stage_note = None
+                await session.commit()
             delay = _capacity_backoff(attempt)
             _log.warning(
                 "RunPod GPU capacity busy for job %s (attempt %d/%d): %s; "
                 "backing off %.0fs then re-submitting",
                 job_id, attempt + 1, retries + 1, exc, delay,
             )
+            attempt += 1
             await _asleep(delay)
     # Unreachable: the loop either returns a result or raises.
     raise RuntimeError("capacity retry loop exited without result")
