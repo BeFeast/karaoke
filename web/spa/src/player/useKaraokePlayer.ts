@@ -27,7 +27,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 
 /** Largest follower/​master gap we tolerate before a hard re-seek (seconds). */
-const DRIFT_TOLERANCE = 0.06;
+const HARD_DRIFT_S = 0.25;
+/** Dead zone below which the follower counts as in sync (seconds). */
+const SYNC_DEADZONE_S = 0.03;
+/** Max relative playbackRate skew used to reel the follower in. */
+const MAX_RATE_SKEW = 0.04;
 /** Available playback speeds for the rate control. */
 export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5] as const;
 
@@ -182,11 +186,28 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
     // ── Keep the vocal follower synced to the instrumental master ──────────
     const syncVocal = (hard: boolean) => {
       if (!vocalEl) return;
+      // Don't fight the element mid-seek or before it has decodable data —
+      // corrections issued in that state queue up and land late, causing skips.
+      if (vocalEl.seeking || vocalEl.readyState < 2 /* HAVE_CURRENT_DATA */) return;
       const t = instEl.currentTime;
-      if (hard || Math.abs(vocalEl.currentTime - t) > DRIFT_TOLERANCE) {
+      const drift = vocalEl.currentTime - t;
+      if (hard || Math.abs(drift) > HARD_DRIFT_S) {
+        // Transport events (play/pause/seek) or a real desync: snap once.
         vocalEl.currentTime = t;
+        vocalEl.playbackRate = instEl.playbackRate;
+        return;
       }
-      vocalEl.playbackRate = instEl.playbackRate;
+      // Steady playback: NEVER write currentTime — each write is an audible
+      // click/skip when the vocals are layered over the instrumental (#113
+      // "garbled" audio). Instead reel the follower in by skewing its rate
+      // a few percent toward the master until the drift is inside the dead
+      // zone. Pitch preservation makes a ≤4% skew inaudible.
+      if (Math.abs(drift) <= SYNC_DEADZONE_S) {
+        vocalEl.playbackRate = instEl.playbackRate;
+      } else {
+        const skew = Math.max(-MAX_RATE_SKEW, Math.min(MAX_RATE_SKEW, -drift * 0.5));
+        vocalEl.playbackRate = instEl.playbackRate * (1 + skew);
+      }
     };
 
     const onInstError = () => {

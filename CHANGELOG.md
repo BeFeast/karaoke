@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.3.1] - 2026-06-11
+
+_Bump: patch_
+
+- fix(player): lyrics autoscroll offsetParent + gentle dual-stem follower sync (#114)
+
 ## [v0.3.0] - 2026-06-10
 
 _Bump: minor_
