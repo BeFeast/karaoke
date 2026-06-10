@@ -3,6 +3,12 @@
 Mirrors the GPU stages of `docker/vast/server.py` but exposes them as a
 JSON-in / JSON-out Serverless handler instead of an HTTP server.
 
+Stem separation runs **BS-Roformer** via ``audio-separator`` (replacing the
+old Demucs ``htdemucs``); lyrics transcription runs ``faster-whisper``. The
+handler's JSON input/output contract is unchanged — the ``"demucs"`` mode
+name is kept verbatim for backward compatibility with the coordinator even
+though the underlying engine is now BS-Roformer.
+
 Input (``event["input"]``)::
 
     {
@@ -12,7 +18,7 @@ Input (``event["input"]``)::
       "align_lang": "eng"                              # optional ISO-639-3
     }
 
-When ``align_text`` is present (and Demucs ran, i.e. ``mode != "whisper"``),
+When ``align_text`` is present (and separation ran, i.e. ``mode != "whisper"``),
 the handler force-aligns that text against the separated vocal stem with
 ``ctc-forced-aligner`` (MMS-300m) and returns a synthesized line-level LRC in
 ``aligned_lrc``. This is purely additive: an old handler that ignores
@@ -35,7 +41,7 @@ Output (returned to RunPod as JSON)::
        "lyrics_txt": str, "lyrics_json": dict,
        "gpu_model": str, "elapsed_s": float}
 
-    + optional (any mode that ran Demucs, when ``align_text`` was supplied
+    + optional (any mode that ran separation, when ``align_text`` was supplied
       and alignment succeeded):
       {"aligned_lrc": str, "aligned_lang": str}
 
@@ -47,7 +53,6 @@ from __future__ import annotations
 import base64
 import logging
 import os
-import subprocess
 import tempfile
 import threading
 import time
@@ -66,6 +71,19 @@ _GPU_LOCK = threading.Lock()
 # Lazy-loaded faster-whisper model; mirrors server.py's _get_whisper pattern.
 _WHISPER_MODEL: Any = None
 _WHISPER_LOCK = threading.Lock()
+
+# Lazy-loaded audio-separator BS-Roformer model. Same lazy-load shape as the
+# Whisper model so the (large) separation weights only load when a job actually
+# runs separation — a whisper-only job never constructs the Separator.
+_SEPARATOR: Any = None
+_SEP_LOCK = threading.Lock()
+# BS-Roformer checkpoint, pre-cached into the image (see Dockerfile). The model
+# dir MUST match the Dockerfile pre-cache path so cold-start reuses the baked-in
+# weights instead of re-downloading from the audio-separator model host.
+_SEP_MODEL_DIR = os.environ.get("KARAOKE_SEP_MODEL_DIR", "/opt/audio-separator-models")
+_SEP_MODEL = os.environ.get(
+    "KARAOKE_SEP_MODEL", "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
+)
 
 # Lazy-loaded ctc-forced-aligner model/tokenizer (#55). Same lazy-load shape as
 # the Whisper model so the aligner weights only load when a job actually needs
@@ -117,42 +135,93 @@ def _get_whisper():
     return _WHISPER_MODEL
 
 
-def _run_demucs(input_wav: Path, out_dir: Path) -> tuple[Path, Path]:
-    """Run Demucs htdemucs and return (vocals.wav, no_vocals.wav)."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "/opt/karaoke-venv/bin/python",
-        "-m",
-        "demucs.separate",
-        "-n",
-        "htdemucs",
-        "--two-stems",
-        "vocals",
-        "-o",
-        str(out_dir),
-        str(input_wav),
-    ]
-    LOG.info("demucs cmd: %s", " ".join(cmd))
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"demucs failed rc={proc.returncode}\n"
-            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-        )
-    stem = input_wav.stem
-    base = out_dir / "htdemucs" / stem
-    vocals = base / "vocals.wav"
-    instrumental = base / "no_vocals.wav"
-    if not vocals.exists() or not instrumental.exists():
-        cand_v = list(out_dir.rglob("vocals.wav"))
-        cand_i = list(out_dir.rglob("no_vocals.wav"))
-        if cand_v and cand_i:
-            vocals, instrumental = cand_v[0], cand_i[0]
-        else:
-            raise RuntimeError(
-                f"demucs output missing under {out_dir}; found: "
-                f"{[p.as_posix() for p in out_dir.rglob('*.wav')]}"
+def _get_separator():
+    """Lazy-load the audio-separator Separator with the BS-Roformer model.
+
+    Mirrors ``_get_whisper``: construct once, reuse across jobs on the worker.
+    The (large) checkpoint loads on first use; a whisper-only job never triggers
+    this. audio-separator picks CUDA automatically when ``torch.cuda`` is
+    available and falls back to CPU otherwise (used by the build smoke test).
+    """
+    global _SEPARATOR
+    if _SEPARATOR is not None:
+        return _SEPARATOR
+    with _SEP_LOCK:
+        if _SEPARATOR is None:
+            from audio_separator.separator import Separator  # type: ignore
+
+            log_level = getattr(
+                logging,
+                os.environ.get("KARAOKE_LOG_LEVEL", "INFO").upper(),
+                logging.INFO,
             )
+            LOG.info(
+                "loading audio-separator model %s (dir=%s)",
+                _SEP_MODEL,
+                _SEP_MODEL_DIR,
+            )
+            sep = Separator(
+                model_file_dir=_SEP_MODEL_DIR,
+                output_format="WAV",
+                log_level=log_level,
+            )
+            sep.load_model(model_filename=_SEP_MODEL)
+            _SEPARATOR = sep
+    return _SEPARATOR
+
+
+def _pick_stem(paths: list[Path], token: str) -> Path | None:
+    """Return the first path whose filename contains ``token`` (case-insensitive)."""
+    for p in paths:
+        if token in p.name.lower():
+            return p
+    return None
+
+
+def _run_separation(input_wav: Path, out_dir: Path) -> tuple[Path, Path]:
+    """Separate ``input_wav`` into (vocals.wav, instrumental.wav) via BS-Roformer.
+
+    Uses audio-separator's BS-Roformer model (replacing Demucs htdemucs). The
+    return contract is unchanged from the old ``_run_demucs``: a
+    ``(vocals_path, instrumental_path)`` pair of WAV files, where
+    ``instrumental_path`` is the non-vocal stem (the old ``no_vocals.wav`` role).
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sep = _get_separator()
+    # One job at a time (the handler holds _GPU_LOCK), so mutating output_dir on
+    # the shared Separator is safe. audio-separator captures output_dir into the
+    # loaded architecture instance (``model_instance``) at load_model() time, so
+    # reassigning ``sep.output_dir`` alone does NOT redirect output — the
+    # model_instance must be updated too, or stems land in the process CWD.
+    sep.output_dir = str(out_dir)
+    _model_instance = getattr(sep, "model_instance", None)
+    if _model_instance is not None and hasattr(_model_instance, "output_dir"):
+        _model_instance.output_dir = str(out_dir)
+    # Force deterministic stem filenames so the mapping below is unambiguous.
+    outputs = sep.separate(
+        str(input_wav),
+        custom_output_names={"Vocals": "vocals", "Instrumental": "instrumental"},
+    )
+    paths: list[Path] = []
+    for name in outputs or []:
+        p = Path(name)
+        if not p.is_absolute():
+            p = out_dir / p
+        paths.append(p)
+    # Map stems robustly: prefer the names audio-separator returned, fall back to
+    # globbing the output dir if the returned shape is unexpected.
+    vocals = _pick_stem(paths, "vocal")
+    instrumental = _pick_stem(paths, "instrument")
+    if vocals is None or instrumental is None:
+        wavs = sorted(out_dir.rglob("*.wav"))
+        vocals = vocals or _pick_stem(wavs, "vocal")
+        instrumental = instrumental or _pick_stem(wavs, "instrument")
+    if vocals is None or instrumental is None:
+        raise RuntimeError(
+            f"audio-separator output missing vocals/instrumental under {out_dir}; "
+            f"separate() returned {[p.as_posix() for p in paths]}; "
+            f"found {[p.as_posix() for p in out_dir.rglob('*.wav')]}"
+        )
     return vocals, instrumental
 
 
@@ -354,8 +423,8 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("unknown mode")
 
     # Optional force-alignment of supplied plain lyrics against the vocal stem
-    # (#55). Only meaningful when Demucs runs (we need the vocal stem). Absent →
-    # behave exactly as before.
+    # (#55). Only meaningful when separation runs (we need the vocal stem).
+    # Absent → behave exactly as before.
     align_text = job_input.get("align_text")
     if align_text is not None and not isinstance(align_text, str):
         raise ValueError("align_text must be a string")
@@ -400,7 +469,7 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
 
         if mode in ("demucs", "both"):
             out_dir = tmp_path / "out"
-            vocals_path, instrumental_path = _run_demucs(in_wav, out_dir)
+            vocals_path, instrumental_path = _run_separation(in_wav, out_dir)
             # Force-align supplied plain lyrics against the vocal stem (#55).
             # Best-effort: a failure here must NOT fail the job — the
             # coordinator falls back to the plain text / Whisper transcript.
