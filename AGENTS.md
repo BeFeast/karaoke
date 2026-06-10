@@ -53,6 +53,25 @@ authoritative**.
    runtime — service token, Clerk publishable + secret + JWKS issuer, Postgres URL,
    vast.ai API key, public base URL.
 
+## Provisioning status
+
+- **TrueNAS artifact path is live:** `Odin/lxc-shared/karaoke`
+  (`/mnt/Odin/lxc-shared/karaoke` on Odin). The parent NFS export is
+  `/mnt/Odin/lxc-shared` from `10.10.0.15`, exported to `10.10.0.0/24`, which
+  covers `devbox` (`10.10.0.13`).
+- **Docker NFS volume opts verified from devbox:**
+  `--driver local --opt type=nfs --opt o=addr=10.10.0.15,nfsvers=4,rw --opt device=:/mnt/Odin/lxc-shared`.
+  Mount the volume in the coordinator and set `KARAOKE_ARTIFACT_ROOT` to the
+  mounted `karaoke` subdirectory (default container path remains
+  `/srv/artifacts`).
+- **Permissions observed during the devbox probe:** `/mnt/Odin/lxc-shared/karaoke`
+  is `1000:1000` with mode `755`. The current coordinator image has no
+  non-root `USER`, so worker-created job directories/files land as `0:0` over
+  NFS; existing job directories and the `.probe` write confirmed that mapping.
+- **Runbook:** see [`docs/runbooks/nfs-artifacts.md`](docs/runbooks/nfs-artifacts.md)
+  for the throwaway Docker probe and the `[[devbox_docker_nfs_volume_pattern]]`
+  reference.
+
 ## Verification gate (before a PR)
 
 ```bash
