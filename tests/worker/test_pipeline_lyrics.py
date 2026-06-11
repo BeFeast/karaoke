@@ -6,9 +6,10 @@ async job / GPU / DB machinery — plus one end-to-end ``run_real_job`` check
 (mocked yt-dlp/ffmpeg/GPU/LRCLIB) that a duration hard-reject (#148) lands in
 ``exports/metadata.json``.
 
-Precedence: LRCLIB synced > LRCLIB plain (force-aligned when possible) >
-Whisper ASR (with an approximate segment-timed LRC when usable, #145);
-``instrumental`` drops lyrics entirely.
+Precedence: LRCLIB synced > LRCLIB text force-aligned when possible (plain
+#55, or duration-rejected text #149) > LRCLIB plain (untimed) > Whisper ASR
+(with an approximate segment-timed LRC when usable, #145); ``instrumental``
+drops lyrics entirely.
 """
 from __future__ import annotations
 
@@ -25,10 +26,10 @@ from karaoke.worker.lyrics import (
     SOURCE_WHISPER_ASR,
     SOURCE_WHISPER_ASR_SYNCED,
     LyricsResult,
+    lrc_to_plain,
 )
 from karaoke.worker.pipeline import (
     _align_lang,
-    _lrc_to_plain,
     _read_aligned_lrc,
     _read_whisper_segments,
     _resolve_lyrics,
@@ -136,9 +137,9 @@ def test_no_match_keeps_whisper(tmp_path):
 
 
 def test_lrc_to_plain_strips_timestamps():
-    assert _lrc_to_plain("[00:12.00]hello\n[01:03.50]world") == "hello\nworld"
+    assert lrc_to_plain("[00:12.00]hello\n[01:03.50]world") == "hello\nworld"
     # Handles bare [mm:ss] and blank lines.
-    assert _lrc_to_plain("[00:01]a\n\n[00:02]b") == "a\nb"
+    assert lrc_to_plain("[00:01]a\n\n[00:02]b") == "a\nb"
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +420,107 @@ def test_plain_miss_has_no_rejection_key(tmp_path):
 
     prov = _resolve_lyrics(LyricsResult(source="none"), exports, whisper)
     assert "lyrics_lrclib_rejected" not in prov
+    assert "lyrics_align_reason" not in prov
+
+
+# ---------------------------------------------------------------------------
+# rejected-text force-align (#149): right text + timings from the actual audio
+# ---------------------------------------------------------------------------
+REJECTED_WITH_TEXT = LyricsResult(
+    source="none",
+    rejected="duration_mismatch (28s)",
+    rejected_text="plain one\nplain two",
+)
+
+
+def test_rejected_text_plus_aligned_lrc_writes_forced_aligned(tmp_path):
+    """Duration-rejected LRCLIB text + a usable GPU-aligned LRC → the synced
+    export carries the salvaged text with timings from the actual audio."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path)
+    aligned = _aligned_file(tmp_path)
+
+    prov = _resolve_lyrics(REJECTED_WITH_TEXT, exports, whisper, aligned)
+
+    assert prov["lyrics_source"] == SOURCE_FORCED_ALIGNED
+    assert prov["synced"] is True
+    assert prov["lrc_written"] is True
+    assert prov["lyrics_align_reason"] == "lrclib_duration_mismatch (28s)"
+    # The align reason tells the whole story; the record's text was used, so it
+    # is not reported as "rejected".
+    assert "lyrics_lrclib_rejected" not in prov
+    # The GPU-aligned LRC body is written verbatim; the plain export keeps the
+    # salvaged LRCLIB text (not the Whisper transcript).
+    assert (exports / "lyrics.lrc").read_text() == ALIGNED
+    assert (exports / "lyrics.txt").read_text() == "plain one\nplain two"
+
+
+def test_rejected_text_without_aligned_falls_to_asr_floor(tmp_path):
+    """No aligned LRC came back (old image / alignment failed) → the post-#145
+    whisper_asr_synced floor, with the #148 rejection reason preserved."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path, text="asr one\nasr two")
+    lyrics_json = _whisper_json(tmp_path, SEGMENTS_JSON)
+
+    prov = _resolve_lyrics(REJECTED_WITH_TEXT, exports, whisper, None, lyrics_json)
+
+    assert prov["lyrics_source"] == SOURCE_WHISPER_ASR_SYNCED
+    assert prov["lrc_written"] is True
+    assert prov["lyrics_lrclib_rejected"] == "duration_mismatch (28s)"
+    assert "lyrics_align_reason" not in prov
+    # The floor keeps the Whisper transcript, not the salvaged text.
+    assert (exports / "lyrics.txt").read_text() == "asr one\nasr two"
+
+
+def test_rejected_text_with_garbage_aligned_falls_to_asr_floor(tmp_path):
+    """An aligned file with no timestamp tags is rejected by _read_aligned_lrc
+    → whisper_asr_synced floor, same as a missing file."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path, text="asr one\nasr two")
+    lyrics_json = _whisper_json(tmp_path, SEGMENTS_JSON)
+    bad = _aligned_file(tmp_path, body="not an lrc, no timestamps here")
+
+    prov = _resolve_lyrics(REJECTED_WITH_TEXT, exports, whisper, bad, lyrics_json)
+
+    assert prov["lyrics_source"] == SOURCE_WHISPER_ASR_SYNCED
+    assert prov["lyrics_lrclib_rejected"] == "duration_mismatch (28s)"
+    assert (exports / "lyrics.lrc").read_text() != "not an lrc, no timestamps here"
+
+
+def test_rejected_text_garbage_aligned_no_segments_untimed_floor(tmp_path):
+    """Garbage aligned LRC AND no usable segments → the untimed ASR floor,
+    still carrying the rejection reason."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path, text="ASR OUTPUT")
+
+    prov = _resolve_lyrics(REJECTED_WITH_TEXT, exports, whisper, None, None)
+
+    assert prov["lyrics_source"] == SOURCE_WHISPER_ASR
+    assert prov["lrc_written"] is False
+    assert prov["lyrics_lrclib_rejected"] == "duration_mismatch (28s)"
+    assert not (exports / "lyrics.lrc").exists()
+
+
+def test_rejection_without_text_skips_align_branch(tmp_path):
+    """A rejected record with nothing to salvage (#148 shape) never consults
+    the aligned LRC — even a usable one (it would carry someone else's text)."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path, text="asr one\nasr two")
+    aligned = _aligned_file(tmp_path)
+
+    prov = _resolve_lyrics(
+        LyricsResult(source="none", rejected="duration_mismatch (171s)"),
+        exports,
+        whisper,
+        aligned,
+    )
+    assert prov["lyrics_source"] == SOURCE_WHISPER_ASR
+    assert prov["lyrics_lrclib_rejected"] == "duration_mismatch (171s)"
 
 
 @pytest.mark.asyncio
@@ -536,5 +638,141 @@ async def test_run_real_job_writes_rejection_to_metadata(tmp_path, monkeypatch):
         assert meta["lyrics_lrclib_rejected"] == "duration_mismatch (28s)"
         assert meta["lyrics_source"] == SOURCE_WHISPER_ASR_SYNCED
         assert meta["synced"] is True
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_run_real_job_force_aligns_rejected_text(tmp_path, monkeypatch):
+    """End-to-end (#149): the only search candidate is the wrong edit but
+    carries synced text → the GPU payload gets ``align_text`` with timestamps
+    stripped, the handler's ``aligned_lrc`` is exported as ``lyrics.lrc`` with
+    ``forced_aligned`` provenance + ``lyrics_align_reason``."""
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.config import Settings
+    from karaoke.db.models import Base, Job, JobStatus
+    from karaoke.db.session import create_engine_and_sessionmaker
+    from karaoke.worker.lyrics import LyricsSource
+    from karaoke.worker.runpod_client import RunpodClient
+    from karaoke.worker.vast_client import GpuJobResult
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'lyr149.db'}"
+    engine, factory = create_engine_and_sessionmaker(url)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with factory() as session:
+            job = Job(
+                job_token="tok-149",
+                owner_subject="owner",
+                source_url="https://example.com/song",
+                status=JobStatus.queued,
+                progress=0,
+            )
+            session.add(job)
+            await session.commit()
+            await session.refresh(job)
+            job_id = job.id
+
+        monkeypatch.setattr(
+            pipeline,
+            "_ytdlp_metadata",
+            lambda url, settings=None, **_: {
+                "title": "Artist - Song",
+                "artist": "Artist",
+                "track": "Song",
+                "duration": 229,
+            },
+        )
+
+        def fake_file(src, dest: Path, *a, **k):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"x")
+            return dest
+
+        monkeypatch.setattr(pipeline, "_download_audio", fake_file)
+        monkeypatch.setattr(pipeline, "_to_wav", fake_file)
+        monkeypatch.setattr(pipeline, "_wav_to_mp3", fake_file)
+
+        # LRCLIB: /api/get misses; /api/search has only the wrong edit, with
+        # synced-only text (the timestamps must be stripped before alignment).
+        script = [
+            (404, {"code": 404}),
+            (
+                200,
+                [
+                    {
+                        "trackName": "Song",
+                        "duration": 257,
+                        "syncedLyrics": "[00:10.00]right text one\n[00:14.00]right text two",
+                    }
+                ],
+            ),
+        ]
+        monkeypatch.setattr(
+            pipeline,
+            "_LYRICS_SOURCE",
+            LyricsSource(http=lambda method, url, params: script.pop(0)),
+        )
+
+        ALIGNED_BODY = "[00:02.10]right text one\n[00:05.40]right text two"
+        captured: dict[str, object] = {}
+
+        def fake_gpu_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+            captured["align_text"] = align_text
+            captured["align_lang"] = align_lang
+            work_dir.mkdir(parents=True, exist_ok=True)
+            voc = work_dir / "vocals.wav"
+            inst = work_dir / "instrumental.wav"
+            ltxt = work_dir / "lyrics.txt"
+            ljson = work_dir / "lyrics.json"
+            alrc = work_dir / "aligned.lrc"
+            voc.write_bytes(b"v")
+            inst.write_bytes(b"i")
+            ltxt.write_text("asr line", encoding="utf-8")
+            ljson.write_text(
+                '{"segments": [{"start": 1.0, "end": 2.0, "text": "asr line"}]}',
+                encoding="utf-8",
+            )
+            alrc.write_text(ALIGNED_BODY, encoding="utf-8")
+            return GpuJobResult(
+                vast_instance_id="rp-1",
+                vast_cost=0.01,
+                gpu_model="RTX 4090",
+                vocals_path=voc,
+                instrumental_path=inst,
+                lyrics_txt_path=ltxt,
+                lyrics_json_path=ljson,
+                aligned_lrc_path=alrc,
+            )
+
+        monkeypatch.setattr(RunpodClient, "run", fake_gpu_run)
+
+        settings = Settings(
+            device_mode="runpod",
+            runpod_api_key="k",
+            runpod_endpoint_id="ep",
+            artifact_root=str(tmp_path),
+        )
+        await pipeline.run_real_job(factory, job_id, settings)
+
+        async with factory() as session:
+            job = await session.get(Job, job_id)
+            assert job.status == JobStatus.completed, job.error
+
+        # The GPU payload carried the salvaged text, timestamps stripped.
+        assert captured["align_text"] == "right text one\nright text two"
+        assert captured["align_lang"] == "eng"
+
+        exports = tmp_path / "tok-149" / "exports"
+        meta = json.loads((exports / "metadata.json").read_text(encoding="utf-8"))
+        assert meta["lyrics_source"] == SOURCE_FORCED_ALIGNED
+        assert meta["synced"] is True
+        assert meta["lyrics_align_reason"] == "lrclib_duration_mismatch (28s)"
+        assert "lyrics_lrclib_rejected" not in meta
+        assert (exports / "lyrics.lrc").read_text(encoding="utf-8") == ALIGNED_BODY
+        assert (
+            exports / "lyrics.txt"
+        ).read_text(encoding="utf-8") == "right text one\nright text two"
     finally:
         await engine.dispose()
