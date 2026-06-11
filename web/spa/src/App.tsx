@@ -16,6 +16,7 @@ import { type JobFilter, jobMatchesFilter, Sidebar } from "./components/Sidebar"
 import { SubmitForm } from "./components/SubmitForm";
 import { TopBar } from "./components/TopBar";
 import { statusMeta } from "./jobStatus";
+import { filterJobs, type JobSort, sortJobs } from "./lib/jobListUtils";
 import { useTheme } from "./theme";
 
 const POLL_MS = 3000;
@@ -45,6 +46,8 @@ export function App(props: {
   const [listError, setListError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [filter, setFilter] = useState<JobFilter>("all");
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<JobSort>("newest");
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const timer = useRef<number | null>(null);
 
@@ -129,7 +132,11 @@ export function App(props: {
     });
   }, [jobs, runAction]);
 
-  const visible = useMemo(() => jobs.filter((j) => jobMatchesFilter(j, filter)), [jobs, filter]);
+  // Status filter (sidebar) → text search → sort. All client-side, all pure.
+  const visible = useMemo(
+    () => sortJobs(filterJobs(jobs.filter((j) => jobMatchesFilter(j, filter)), query), sort),
+    [jobs, filter, query, sort],
+  );
   const activeCount = useMemo(() => jobs.filter((j) => statusMeta(j.status).active).length, [jobs]);
   const failedCount = useMemo(() => jobs.filter((j) => j.status === "failed").length, [jobs]);
 
@@ -145,7 +152,12 @@ export function App(props: {
     </>
   );
 
-  const copy = EMPTY_COPY[filter];
+  // A non-blank search that matches nothing gets its own empty copy — the
+  // status-filter copy ("No jobs yet") would be misleading there.
+  const searching = query.trim().length > 0;
+  const copy = searching
+    ? { title: "No matching jobs", sub: "Try a different search, or clear the query." }
+    : EMPTY_COPY[filter];
 
   return (
     <div className="app">
@@ -168,6 +180,27 @@ export function App(props: {
           </div>
 
           <SubmitForm onCreated={onCreated} />
+
+          <div className="list-toolbar">
+            <input
+              type="search"
+              className="field field-search"
+              placeholder="Search title, artist or URL…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Search jobs"
+            />
+            <select
+              className="field field-sort"
+              value={sort}
+              onChange={(e) => setSort(e.target.value as JobSort)}
+              aria-label="Sort jobs"
+            >
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="title">Title A–Z</option>
+            </select>
+          </div>
 
           {listError && (
             <div className="form-error" style={{ marginBottom: "16px" }}>

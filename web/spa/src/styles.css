@@ -421,6 +421,15 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   overflow-wrap: anywhere;
 }
 
+/* ─── List toolbar (search + sort) ──────────────────────────────────────── */
+.list-toolbar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.field-search { flex: 1 1 auto; min-width: 0; }
+.field-sort { flex: 0 0 auto; width: auto; cursor: pointer; }
+
 /* ─── Job feed ──────────────────────────────────────────────────────────── */
 .jobs { display: flex; flex-direction: column; }
 .job {
@@ -459,6 +468,15 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   white-space: nowrap;
 }
 .job-source:hover { color: var(--fg-soft); text-decoration: underline; }
+.job-time {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  font-feature-settings: "tnum";
+  white-space: nowrap;
+}
 .job-title {
   font-family: var(--font-display);
   font-size: 18px;

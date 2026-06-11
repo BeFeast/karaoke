@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.tsbuildinfo
+# The operator-side global git ignore excludes any lib/ — re-include the
+# SPA pure-helpers module dir (web/spa/src/lib) explicitly.
+!src/lib/

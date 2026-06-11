@@ -15,16 +15,37 @@ export type JobStatus =
   | "failed"
   | "cancelled";
 
+// One ready output file of a job (server `JobArtifactOut`).
+export interface JobArtifactOut {
+  kind: string;
+  name: string;
+  size: number | null;
+}
+
+// Mirrors the server `JobOut` projection in src/karaoke/api/routes.py 1:1 —
+// keep the two in sync field-for-field. Datetimes arrive as ISO 8601 strings.
 export interface JobOut {
   id: number;
   job_token: string;
   source_url: string;
   title: string | null;
+  artist: string | null;
+  track: string | null;
+  album: string | null;
+  duration: number | null;
   status: JobStatus;
   progress: number;
+  stage_note: string | null;
   error: string | null;
   share_url: string;
   owner_subject: string;
+  // GPU bookkeeping, runtime-neutral names — the ORM columns keep their
+  // legacy `vast_*` names but the RunPod path writes them too.
+  gpu_instance_id: string | null;
+  gpu_cost_micros: number | null;
+  created_at: string;
+  completed_at: string | null;
+  artifacts: JobArtifactOut[];
 }
 
 export interface MeOut {
