@@ -1,6 +1,6 @@
 [project]
 name = "karaoke"
-version = "0.15.0"
+version = "0.15.1"
 description = "URL → isolated vocals + instrumental playback + lyrics; coordinator on devbox + ephemeral vast.ai GPU."
 authors = [
     { name = "Oleg Kossoy", email = "oleg@kossoy.com" }
@@ -36,7 +36,7 @@ dependencies = [
 karaoke = "karaoke:main"
 
 [build-system]
-requires = ["uv_build>=0.11.20,<0.15.0"]
+requires = ["uv_build>=0.11.20,<0.15.1"]
 build-backend = "uv_build"
 
 [dependency-groups]
