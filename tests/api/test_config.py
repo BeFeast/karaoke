@@ -14,6 +14,7 @@ def test_config_default_has_clerk_disabled(client):
     assert set(body.keys()) == {
         "clerk_publishable_key",
         "clerk_enabled",
+        "trusted_client",
         "public_base_url",
     }
     # conftest sets no KARAOKE_CLERK_PUBLISHABLE_KEY -> empty -> disabled.
@@ -70,6 +71,37 @@ def test_config_key_set_but_gate_off_stays_disabled(client):
         client.app.dependency_overrides.pop(get_settings, None)
     assert body["clerk_publishable_key"] == "pk_test_xyz"
     assert body["clerk_enabled"] is False
+
+
+def test_config_trusted_source_reports_trusted_client(monkeypatch, client):
+    """A trusted-LAN caller sees ``trusted_client: true`` even with Clerk on.
+
+    Uses the same predicate as the auth dependency: conftest grants the
+    Starlette testclient LAN trust via the default trusted CIDRs, so the SPA
+    keeps anonymous LAN mode regardless of ``clerk_enabled``.
+    """
+    monkeypatch.setenv("KARAOKE_CLERK_PUBLISHABLE_KEY", "pk_test_abc123")
+    monkeypatch.setenv("KARAOKE_CLERK_SPA_ENABLED", "true")
+    reset_settings_for_tests()
+    body = client.get("/config").json()
+    assert body["clerk_enabled"] is True
+    assert body["trusted_client"] is True
+
+
+def test_config_untrusted_source_with_clerk_reports_not_trusted(monkeypatch, client):
+    """A non-trusted caller with Clerk configured sees ``trusted_client: false``.
+
+    Mirrors test_auth.py: clearing KARAOKE_TRUSTED_CIDRS disables LAN trust
+    entirely, so the same source address no longer passes the trusted-LAN
+    layer — the SPA must render the Clerk sign-in shell.
+    """
+    monkeypatch.setenv("KARAOKE_TRUSTED_CIDRS", "")
+    monkeypatch.setenv("KARAOKE_CLERK_PUBLISHABLE_KEY", "pk_test_abc123")
+    monkeypatch.setenv("KARAOKE_CLERK_SPA_ENABLED", "true")
+    reset_settings_for_tests()
+    body = client.get("/config").json()
+    assert body["clerk_enabled"] is True
+    assert body["trusted_client"] is False
 
 
 def test_ws_settings_defaults():

@@ -59,6 +59,9 @@ export interface MeOut {
 export interface RuntimeConfig {
   clerk_publishable_key: string;
   clerk_enabled: boolean;
+  // Whether THIS request passed the server's trusted-LAN check — LAN clients
+  // keep anonymous LAN mode even when Clerk is enabled for public clients.
+  trusted_client: boolean;
   public_base_url: string;
 }
 
