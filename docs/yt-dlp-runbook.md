@@ -13,7 +13,8 @@ images must not install `yt-dlp`, `yt-dlp-ejs`, Deno, Node, or cookie material.
 - coordinator Dockerfile: Node/npm from apt, pinned Deno, `yt-dlp-ejs` from the
   Python dependency layer
 - runtime yt-dlp args: `--remote-components ejs:github`, YouTube player-client
-  chain, optional bgutil PO-token sidecar, optional per-job/central cookies
+  chain, optional bgutil PO-token sidecar, optional per-job client-supplied
+  cookies (see `docs/per-job-cookies.md`)
 
 Dependabot checks the Python dependency graph weekly and groups
 `yt-dlp`, `yt-dlp-ejs`, and `bgutil-ytdlp-pot-provider` into one PR. Treat those

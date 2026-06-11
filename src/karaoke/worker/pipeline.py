@@ -141,21 +141,17 @@ def _ytdlp_aux_args(settings, *, cookies_blob: str | None = None):
     JS-challenge solver and ``--cookies`` for session-gated videos (issue #68).
 
     ``cookies_blob`` (issue #77) is an optional per-job Netscape cookie jar the
-    submitting client supplied with the job. When present it is written to a
-    fresh ``0600`` temp and used as ``--cookies`` for THIS invocation only,
-    taking precedence over the shared/central ``ytdlp_cookies_file`` jar. The
-    temp is deleted on context exit (success or failure); the blob is never
-    persisted and never logged.
+    submitting client supplied with the job — the **only** cookie source (#132
+    retired the central jar). When present it is written to a fresh ``0600``
+    temp and used as ``--cookies`` for THIS invocation only. The temp is
+    deleted on context exit (success or failure); the blob is never persisted
+    and never logged. No blob → no ``--cookies`` at all; public videos still
+    download with the solver alone.
 
     - ``--remote-components <ytdlp_remote_components>`` enables the external
       n-sig / signature solver (run under deno). Without it YouTube hands back
       only storyboard formats and the download fails with "Requested format is
       not available". Defaults to ``ejs:github``; empty disables.
-    - ``--cookies <copy>`` is emitted only when ``ytdlp_cookies_file`` points at
-      an existing non-empty file. yt-dlp rotates the cookie jar and writes it
-      back on close, so we hand it a *per-call writable copy* in a temp file
-      (the mounted secret is read-only and shared) and delete the copy on exit.
-      No cookies file → public videos still download with the solver alone.
 
     ``settings`` may be ``None`` (legacy callers / tests), in which case we fall
     back to the same defaults as :class:`karaoke.config.Settings`.
@@ -163,17 +159,13 @@ def _ytdlp_aux_args(settings, *, cookies_blob: str | None = None):
     args: list[str] = []
     if settings is not None:
         remote = str(getattr(settings, "ytdlp_remote_components", "") or "").strip()
-        cookies_src = str(getattr(settings, "ytdlp_cookies_file", "") or "").strip()
     else:
-        remote, cookies_src = "ejs:github", ""
+        remote = "ejs:github"
     if remote:
         args += ["--remote-components", remote]
     tmp_cookies: Path | None = None
     try:
         if (cookies_blob or "").strip():
-            # Per-job cookies (issue #77) win over the central jar: a client
-            # that supplied its own logged-in session for THIS job must use
-            # exactly that, not the shared operator jar.
             fd, name = tempfile.mkstemp(prefix="ytc-job-", suffix=".txt")
             os.close(fd)
             tmp_cookies = Path(name)
@@ -181,14 +173,6 @@ def _ytdlp_aux_args(settings, *, cookies_blob: str | None = None):
             tmp_cookies.write_text(payload, encoding="utf-8")
             os.chmod(tmp_cookies, 0o600)
             args += ["--cookies", str(tmp_cookies)]
-        elif cookies_src:
-            src = Path(cookies_src)
-            if src.is_file() and src.stat().st_size > 0:
-                fd, name = tempfile.mkstemp(prefix="ytc-", suffix=".txt")
-                os.close(fd)
-                tmp_cookies = Path(name)
-                tmp_cookies.write_bytes(src.read_bytes())
-                args += ["--cookies", str(tmp_cookies)]
         yield args
     finally:
         if tmp_cookies is not None:
@@ -253,8 +237,9 @@ def _download_audio(source_url: str, dest: Path, settings=None, *, cookies_blob:
                             f"after {max_attempts} attempts. This is usually a "
                             "per-video logged-in-session requirement (NOT an IP "
                             "ban — other videos download fine from the same IP): "
-                            "export a logged-in YouTube cookies.txt and point "
-                            "KARAOKE_YTDLP_COOKIES_FILE at it. (A genuine HTTP 429 "
+                            "resubmit this video via the Chrome extension from a "
+                            "browser signed in to YouTube, so the job carries "
+                            "your logged-in cookies. (A genuine HTTP 429 "
                             "rate-limit clears on its own after a cooldown.) "
                             f"Last error:\n{exc}"
                         ) from exc

@@ -1,6 +1,6 @@
 [project]
 name = "karaoke"
-version = "0.8.0"
+version = "0.9.0"
 description = "URL → isolated vocals + instrumental playback + lyrics; coordinator on devbox + ephemeral vast.ai GPU."
 authors = [
     { name = "Oleg Kossoy", email = "oleg@kossoy.com" }
@@ -29,7 +29,7 @@ dependencies = [
     # Known-good YouTube extractor stack. Keep exact pins: the nightly canary
     # catches breakage, and Dependabot opens deliberate bump PRs.
     "yt-dlp==2026.3.17",
-    "yt-dlp-ejs==0.8.0",
+    "yt-dlp-ejs==0.9.0",
 ]
 
 [project.scripts]
