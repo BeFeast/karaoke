@@ -254,14 +254,31 @@ export async function getLyricsText(token: string): Promise<string | null> {
   return await resp.text();
 }
 
-// Fetch the synced LRC body for a job, or null when no synced lyrics exist
-// (the endpoint 404s when the `lyrics.lrc` artifact wasn't written — i.e.
-// LRCLIB had no synced match). Same-origin raw text; the artifact endpoint
-// authorises on the token, mirroring getLyricsText.
-export async function getLyricsLrc(token: string): Promise<string | null> {
-  const resp = await fetch(`/share/${encodeURIComponent(token)}/lyrics.lrc`, {
+// One parsed LRC line (server `LyricsLine`): start time in seconds + text.
+export interface LyricsLine {
+  t: number;
+  text: string;
+}
+
+// Structured lyrics payload (server `LyricsPayload`) — GET /share/{token}/lyrics.
+// Carries the raw LRC body plus `source` provenance (`lrclib_synced`,
+// `forced_aligned`, `whisper_asr_synced`, `whisper_asr`, …) so the UI can
+// label approximate ASR timing differently from real LRCLIB sync (#145).
+export interface LyricsPayload {
+  synced: boolean;
+  lrc: string | null;
+  lines: LyricsLine[] | null;
+  plain: string | null;
+  source: string;
+}
+
+// Fetch the structured lyrics payload for a job, or null on any failure
+// (job unknown / not yet completed). Same auth model as the artifact
+// endpoints: possession of the token authorises the read.
+export async function getLyrics(token: string): Promise<LyricsPayload | null> {
+  const resp = await fetch(`/share/${encodeURIComponent(token)}/lyrics`, {
     headers: { ...(await authHeaders()) },
   });
   if (!resp.ok) return null;
-  return await resp.text();
+  return (await resp.json()) as LyricsPayload;
 }
