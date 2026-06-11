@@ -97,6 +97,25 @@ for the Dockhand-managed stack.
   `pyproject.toml`, tags, releases, and deploys via the script. Until then,
   releases are cut manually with `scripts/release-deploy.sh`.
 
+## Provisioning status
+
+- **Artifacts NFS path:** live at TrueNAS Odin
+  `/mnt/Odin/lxc-shared/karaoke` (operator decision:
+  `Odin/lxc-shared/karaoke`). The parent export visible from `devbox`
+  (`10.10.0.13`) is `/mnt/Odin/lxc-shared` from `10.10.0.15`, exported to
+  `10.10.0.0/24`.
+- **Docker NFS volume driver opts for the karaoke stack:**
+  `type=nfs`, `o=addr=10.10.0.15,rw,nfsvers=4`,
+  `device=:/mnt/Odin/lxc-shared/karaoke`; mount the volume at
+  `/srv/artifacts` so it matches `KARAOKE_ARTIFACT_ROOT`.
+- **Permissions verified:** `/mnt/Odin/lxc-shared/karaoke` is writable by
+  UID/GID `1000:1000` and currently reports `drwxrwxr-x` (`775`) through the
+  Docker NFS mount. A throwaway `alpine:3.20` container running as
+  `--user 1000:1000` wrote, read, and removed `.probe` successfully.
+- **Runbook:** see [`docs/runbooks/nfs-artifacts.md`](docs/runbooks/nfs-artifacts.md)
+  for the exact probe commands and the `devbox_docker_nfs_volume_pattern`
+  reference that should be mirrored in the operator vault.
+
 ## More context
 
 - Full PRD, architecture diagram, surfaces table, and provisioning status:
