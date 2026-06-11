@@ -133,17 +133,15 @@ present when cookies exist, omitted cleanly when none).
 
 ## Icons
 
-`icons/karaoke-{16,48,128}.png` and the SPA favicon (`web/spa/public/favicon.png`)
-are rasterized from `icons/karaoke.svg` — the MarqueeMark with the exported
-geometry kept verbatim (frame + 6 bulbs + Bungee letter, see the SVG header)
-and the Wave-0 green-bake colors. To regenerate:
+`icons/karaoke-{16,32,48,128}.png` and the SPA favicon (`web/spa/public/favicon.png`)
+are rasterized from `icons/mark.svg` — the sign-in mic card (#163): the
+SignInWall rounded card holding the MicMark glyph with its geometry kept
+verbatim (see the SVG header) and the day-card green-bake literals. The mark
+is pure geometry, so no font tooling is involved. To regenerate:
 
 ```bash
 cd extension/chrome
 bun install
-uvx --from fonttools --with brotli fonttools ttLib.woff2 decompress \
-  -o /tmp/bungee-latin-400.ttf \
-  ../../web/spa/node_modules/@fontsource/bungee/files/bungee-latin-400-normal.woff2
 bun run icons
 ```
 

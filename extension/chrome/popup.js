@@ -195,7 +195,9 @@ function feedRow(job) {
     chrome.tabs.create({ url: `${config.baseUrl}/app/#/job/${job.job_token}` });
   });
 
-  const head = el("div", { style: "display: flex; align-items: center; gap: 8px" });
+  // min-width: 0 on the grid child too — without it the nowrap title sets the
+  // track's min-content width and the row overflows the popup (#163).
+  const head = el("div", { style: "display: flex; align-items: center; gap: 8px; min-width: 0" });
   head.append(
     el(
       "span",
@@ -206,13 +208,13 @@ function feedRow(job) {
 
   const running = ACTIVE_STATUSES.has(job.status);
   if (job.status === "completed") {
-    head.append(el("span", { class: "m-mono", style: "font-size: 10.5px; color: var(--ok)" }, "ready ▸"));
+    head.append(el("span", { class: "m-mono", style: "font-size: 10.5px; color: var(--ok); flex: none" }, "ready ▸"));
   } else if (job.status === "failed") {
-    head.append(el("span", { class: "m-mono", style: "font-size: 10.5px; color: var(--err)" }, "failed ↻"));
+    head.append(el("span", { class: "m-mono", style: "font-size: 10.5px; color: var(--err); flex: none" }, "failed ↻"));
   } else if (job.status === "cancelled") {
-    head.append(el("span", { class: "m-mono", style: "font-size: 10.5px; color: var(--muted)" }, "cancelled"));
+    head.append(el("span", { class: "m-mono", style: "font-size: 10.5px; color: var(--muted); flex: none" }, "cancelled"));
   } else {
-    head.append(el("span", { class: "m-mono", style: "font-size: 10.5px; color: var(--accent)" }, `${job.progress ?? 0}%`));
+    head.append(el("span", { class: "m-mono", style: "font-size: 10.5px; color: var(--accent); flex: none" }, `${job.progress ?? 0}%`));
   }
   row.append(head);
 

@@ -2,9 +2,11 @@
 <!-- Doorway popup — the click already submitted; this is the receipt.
      DOM/classes/inline styles ported from design/m-doorway.jsx MPopupBoard
      (lines 4-60), wired to the real submit + GET /jobs feed in popup.js.
-     The MarqueeMark SVG keeps the exported geometry verbatim
-     (design/marquee-mark.jsx); the amber fallbacks carry the Wave-0 green
-     bake (#ffb84d -> #9fd07a), same literals as the vendored marquee.css. -->
+     The header mark is the sign-in mic card (#163): the SignInWall rounded
+     card scaled from 76px to 20px (radius 20 -> 5, border 2 -> 1) around the
+     MicMark glyph verbatim (marks.tsx: 24-viewBox, capsule rect x=9 y=2 w=6
+     h=12 rx=3, stroke-width 2, round caps/joins) at the sign-in 38/76 ratio.
+     Colors route through the vendored marquee.css tokens. -->
 <html lang="en">
   <head>
     <meta charset="utf-8">
@@ -15,17 +17,12 @@
   <body class="doorway-popup">
     <div class="m-booth" style="height: 100%; display: flex; flex-direction: column; font-size: 13px">
       <div style="display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--border)">
-        <svg width="20" height="20" viewBox="0 0 48 48" aria-label="Karaoke mark">
-          <rect x="2" y="2" width="44" height="44" rx="11" fill="#161210"></rect>
-          <rect x="2" y="2" width="44" height="44" rx="11" fill="none" stroke="var(--bulb, #9fd07a)" stroke-width="2.5"></rect>
-          <circle cx="14" cy="8.5" r="1.8" fill="var(--bulb, #9fd07a)"></circle>
-          <circle cx="24" cy="8.5" r="1.8" fill="var(--bulb, #9fd07a)"></circle>
-          <circle cx="34" cy="8.5" r="1.8" fill="var(--bulb, #9fd07a)"></circle>
-          <circle cx="14" cy="39.5" r="1.8" fill="var(--bulb, #9fd07a)"></circle>
-          <circle cx="24" cy="39.5" r="1.8" fill="var(--bulb, #9fd07a)"></circle>
-          <circle cx="34" cy="39.5" r="1.8" fill="var(--bulb, #9fd07a)"></circle>
-          <text x="24" y="33" text-anchor="middle" font-family="Bungee, sans-serif" font-size="20" fill="var(--bulb, #9fd07a)">K</text>
-        </svg>
+        <div style="width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; flex: none; background: var(--bg-card); border: 1px solid var(--accent); box-shadow: var(--shadow)">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-label="Karaoke mark">
+            <rect x="9" y="2" width="6" height="12" rx="3" fill="var(--accent)"></rect>
+            <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" stroke="var(--fg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </div>
         <span style="font-family: var(--font-display); font-weight: 650; font-size: 14px">Karaoke</span>
         <span style="flex: 1"></span>
         <span class="m-chip ok" style="font-size: 10px"><span class="m-dot"></span><span id="booth-host">booth</span></span>
