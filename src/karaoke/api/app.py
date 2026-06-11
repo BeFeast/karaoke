@@ -13,6 +13,7 @@ from fastapi.responses import RedirectResponse
 from karaoke import __version__
 from karaoke.api.routes import router
 from karaoke.api.spa_static import SpaStaticFiles
+from karaoke.api.tokens import router as tokens_router
 from karaoke.api.ws import get_hub, shutdown_hub, ws_router
 from karaoke.config import Settings, get_settings
 from karaoke.db.session import get_session_factory, init_engine, shutdown_engine
@@ -82,6 +83,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.include_router(router)
+    app.include_router(tokens_router)
     app.include_router(ws_router)
 
     # Root redirect → Submitter SPA. Exact-path only, so it never shadows
