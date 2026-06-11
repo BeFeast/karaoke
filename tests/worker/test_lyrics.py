@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from karaoke.worker.lyrics import LyricsSource
+from karaoke.worker.lyrics import LyricsSource, whisper_segments_to_lrc
 
 SYNCED_BODY = "[00:12.00]line one\n[00:15.50]line two"
 PLAIN_BODY = "line one\nline two"
@@ -248,3 +248,48 @@ def test_no_artist_skips_get_and_uses_search():
     result = src.fetch(artist=None, track="Song", duration=200)
     assert result.source == "lrclib_search"
     assert [c[1].rsplit("/", 1)[-1] for c in rec.calls] == ["search"]
+
+
+# ---------------------------------------------------------------------------
+# whisper_segments_to_lrc (#145): approximate LRC from Whisper segment stamps
+# ---------------------------------------------------------------------------
+def test_segments_to_lrc_formats_and_orders():
+    segments = [
+        {"start": 12.0, "end": 14.0, "text": " line one "},
+        {"start": 75.345, "end": 78.0, "text": "line two"},
+    ]
+    assert whisper_segments_to_lrc(segments) == (
+        "[00:12.00]line one\n[01:15.34]line two"
+    )
+
+
+def test_segments_to_lrc_sorts_out_of_order_input():
+    shuffled = [
+        {"start": 30.0, "text": "third"},
+        {"start": 1.5, "text": "first"},
+        {"start": 10.0, "text": "second"},
+    ]
+    body = whisper_segments_to_lrc(shuffled)
+    assert body == "[00:01.50]first\n[00:10.00]second\n[00:30.00]third"
+    # Stable: re-running on a differently ordered copy yields the same output.
+    assert whisper_segments_to_lrc(list(reversed(shuffled))) == body
+
+
+def test_segments_to_lrc_skips_unusable_segments():
+    segments = [
+        {"start": 1.0, "text": "   "},          # whitespace-only text
+        {"start": 2.0, "text": ""},              # empty text
+        {"start": 3.0},                           # no text at all
+        {"text": "no start"},                    # no timestamp
+        {"start": "abc", "text": "bad start"},  # non-numeric timestamp
+        "not a dict",                             # not a segment
+        {"start": -0.4, "text": "clamped"},     # negative start clamps to 0
+        {"start": 4.0, "text": "kept"},
+    ]
+    assert whisper_segments_to_lrc(segments) == "[00:00.00]clamped\n[00:04.00]kept"
+
+
+def test_segments_to_lrc_empty_inputs():
+    assert whisper_segments_to_lrc(None) == ""
+    assert whisper_segments_to_lrc([]) == ""
+    assert whisper_segments_to_lrc([{"start": 1.0, "text": "  "}]) == ""

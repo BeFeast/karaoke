@@ -48,8 +48,50 @@ SOURCE_LRCLIB_SYNCED = "lrclib_synced"
 # LRC inside the GPU job window (#55). Ranks just below native LRCLIB synced.
 SOURCE_FORCED_ALIGNED = "forced_aligned"
 SOURCE_LRCLIB_PLAIN = "lrclib_plain"
+# Whisper ASR transcript with an approximate LRC synthesized from the Whisper
+# segment timestamps (#145). Ranks below ``forced_aligned``: it only applies
+# when LRCLIB missed entirely, so any LRCLIB-derived source always wins.
+SOURCE_WHISPER_ASR_SYNCED = "whisper_asr_synced"
 SOURCE_WHISPER_ASR = "whisper_asr"
 SOURCE_INSTRUMENTAL = "instrumental"
+
+
+def whisper_segments_to_lrc(segments: list[dict[str, Any]] | None) -> str:
+    """Build an approximate line-level LRC from Whisper segment timestamps (#145).
+
+    ``segments`` is the ``"segments"`` list of the GPU job's ``lyrics.json``
+    (faster-whisper output): ``{"start": float, "end": float, "text": str, ...}``
+    per entry. One LRC line is emitted per segment, tagged ``[mm:ss.xx]`` with
+    the segment *start* time — approximate but good enough for synced highlight
+    on tracks where LRCLIB has nothing.
+
+    Pure + tolerant by design: segments are sorted by start time (out-of-order
+    input yields stable output), entries that are not dicts, carry no numeric
+    ``start``, or have empty/whitespace text are skipped, and a negative start
+    clamps to zero. Returns ``""`` when nothing usable remains — the caller
+    then keeps the untimed ASR floor.
+    """
+    timed: list[tuple[float, str]] = []
+    for seg in segments or []:
+        if not isinstance(seg, dict):
+            continue
+        text = str(seg.get("text") or "").strip()
+        if not text:
+            continue
+        try:
+            start = float(seg["start"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        timed.append((max(start, 0.0), text))
+    timed.sort(key=lambda item: item[0])
+    return "\n".join(f"{_fmt_lrc_timestamp(start)}{text}" for start, text in timed)
+
+
+def _fmt_lrc_timestamp(seconds: float) -> str:
+    """Format ``seconds`` as an LRC ``[mm:ss.xx]`` timestamp tag."""
+    minutes = int(seconds // 60)
+    rem = seconds - minutes * 60
+    return f"[{minutes:02d}:{rem:05.2f}]"
 
 
 @dataclass(frozen=True, slots=True)
