@@ -13,9 +13,12 @@ worker task. The contract:
 - The worker pops them, writes them to a per-job ``0600`` temp for the single
   yt-dlp invocation, and deletes that temp after the download stage and on
   failure (see ``pipeline._ytdlp_aux_args``).
-- A process restart drops this registry *and* the in-flight job (the
-  coordinator abandons in-flight jobs on restart, #50), so nothing survives a
-  restart — the ephemeral guarantee holds end to end.
+- A process restart drops this registry, so no cookie blob ever survives a
+  restart — the ephemeral guarantee holds end to end. Boot reconcile (#50)
+  then fails out the in-flight job (cookies already consumed or moot), or
+  re-dispatches a still-``queued`` one WITHOUT its original cookies: that
+  re-run falls back to the central jar bridge or fails with the normal
+  gated-video error, which is acceptable by design.
 
 The API handler and the worker task run on the same asyncio event loop in the
 same process, so a plain dict needs no locking.

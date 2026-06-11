@@ -15,7 +15,8 @@ from karaoke.api.routes import router
 from karaoke.api.spa_static import SpaStaticFiles
 from karaoke.api.ws import get_hub, shutdown_hub, ws_router
 from karaoke.config import Settings, get_settings
-from karaoke.db.session import init_engine, shutdown_engine
+from karaoke.db.session import get_session_factory, init_engine, shutdown_engine
+from karaoke.worker.reconcile import reconcile_jobs
 
 
 def _cors_origins(settings: Settings) -> list[str]:
@@ -46,6 +47,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Pin the progress hub to the app loop so worker threads (e.g. the vast
     # provisioning callback) can publish WS events thread-safely (issue #8).
     get_hub().bind_loop(asyncio.get_running_loop())
+    # Boot reconcile (issue #50): a restart kills the in-process worker tasks,
+    # so make the persisted job state truthful again — re-dispatch 'queued'
+    # rows, fail out in-flight ones with an explicit interrupted reason.
+    await reconcile_jobs(get_session_factory(), settings)
     _warm_jwks(settings)
     try:
         yield
