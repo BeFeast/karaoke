@@ -70,8 +70,8 @@ def test_default_pot_base_url_points_at_documented_sidecar():
 # EJS solver + cookies aux-args (issue #68)
 # ---------------------------------------------------------------------------
 def test_aux_args_default_emits_remote_components_only():
-    # Default settings, no cookies file on disk → just the EJS solver flag.
-    with _ytdlp_aux_args(_settings(ytdlp_cookies_file="")) as args:
+    # Default settings, no per-job blob → just the EJS solver flag.
+    with _ytdlp_aux_args(_settings()) as args:
         assert args == ["--remote-components", "ejs:github"]
 
 
@@ -81,55 +81,22 @@ def test_aux_args_none_settings_falls_back_to_ejs_github():
 
 
 def test_aux_args_empty_remote_components_omits_flag():
-    with _ytdlp_aux_args(_settings(ytdlp_remote_components="", ytdlp_cookies_file="")) as args:
+    with _ytdlp_aux_args(_settings(ytdlp_remote_components="")) as args:
         assert args == []
 
 
-def test_aux_args_injects_writable_cookies_copy_and_cleans_up(tmp_path):
-    src = tmp_path / "youtube-cookies.txt"
-    src.write_text("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tFOO\tbar\n")
-    s = _settings(ytdlp_cookies_file=str(src))
-
-    captured: Path | None = None
-    with _ytdlp_aux_args(s) as args:
-        assert "--remote-components" in args and "ejs:github" in args
-        assert "--cookies" in args
-        copy = Path(args[args.index("--cookies") + 1])
-        captured = copy
-        # A *copy*, never the source secret (yt-dlp writes the jar back on close).
-        assert copy != src
-        assert copy.is_file()
-        assert copy.read_text() == src.read_text()
-    # Temp copy removed on context exit; the source is untouched.
-    assert captured is not None and not captured.exists()
-    assert src.is_file()
-
-
-def test_aux_args_skips_cookies_when_file_missing_or_empty(tmp_path):
-    missing = tmp_path / "nope.txt"
-    with _ytdlp_aux_args(_settings(ytdlp_cookies_file=str(missing))) as args:
-        assert "--cookies" not in args
-
-    empty = tmp_path / "empty.txt"
-    empty.write_text("")
-    with _ytdlp_aux_args(_settings(ytdlp_cookies_file=str(empty))) as args:
-        assert "--cookies" not in args
-
-
-def test_download_passes_remote_components_and_cookies(tmp_path, monkeypatch):
-    src = tmp_path / "youtube-cookies.txt"
-    src.write_text("# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tA\t1\n")
+def test_download_without_blob_passes_remote_components_and_no_cookies(tmp_path, monkeypatch):
+    # No per-job blob → no --cookies at all (#132: per-job is the only cookie
+    # path; there is no central jar to fall back to).
     dest = tmp_path / "source.audio"
     rec = _RunRecorder(["ok"], dest)
     monkeypatch.setattr(pipeline, "_run", rec)
     monkeypatch.setattr(pipeline, "_sleep", lambda s: None)
 
-    pipeline._download_audio("https://yt/x", dest, _settings(ytdlp_cookies_file=str(src)))
+    pipeline._download_audio("https://yt/x", dest, _settings())
     cmd = rec.calls[0]
     assert "--remote-components" in cmd and "ejs:github" in cmd
-    assert "--cookies" in cmd
-    # The flag points at a writable copy, not the read-only mounted secret.
-    assert cmd[cmd.index("--cookies") + 1] != str(src)
+    assert "--cookies" not in cmd
 
 
 # ---------------------------------------------------------------------------
@@ -237,11 +204,16 @@ def test_download_exhausts_backoff_then_raises_actionable(tmp_path, monkeypatch)
         pipeline._download_audio("https://yt/x", dest, _settings())
     msg = str(ei.value)
     # Surfaces an actionable error: this is per-video session auth, not an IP
-    # ban, and the fix is logged-in cookies (issue #68).
+    # ban, and the fix is resubmitting with per-job logged-in cookies via the
+    # Chrome extension (#132: no central jar to point at).
     assert "bot-check" in msg
     assert "per-video" in msg
     assert "cookies" in msg.lower()
-    assert "KARAOKE_YTDLP_COOKIES_FILE" in msg
+    assert "Chrome extension" in msg
+    assert "resubmit" in msg.lower()
+    # The retired central-jar env-var hint must be gone (split literal keeps
+    # the repo-wide reference sweep clean).
+    assert "KARAOKE_YTDLP_" "COOKIES_FILE" not in msg
     # Tried every attempt (initial + one per backoff step).
     assert len(rec.calls) == len(pipeline._BOT_CHECK_BACKOFF_S) + 1
     assert sleeps == list(pipeline._BOT_CHECK_BACKOFF_S)
