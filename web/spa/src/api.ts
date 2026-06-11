@@ -119,9 +119,15 @@ export function setTokenGetter(getter: TokenGetter | null): void {
   tokenGetter = getter;
 }
 
+// Current bearer token, or null in LAN mode / when signed out. Shared with
+// the WS client (ws.ts) so the socket authenticates the same way REST does.
+export async function getAuthToken(): Promise<string | null> {
+  if (!tokenGetter) return null;
+  return await tokenGetter();
+}
+
 async function authHeaders(): Promise<HeadersInit> {
-  if (!tokenGetter) return {};
-  const token = await tokenGetter();
+  const token = await getAuthToken();
   if (!token) return {};
   return { Authorization: `Bearer ${token}` };
 }

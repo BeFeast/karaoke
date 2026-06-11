@@ -50,7 +50,7 @@ function JobCard({ job, actions }: { job: JobOut; actions: JobActions }) {
               <div style={{ width: indeterminate ? undefined : `${pct}%` }} />
             </div>
             <div className="stage-note">
-              {meta.note}
+              {job.stage_note || meta.note}
               {!indeterminate && ` · ${pct}%`}
             </div>
           </>

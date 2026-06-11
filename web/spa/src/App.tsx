@@ -18,6 +18,7 @@ import { TopBar } from "./components/TopBar";
 import { statusMeta } from "./jobStatus";
 import { filterJobs, type JobSort, sortJobs } from "./lib/jobListUtils";
 import { useTheme } from "./theme";
+import { connectJobSocket, isTerminal, type JobEvent } from "./ws";
 
 const POLL_MS = 3000;
 
@@ -49,7 +50,10 @@ export function App(props: {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<JobSort>("newest");
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
-  const timer = useRef<number | null>(null);
+  const [wsOpen, setWsOpen] = useState(false);
+  // Mirror of `jobs` for the WS handler — reading state there would force
+  // the socket effect to re-run (and reconnect) on every list change.
+  const jobsRef = useRef<JobOut[]>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -64,6 +68,10 @@ export function App(props: {
   }, []);
 
   useEffect(() => {
+    jobsRef.current = jobs;
+  }, [jobs]);
+
+  useEffect(() => {
     getMe()
       .then(setMe)
       .catch(() => setMe(null));
@@ -71,11 +79,65 @@ export function App(props: {
 
   useEffect(() => {
     void refresh();
-    timer.current = window.setInterval(() => void refresh(), POLL_MS);
-    return () => {
-      if (timer.current !== null) window.clearInterval(timer.current);
-    };
   }, [refresh]);
+
+  // Merge one WS frame into the list in place. Frames carry only
+  // status/progress/stage_note/error — never the full row — so unknown jobs
+  // (submitted from another tab or the extension) and terminal transitions
+  // (which add artifacts/completed_at) fall back to a one-shot refresh.
+  const applyEvent = useCallback(
+    (event: JobEvent) => {
+      if (!jobsRef.current.some((j) => j.id === event.job_id)) {
+        void refresh();
+        return;
+      }
+      setJobs((js) =>
+        js.map((j) => {
+          if (j.id !== event.job_id) return j;
+          // `finalizing` is WS-only (no DB enum value) — keep the persisted
+          // status so the list always shows what a refresh would show.
+          const status = event.status === "finalizing" ? j.status : event.status;
+          if (event.type === "heartbeat") {
+            return { ...j, status, progress: event.progress ?? j.progress };
+          }
+          return {
+            ...j,
+            status,
+            progress: event.progress,
+            stage_note: event.stage_note,
+            error: event.error,
+          };
+        }),
+      );
+      if (event.type === "stage_change" && isTerminal(event.status)) {
+        void refresh();
+      }
+    },
+    [refresh],
+  );
+
+  // Live updates over WS /ws. On every (re)connect one refresh closes any
+  // gap the socket missed while down; the client reconnects on its own with
+  // capped exponential backoff.
+  useEffect(
+    () =>
+      connectJobSocket({
+        onEvent: applyEvent,
+        onOpenChange: (open) => {
+          setWsOpen(open);
+          if (open) void refresh();
+        },
+      }),
+    [applyEvent, refresh],
+  );
+
+  // Fallback polling: the pre-WS full-list refresh, now only while the
+  // socket is down, at the original cadence.
+  useEffect(() => {
+    if (wsOpen) return;
+    const id = window.setInterval(() => void refresh(), POLL_MS);
+    return () => window.clearInterval(id);
+  }, [wsOpen, refresh]);
 
   const runAction = useCallback(
     async (fn: () => Promise<unknown>) => {
