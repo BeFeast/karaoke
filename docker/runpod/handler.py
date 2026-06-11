@@ -21,10 +21,14 @@ Input (``event["input"]``)::
 When ``align_text`` is present (and separation ran, i.e. ``mode != "whisper"``),
 the handler force-aligns that text against the separated vocal stem with
 ``ctc-forced-aligner`` (MMS-300m) and returns a synthesized line-level LRC in
-``aligned_lrc``. This is purely additive: an old handler that ignores
-``align_text`` still works, and a coordinator that does not send it sees
-unchanged behavior. Alignment failures NEVER fail the job — the handler logs
-and omits ``aligned_lrc`` so the coordinator falls back (plain text / Whisper).
+``aligned_lrc``. Lines whose mean per-frame alignment log-prob falls below
+``KARAOKE_ALIGN_MIN_AVG_LOGPROB`` (default -5.0) are dropped from the LRC
+(#149): text lines absent from the audio get squeezed by monotonic CTC into
+low-confidence spans rather than timed sensibly. This is purely additive: an
+old handler that ignores ``align_text`` still works, and a coordinator that
+does not send it sees unchanged behavior. Alignment failures NEVER fail the
+job — the handler logs and omits ``aligned_lrc`` so the coordinator falls back
+(plain text / Whisper).
 
 Output (returned to RunPod as JSON)::
 
@@ -93,6 +97,14 @@ _ALIGN_TOKENIZER: Any = None
 _ALIGN_LOCK = threading.Lock()
 # MMS-300m forced aligner — pre-cached in the image (see Dockerfile).
 _ALIGN_MODEL_ID = "MahmoudAshraf/mms-300m-1130-forced-aligner"
+# Per-line confidence floor for the synthesized LRC (#149). ctc-forced-aligner
+# reports each word's summed frame log-probabilities as ``score``; a line's
+# mean per-frame log-prob below this drops the line from the LRC. Monotonic CTC
+# alignment squeezes lyric lines that are absent from the audio (canonical
+# verses cut from a video edit) into tiny, very-low-score spans — confident
+# lines on separated vocals average far above this. Conservative on purpose:
+# only clearly-garbage lines go; tune via env without an image rebuild.
+_ALIGN_MIN_AVG_LOGPROB = float(os.environ.get("KARAOKE_ALIGN_MIN_AVG_LOGPROB", "-5.0"))
 
 
 def _gpu_available() -> bool:
@@ -347,18 +359,27 @@ def _force_align_to_lrc(
     spans = get_spans(tokens_starred, segments, blank_token)
     word_timestamps = postprocess_results(text_starred, spans, stride, scores)
 
-    return _word_timestamps_to_lrc(word_timestamps, text)
+    return _word_timestamps_to_lrc(word_timestamps, text, stride=stride)
 
 
 def _word_timestamps_to_lrc(
-    word_timestamps: list[dict[str, Any]], text: str
+    word_timestamps: list[dict[str, Any]], text: str, stride: float | None = None
 ) -> str:
     """Build a line-level LRC from ctc-forced-aligner word timestamps.
 
-    ``word_timestamps`` is a list of ``{"text", "start", "end", ...}`` in the
-    same order as the words in ``text``. We walk the original lines, consuming
-    one timestamp per word, and tag each non-empty line with the start time of
-    its first word.
+    ``word_timestamps`` is a list of ``{"text", "start", "end", "score", ...}``
+    in the same order as the words in ``text``. We walk the original lines,
+    consuming one timestamp per word, and tag each non-empty line with the
+    start time of its first word.
+
+    When ``stride`` (milliseconds per emission frame) is known, each line also
+    gets a confidence check (#149): lines whose mean per-frame log-prob (summed
+    word ``score`` over summed frame count) falls below
+    ``_ALIGN_MIN_AVG_LOGPROB`` are dropped from the LRC — they are almost
+    always canonical-text lines absent from this audio edit, which monotonic
+    CTC alignment squeezed somewhere they don't belong. Missing scores or an
+    unknown stride skip the check (never drop), so older aligner output shapes
+    keep the pre-#149 behavior.
     """
     lines = [ln for ln in text.splitlines()]
     out: list[str] = []
@@ -368,14 +389,50 @@ def _word_timestamps_to_lrc(
         words = line.split()
         if not words:
             continue
-        # The start of this line = start of its first aligned word.
-        if wi < n:
-            start = float(word_timestamps[wi].get("start") or 0.0)
-        else:
-            start = float(word_timestamps[-1].get("end") or 0.0) if n else 0.0
-        out.append(f"{_fmt_lrc_timestamp(start)}{line.strip()}")
+        line_ts = word_timestamps[wi : wi + len(words)]
         wi += len(words)
+        if not line_ts:
+            # Ran out of aligned words (tokenization drift): keep the line,
+            # timed at the end of the last aligned word.
+            start = float(word_timestamps[-1].get("end") or 0.0) if n else 0.0
+            out.append(f"{_fmt_lrc_timestamp(start)}{line.strip()}")
+            continue
+        if _line_below_confidence(line_ts, stride):
+            LOG.info("dropping low-confidence aligned line: %r", line.strip())
+            continue
+        # The start of this line = start of its first aligned word.
+        start = float(line_ts[0].get("start") or 0.0)
+        out.append(f"{_fmt_lrc_timestamp(start)}{line.strip()}")
     return "\n".join(out)
+
+
+def _line_below_confidence(
+    line_ts: list[dict[str, Any]], stride: float | None
+) -> bool:
+    """True when a line's mean per-frame log-prob is below the drop threshold.
+
+    ctc-forced-aligner's per-word ``score`` is the *sum* of frame log-probs
+    over the word's span, and ``start``/``end`` are ``frame_index * stride/1000``
+    — so ``(end - start) * 1000 / stride`` recovers the frame count and
+    ``sum(scores) / sum(frames)`` is the line's mean per-frame log-prob.
+    Tolerant by design: unknown stride, a missing/non-numeric ``score`` on any
+    word, or a degenerate frame count all return False (keep the line) so the
+    filter can only ever drop lines it positively scored.
+    """
+    if not stride or stride <= 0:
+        return False
+    total_score = 0.0
+    total_frames = 0.0
+    for w in line_ts:
+        try:
+            total_score += float(w["score"])
+            start = float(w.get("start") or 0.0)
+            end = float(w.get("end") or 0.0)
+        except (KeyError, TypeError, ValueError):
+            return False
+        # A word occupies at least one emission frame; clamp degenerate spans.
+        total_frames += max((end - start) * 1000.0 / stride, 1.0)
+    return (total_score / total_frames) < _ALIGN_MIN_AVG_LOGPROB
 
 
 def _put_file(path: Path, presigned_url: str, content_type: str) -> None:

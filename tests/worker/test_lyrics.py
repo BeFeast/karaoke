@@ -10,6 +10,7 @@ network. Covers the cases issue #54 calls out:
   * no-match (both endpoints miss → empty result; caller keeps Whisper)
   * in-process caching by (artist, track, duration)
   * duration hard-reject of the best ``/api/search`` candidate (#148)
+  * text salvage from a duration-rejected candidate (``rejected_text``, #149)
 """
 from __future__ import annotations
 
@@ -282,6 +283,8 @@ def test_search_rejects_best_candidate_on_duration_mismatch():
     assert result.synced_lrc is None
     assert result.plain is None
     assert result.rejected == "duration_mismatch (28s)"
+    # The candidate's text is salvaged for force-alignment (#149).
+    assert result.rejected_text == PLAIN_BODY
 
 
 def test_search_reject_drops_instrumental_flag_too():
@@ -338,6 +341,70 @@ def test_search_keeps_candidate_when_duration_unknown():
     result = LyricsSource(http=rec).fetch(artist="Artist", track="Song", duration=None)
     assert result.source == "lrclib_search"
     assert result.rejected is None
+
+
+# ---------------------------------------------------------------------------
+# 9. text salvage from a duration-rejected candidate (#149)
+# ---------------------------------------------------------------------------
+def test_reject_salvages_plain_text_as_is():
+    """Plain text on the rejected record passes through verbatim."""
+    rec = _Recorder(_search_script([
+        {
+            "trackName": "Song",
+            "duration": 257,
+            "syncedLyrics": SYNCED_BODY,
+            "plainLyrics": "  line one\nline two  ",
+        },
+    ]))
+    result = LyricsSource(http=rec).fetch(artist="Artist", track="Song", duration=229)
+
+    assert result.rejected == "duration_mismatch (28s)"
+    assert result.rejected_text == "line one\nline two"
+    # #148 reject semantics unchanged: still a miss for precedence purposes.
+    assert result.found is False
+    assert result.source == "none"
+
+
+def test_reject_salvages_synced_only_with_timestamps_stripped():
+    """A synced-only rejected record yields its text with timestamps stripped —
+    the timings belong to the wrong edit; only the words are worth keeping."""
+    rec = _Recorder(_search_script([
+        {"trackName": "Song", "duration": 257, "syncedLyrics": SYNCED_BODY},
+    ]))
+    result = LyricsSource(http=rec).fetch(artist="Artist", track="Song", duration=229)
+
+    assert result.rejected == "duration_mismatch (28s)"
+    assert result.rejected_text == PLAIN_BODY
+    assert "[" not in result.rejected_text
+
+
+def test_reject_without_text_salvages_nothing():
+    """A rejected record with no lyrics (e.g. instrumental-flagged) has nothing
+    to salvage — ``rejected_text`` stays None and the floor applies."""
+    rec = _Recorder(_search_script([
+        {"trackName": "Song", "duration": 400, "instrumental": True},
+    ]))
+    result = LyricsSource(http=rec).fetch(artist="Artist", track="Song", duration=229)
+
+    assert result.rejected == "duration_mismatch (171s)"
+    assert result.rejected_text is None
+
+
+def test_accepted_candidate_has_no_rejected_text():
+    """Within the duration threshold nothing is rejected, so nothing is salvaged."""
+    rec = _Recorder(_search_script([
+        {
+            "trackName": "Song",
+            "duration": 231,
+            "syncedLyrics": SYNCED_BODY,
+            "plainLyrics": PLAIN_BODY,
+        },
+    ]))
+    result = LyricsSource(http=rec).fetch(artist="Artist", track="Song", duration=229)
+
+    assert result.source == "lrclib_search"
+    assert result.rejected is None
+    assert result.rejected_text is None
 
 
 def test_get_path_unaffected_by_duration_reject():

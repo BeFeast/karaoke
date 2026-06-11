@@ -9,7 +9,8 @@ the yt-dlp metadata captured during download (see :mod:`karaoke.titles`).
 
 Precedence the pipeline applies with this module's result:
 
-    LRCLIB synced  >  LRCLIB plain  >  Whisper ASR (the GPU transcript)
+    LRCLIB synced (duration OK)  >  forced-aligned (LRCLIB text: plain, or
+    duration-rejected)  >  Whisper ASR synced  >  untimed floor
 
 Lookup strategy (mirrors LRCLIB's own client guidance):
 
@@ -18,9 +19,12 @@ Lookup strategy (mirrors LRCLIB's own client guidance):
   2. On a 404 (or any miss), fall back to ``GET /api/search`` (fuzzy) and pick
      the best candidate by title similarity + duration proximity. A best
      candidate whose duration is more than ``_DURATION_REJECT_S`` away from
-     the actual audio is rejected outright (#148): it is the wrong edit/cut,
-     and its synced timings would drift against our track — strictly worse
-     than the Whisper ASR floor, which is timed against the real audio.
+     the actual audio is rejected (#148): it is the wrong edit/cut, and its
+     synced timings would drift against our track — strictly worse than the
+     Whisper ASR floor, which is timed against the real audio. The candidate's
+     *text* is still salvaged (#149) as ``rejected_text`` (timestamps
+     stripped) so the pipeline can force-align it against the actual vocal
+     stem: right text + right timings.
 
 Results are cached in-process by ``(artist, track, duration)`` so re-running a
 job (or a retry) does not re-hit LRCLIB.
@@ -33,6 +37,7 @@ network — the same test seam shape the RunPod/vast clients use.
 """
 from __future__ import annotations
 
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -51,10 +56,15 @@ _DURATION_TOLERANCE_S = 2
 # Whisper ASR floor. Does not apply to /api/get — LRCLIB enforces ±2s there.
 _DURATION_REJECT_S = 5
 
+# Matches an LRC line timestamp tag, e.g. "[01:23.45]" / "[01:23]", including
+# repeated tags on one line. Used to derive plain text from a synced LRC body.
+LRC_TIMESTAMP_RE = re.compile(r"\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]")
+
 # Lyrics-source provenance values recorded in metadata.json.
 SOURCE_LRCLIB_SYNCED = "lrclib_synced"
-# LRCLIB plain text that we force-aligned against the vocal stem into a synced
-# LRC inside the GPU job window (#55). Ranks just below native LRCLIB synced.
+# LRCLIB text that we force-aligned against the vocal stem into a synced LRC
+# inside the GPU job window: plain-only records (#55) and duration-rejected
+# records whose text was salvaged (#149). Ranks just below native LRCLIB synced.
 SOURCE_FORCED_ALIGNED = "forced_aligned"
 SOURCE_LRCLIB_PLAIN = "lrclib_plain"
 # Whisper ASR transcript with an approximate LRC synthesized from the Whisper
@@ -103,6 +113,16 @@ def _fmt_lrc_timestamp(seconds: float) -> str:
     return f"[{minutes:02d}:{rem:05.2f}]"
 
 
+def lrc_to_plain(lrc: str) -> str:
+    """Strip ``[mm:ss.xx]`` timestamps from an LRC body, keeping non-empty lines."""
+    out: list[str] = []
+    for line in lrc.splitlines():
+        stripped = LRC_TIMESTAMP_RE.sub("", line).strip()
+        if stripped:
+            out.append(stripped)
+    return "\n".join(out)
+
+
 @dataclass(frozen=True, slots=True)
 class LyricsResult:
     """Outcome of an LRCLIB lookup.
@@ -115,6 +135,13 @@ class LyricsResult:
     * ``rejected`` — why a record LRCLIB *did* return was dropped anyway
       (e.g. ``"duration_mismatch (28s)"``, #148), or ``None``. Only ever set
       alongside ``source="none"``; surfaced in ``metadata.json`` provenance.
+    * ``rejected_text`` — plain text salvaged from a duration-rejected record
+      (#149): the words are usually still right (same song, different edit) —
+      only the timings belong to the wrong cut. Timestamps are already
+      stripped from synced input; plain input passes through as-is. Only ever
+      set alongside ``rejected``; never makes :attr:`found` true, so #148's
+      reject semantics are unchanged. The pipeline force-aligns it against the
+      actual vocal stem.
     """
 
     synced_lrc: str | None = None
@@ -122,6 +149,7 @@ class LyricsResult:
     instrumental: bool = False
     source: str = "none"
     rejected: str | None = None
+    rejected_text: str | None = None
 
     @property
     def found(self) -> bool:
@@ -319,14 +347,21 @@ class LyricsSource:
             return None
         best = max(candidates, key=lambda c: _score_candidate(c, track, duration))
         # Hard reject (#148): a best candidate too far from the actual audio
-        # duration is the wrong edit/cut — its synced timings would drift, and
-        # its text covers the wrong cut too. Drop the entire record so the
-        # pipeline falls through to the Whisper ASR floor (timed against the
-        # real audio). Unknown durations (either side) are never rejected.
+        # duration is the wrong edit/cut — its synced timings would drift
+        # against our track. Drop the record's lyrics/instrumental flag, but
+        # salvage its *text* (#149): for the common "official video edit vs
+        # canonical recording" case the words are still right, so the pipeline
+        # force-aligns them against the actual vocal stem instead of falling
+        # straight to the Whisper ASR floor. Unknown durations (either side)
+        # are never rejected.
         delta = _duration_delta(best, duration)
         if delta is not None and delta > _DURATION_REJECT_S:
+            plain = _clean(best.get("plainLyrics"))
+            synced = _clean(best.get("syncedLyrics"))
+            salvaged = plain or (lrc_to_plain(synced) if synced else "")
             return LyricsResult(
                 source="none",
                 rejected=f"duration_mismatch ({round(delta, 1):g}s)",
+                rejected_text=salvaged or None,
             )
         return _from_record(best, source="lrclib_search")

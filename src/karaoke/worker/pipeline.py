@@ -44,6 +44,7 @@ from karaoke.db.models import Artifact, Job, JobStatus
 from karaoke.titles import derive_metadata
 from karaoke.worker import job_cookies
 from karaoke.worker.lyrics import (
+    LRC_TIMESTAMP_RE,
     SOURCE_FORCED_ALIGNED,
     SOURCE_INSTRUMENTAL,
     SOURCE_LRCLIB_PLAIN,
@@ -52,6 +53,7 @@ from karaoke.worker.lyrics import (
     SOURCE_WHISPER_ASR_SYNCED,
     LyricsResult,
     LyricsSource,
+    lrc_to_plain,
     whisper_segments_to_lrc,
 )
 
@@ -63,10 +65,6 @@ _LYRICS_SOURCE = LyricsSource()
 # yt-dlp player-client chain (mirrors scribe's downloader; android_vr is the
 # token-free workhorse, web clients need the EJS/deno JS solver in the image).
 _PLAYER_CLIENTS = "mweb,web_safari,android_vr,web_embedded"
-
-# Matches an LRC line timestamp tag, e.g. "[01:23.45]" / "[01:23]", including
-# repeated tags on one line. Used to derive a plain-text export from synced LRC.
-_LRC_TIMESTAMP_RE = re.compile(r"\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]")
 
 # YouTube soft-ban / bot-check fingerprints. When yt-dlp prints one of these we
 # back off and retry rather than failing immediately — the devbox residential
@@ -405,18 +403,27 @@ def _resolve_lyrics(
       3. LRCLIB plain (no usable aligned LRC) → write ``exports/lyrics.txt``
          (untimed) from LRCLIB.
       4. LRCLIB instrumental  → no lyrics; mark the job instrumental.
-      5. LRCLIB miss          → keep the Whisper transcript (``lyrics.txt``);
+      5. Duration-rejected LRCLIB text + force-aligned LRC (#149) → write the
+         GPU-synthesized ``exports/lyrics.lrc`` (provenance ``forced_aligned``)
+         + the salvaged text as ``lyrics.txt``: right text, timings measured
+         from the actual audio. The mapping carries the trigger under
+         ``"lyrics_align_reason"`` (e.g. ``"lrclib_duration_mismatch (28s)"``).
+      6. LRCLIB miss          → keep the Whisper transcript (``lyrics.txt``);
          when the GPU job's ``lyrics.json`` segment timestamps are usable, also
          synthesize an approximate ``exports/lyrics.lrc`` from them (provenance
          ``whisper_asr_synced``, #145) so the ASR floor still gets synced
          highlight.
 
     ``aligned_lrc_path`` is the optional GPU-produced force-aligned LRC (#55).
-    It is only consulted in the plain-only branch — synced LRCLIB always wins,
-    and we never force-align when there's nothing to align.
+    It is only consulted in the plain-only and rejected-text branches — synced
+    LRCLIB always wins, and we never force-align when there's nothing to align.
+    Known limitation of the rejected-text branch: the canonical text may carry
+    lines absent from this audio edit; the handler drops low-confidence lines
+    (per-line aligner scores), and a wholly-garbage alignment is rejected by
+    :func:`_read_aligned_lrc`, falling to the Whisper ASR floor.
 
     ``whisper_lyrics_json`` is the GPU job's faster-whisper ``lyrics.json``
-    (segment timestamps). It is only consulted in the LRCLIB-miss branch; a
+    (segment timestamps). It is only consulted in the floor branch; a
     missing/unreadable/segment-less file degrades silently to the untimed
     ``whisper_asr`` floor.
 
@@ -427,8 +434,9 @@ def _resolve_lyrics(
          "lrc_written": bool}
 
     When the LRCLIB lookup *had* a record but dropped it (duration hard-reject,
-    #148), the miss-branch mapping additionally carries the reason under
-    ``"lyrics_lrclib_rejected"`` for ``metadata.json`` debuggability.
+    #148) and no usable aligned LRC came back, the floor-branch mapping
+    additionally carries the reason under ``"lyrics_lrclib_rejected"`` for
+    ``metadata.json`` debuggability.
     """
     lyrics_txt = exports_dir / "lyrics.txt"
     lyrics_lrc = exports_dir / "lyrics.lrc"
@@ -436,7 +444,7 @@ def _resolve_lyrics(
     if lyrics.synced_lrc:
         lyrics_lrc.write_text(lyrics.synced_lrc, encoding="utf-8")
         # Also keep a plain-text export so the inline/share text path renders.
-        plain_text = lyrics.plain or _lrc_to_plain(lyrics.synced_lrc)
+        plain_text = lyrics.plain or lrc_to_plain(lyrics.synced_lrc)
         lyrics_txt.write_text(plain_text, encoding="utf-8")
         return {
             "lyrics_source": SOURCE_LRCLIB_SYNCED,
@@ -478,6 +486,25 @@ def _resolve_lyrics(
             "lrc_written": False,
         }
 
+    # Duration-rejected record whose text was salvaged (#149): when the GPU
+    # force-aligned that text into a usable LRC, export it — right text,
+    # timings measured from the actual audio. Source stays ``forced_aligned``;
+    # ``lyrics_align_reason`` records why alignment (not native synced) was
+    # used. No usable aligned LRC → fall through to the Whisper floor below,
+    # which records the rejection as before (#148 unchanged).
+    if lyrics.rejected_text:
+        aligned = _read_aligned_lrc(aligned_lrc_path)
+        if aligned:
+            lyrics_lrc.write_text(aligned, encoding="utf-8")
+            lyrics_txt.write_text(lyrics.rejected_text, encoding="utf-8")
+            return {
+                "lyrics_source": SOURCE_FORCED_ALIGNED,
+                "synced": True,
+                "instrumental": False,
+                "lrc_written": True,
+                "lyrics_align_reason": f"lrclib_{lyrics.rejected}",
+            }
+
     # LRCLIB miss → keep the Whisper transcript (the ASR floor). When the GPU
     # job's segment timestamps are usable, also emit an approximate LRC so the
     # floor still gets synced highlight (#145). Tolerant: a missing/unreadable
@@ -502,16 +529,6 @@ def _resolve_lyrics(
     if lyrics.rejected:
         prov["lyrics_lrclib_rejected"] = lyrics.rejected
     return prov
-
-
-def _lrc_to_plain(lrc: str) -> str:
-    """Strip ``[mm:ss.xx]`` timestamps from an LRC body for the plain export."""
-    out: list[str] = []
-    for line in lrc.splitlines():
-        stripped = _LRC_TIMESTAMP_RE.sub("", line).strip()
-        if stripped:
-            out.append(stripped)
-    return "\n".join(out)
 
 
 # Minimal ISO-639-1 → ISO-639-3 map for the languages we realistically see in
@@ -555,7 +572,7 @@ def _read_aligned_lrc(aligned_lrc_path: Path | None) -> str | None:
         body = aligned_lrc_path.read_text(encoding="utf-8")
     except OSError:
         return None
-    if not body.strip() or not _LRC_TIMESTAMP_RE.search(body):
+    if not body.strip() or not LRC_TIMESTAMP_RE.search(body):
         return None
     return body
 
@@ -655,12 +672,19 @@ async def run_real_job(
             album=source_meta.get("album"),
             duration=source_meta.get("duration"),
         )
-        # Force-align only when LRCLIB returned plain text but NO synced LRC
-        # (synced already wins; instrumental/miss have nothing to align).
+        # Force-align when LRCLIB returned plain text but NO synced LRC
+        # (synced already wins; instrumental/miss have nothing to align), or
+        # when the duration hard-reject (#148) salvaged the record's text
+        # (#149): the words fit, only the timings belonged to the wrong edit,
+        # so aligning them against OUR vocal stem yields right text + right
+        # timings.
         align_text: str | None = None
         align_lang: str | None = None
         if lyrics.plain and not lyrics.synced_lrc and not lyrics.instrumental:
             align_text = lyrics.plain
+            align_lang = _align_lang(source_meta)
+        elif lyrics.rejected_text:
+            align_text = lyrics.rejected_text
             align_lang = _align_lang(source_meta)
 
         # --- separating (provision + /demucs) -------------------------------
@@ -721,12 +745,14 @@ async def run_real_job(
         await asyncio.to_thread(_wav_to_mp3, gpu.vocals_path, vocals_mp3)
 
         # --- lyrics resolution: precedence + chosen exports -----------------
-        # LRCLIB synced > LRCLIB plain + force-aligned LRC (→ synced) >
-        # LRCLIB plain (untimed) > Whisper ASR (floor). Tolerant: if the GPU
-        # returned no usable aligned LRC (old image / alignment failed), we
-        # degrade to LRCLIB plain text; if LRCLIB missed entirely, we keep the
-        # Whisper transcript — synthesizing an approximate LRC from its segment
-        # timestamps when usable (#145). Never fails the job over alignment.
+        # LRCLIB synced (duration OK) > force-aligned LRCLIB text (plain #55,
+        # or duration-rejected #149) > LRCLIB plain (untimed) > Whisper ASR
+        # (floor). Tolerant: if the GPU returned no usable aligned LRC (old
+        # image / alignment failed), we degrade to LRCLIB plain text or — for
+        # rejected text — the Whisper floor; if LRCLIB missed entirely, we keep
+        # the Whisper transcript — synthesizing an approximate LRC from its
+        # segment timestamps when usable (#145). Never fails the job over
+        # alignment.
         lyrics_prov = _resolve_lyrics(
             lyrics,
             exports_dir,
@@ -757,6 +783,10 @@ async def run_real_job(
         # present when it happened, so normal jobs keep a stable metadata shape.
         if lyrics_prov.get("lyrics_lrclib_rejected"):
             metadata["lyrics_lrclib_rejected"] = lyrics_prov["lyrics_lrclib_rejected"]
+        # Why a forced alignment was used over native synced timings (#149) —
+        # only present when rejected LRCLIB text was successfully re-aligned.
+        if lyrics_prov.get("lyrics_align_reason"):
+            metadata["lyrics_align_reason"] = lyrics_prov["lyrics_align_reason"]
         (exports_dir / "metadata.json").write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
         )
