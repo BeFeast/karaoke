@@ -1,10 +1,32 @@
-import { buildJobBody } from "./cookies.js";
+import { buildJobBody, countYoutubeCookies } from "./cookies.js";
 
 const DEFAULT_BASE_URL = "https://karaoke.oklabs.uk";
 const SOURCE = "chrome-extension";
 const NOTIFICATION_LINKS_KEY = "notificationLinks";
 const NOTIFICATION_ICON = "icons/karaoke-128.png";
 const CLEAR_BADGE_ALARM = "clear-karaoke-badge";
+
+// Toolbar badge states per the Doorway icon board (design/m-doorway.jsx:126):
+// idle = no badge, working = job progress %, ready = ✓, error = !.
+// Working carries the Wave-0 green bake (#e8a93c -> #9fd07a); ready/error are
+// the board's own literals (= the booth --accent/--err token values).
+const BADGE_WORKING = "#9fd07a";
+const BADGE_READY = "#5f7a4a";
+const BADGE_ERROR = "#a8442f";
+const BADGE_TEXT = "#ffffff";
+
+// Track the most recently submitted job in chrome.storage.session so the
+// badge can follow real progress across service-worker restarts. The poll
+// alarm fires at Chrome's MV3 minimum interval.
+const TRACKED_JOB_KEY = "trackedJob";
+const PROGRESS_POLL_ALARM = "karaoke-progress-poll";
+const PROGRESS_POLL_MINUTES = 0.5;
+const MAX_POLL_FAILURES = 10;
+const TERMINAL_BADGE_MS = 5 * 60 * 1000;
+
+// One submit per tab+URL (chrome.storage.session): opening the popup again on
+// the same page shows the existing receipt instead of minting a second job.
+const SUBMITTED_PREFIX = "submitted:";
 
 // Domains whose cookies make up a logged-in YouTube session. youtube.com is the
 // primary jar; google.com carries the shared Google account auth cookies
@@ -42,13 +64,17 @@ chrome.runtime.onStartup.addListener(() => {
   cleanupLegacyCookieSync();
 });
 
-chrome.action.onClicked.addListener(async (tab) => {
-  if (!isSubmittableUrl(tab.url || "")) {
-    await notifyFailure("Open an http(s) video page before using the toolbar action.");
-    return;
+// The toolbar click opens popup.html (manifest `default_popup`), which
+// immediately asks this worker to submit the active tab — the popup IS the
+// receipt (issue #155). chrome.action.onClicked does not fire with a popup.
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "submit-active-tab") {
+    submitActiveTab().then(sendResponse, (error) =>
+      sendResponse({ ok: false, error: String(error?.message || error) }),
+    );
+    return true;
   }
-
-  await submitToKaraoke(tab.url);
+  return undefined;
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
@@ -58,7 +84,16 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     return;
   }
 
-  await submitToKaraoke(url);
+  try {
+    const { job, cookiesAttached } = await submitToKaraoke(url);
+    await notifySuccess(job);
+    if (info.menuItemId === "submit-page" && tab?.id != null && tab?.url === url) {
+      await rememberTabSubmit(tab.id, url, job.id, cookiesAttached);
+    }
+  } catch (error) {
+    await notifyFailure(error.message || String(error));
+    await setErrorBadge();
+  }
 });
 
 chrome.notifications.onClicked.addListener(async (notificationId) => {
@@ -79,6 +114,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     chrome.action.setBadgeText({ text: "" });
     return;
   }
+  if (alarm.name === PROGRESS_POLL_ALARM) {
+    pollTrackedJob();
+    return;
+  }
   if (alarm.name === LEGACY_REFRESH_ALARM) {
     // Defensive: an upgraded install may still have the old periodic alarm
     // queued before cleanup ran. Drop it instead of acting on it.
@@ -86,8 +125,46 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
+// ── popup submit flow ────────────────────────────────────────────────────────
+
+async function submitActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const url = tab?.url || "";
+  const tabTitle = tab?.title || "";
+  if (!isSubmittableUrl(url)) {
+    return { ok: false, reason: "unsupported-page" };
+  }
+
+  const dedupKey = `${SUBMITTED_PREFIX}${tab.id}:${url}`;
+  const stored = await chrome.storage.session.get(dedupKey);
+  const previous = stored[dedupKey];
+  if (previous) {
+    return {
+      ok: true,
+      jobId: previous.jobId,
+      cookiesAttached: previous.cookiesAttached,
+      cached: true,
+      tabTitle,
+    };
+  }
+
+  const { job, cookiesAttached } = await submitToKaraoke(url);
+  await chrome.storage.session.set({
+    [dedupKey]: { jobId: job.id, cookiesAttached },
+  });
+  return { ok: true, job, jobId: job.id, cookiesAttached, tabTitle };
+}
+
+async function rememberTabSubmit(tabId, url, jobId, cookiesAttached) {
+  await chrome.storage.session.set({
+    [`${SUBMITTED_PREFIX}${tabId}:${url}`]: { jobId, cookiesAttached },
+  });
+}
+
+// ── submit ──────────────────────────────────────────────────────────────────
+
 async function submitToKaraoke(url) {
-  setBadge("...", "#5b6472");
+  setWorkingBadge("…");
 
   try {
     const config = await getConfig();
@@ -96,12 +173,15 @@ async function submitToKaraoke(url) {
     // them with THIS job only (issue #77). No central jar, no always-on sync —
     // the cookies ride the request and the server never persists them.
     const cookies = await collectSessionCookies();
-    const result = await createJob(config, url, cookies);
-    await notifySuccess(config.baseUrl, result);
-    setBadge("OK", "#137333");
+    const job = await createJob(config, url, cookies);
+    if (job.id == null) {
+      throw new Error("Karaoke responded OK but returned no job ID.");
+    }
+    await startTrackingJob(job);
+    return { job, cookiesAttached: countYoutubeCookies(cookies) > 0 };
   } catch (error) {
-    await notifyFailure(error.message || String(error));
-    setBadge("ERR", "#b3261e");
+    await setErrorBadge();
+    throw error;
   }
 }
 
@@ -153,13 +233,19 @@ async function ensureHostPermission(baseUrl) {
   );
 }
 
-async function createJob(config, url, cookies) {
-  const headers = {
-    "Content-Type": "application/json",
-  };
+function authHeaders(config) {
+  const headers = {};
   if (config.bearerToken) {
     headers.Authorization = `Bearer ${config.bearerToken}`;
   }
+  return headers;
+}
+
+async function createJob(config, url, cookies) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...authHeaders(config),
+  };
 
   // buildJobBody attaches `youtube_cookies` only when youtube.com cookies are
   // present; otherwise the field is omitted and the server does a public fetch.
@@ -218,25 +304,103 @@ async function collectSessionCookies() {
   return merged;
 }
 
-async function notifySuccess(baseUrl, result) {
-  // The coordinator returns JobOut: { id, job_token, share_url, status, ... }.
-  // Accept the legacy `job_id` too in case an older API is in front.
-  const jobId = result.id ?? result.job_id;
-  if (!jobId) {
-    throw new Error("Karaoke responded OK but returned no job ID.");
+// ── badge — idle / working(%) / ready / error per the icon board ───────────
+
+async function startTrackingJob(job) {
+  setWorkingBadge(String(job.progress ?? 0));
+  await chrome.storage.session.set({
+    [TRACKED_JOB_KEY]: { jobId: job.id, failures: 0 },
+  });
+  chrome.alarms.create(PROGRESS_POLL_ALARM, {
+    periodInMinutes: PROGRESS_POLL_MINUTES,
+  });
+}
+
+async function stopTrackingJob() {
+  await chrome.storage.session.remove(TRACKED_JOB_KEY);
+  chrome.alarms.clear(PROGRESS_POLL_ALARM);
+}
+
+async function pollTrackedJob() {
+  const stored = await chrome.storage.session.get(TRACKED_JOB_KEY);
+  const tracked = stored[TRACKED_JOB_KEY];
+  if (!tracked) {
+    chrome.alarms.clear(PROGRESS_POLL_ALARM);
+    return;
   }
 
-  // Prefer the server-provided share_url; otherwise build the SPA item route
-  // (hash-routed `/app/#/job/{token}`) or fall back to the share path.
-  const jobUrl =
-    result.share_url ||
-    (result.job_token
-      ? `${baseUrl}/app/#/job/${result.job_token}`
-      : `${baseUrl}/app/#/jobs/${jobId}`);
-  const title = result.deduplicated ? "Already known to Karaoke" : "Submitted to Karaoke";
-  const status = result.status ? `Status: ${result.status}. ` : "";
-  const message = `${status}Click to open job #${jobId}.`;
-  const notificationId = `karaoke-job-${jobId}-${Date.now()}`;
+  let job;
+  try {
+    const config = await getConfig();
+    const response = await fetch(`${config.baseUrl}/jobs/${tracked.jobId}/status`, {
+      headers: authHeaders(config),
+    });
+    if (response.status === 404) {
+      // Gone (deleted, or another owner's view) — nothing left to follow.
+      await stopTrackingJob();
+      chrome.action.setBadgeText({ text: "" });
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    job = await response.json();
+  } catch {
+    const failures = (tracked.failures || 0) + 1;
+    if (failures >= MAX_POLL_FAILURES) {
+      await stopTrackingJob();
+      chrome.action.setBadgeText({ text: "" });
+    } else {
+      await chrome.storage.session.set({
+        [TRACKED_JOB_KEY]: { ...tracked, failures },
+      });
+    }
+    return;
+  }
+
+  if (job.status === "completed") {
+    await stopTrackingJob();
+    setBadge("✓", BADGE_READY);
+    return;
+  }
+  if (job.status === "failed" || job.status === "cancelled") {
+    await stopTrackingJob();
+    setBadge("!", BADGE_ERROR);
+    return;
+  }
+  setWorkingBadge(String(job.progress ?? 0));
+  await chrome.storage.session.set({
+    [TRACKED_JOB_KEY]: { ...tracked, failures: 0 },
+  });
+}
+
+function setWorkingBadge(text) {
+  chrome.action.setBadgeText({ text });
+  chrome.action.setBadgeBackgroundColor({ color: BADGE_WORKING });
+  chrome.action.setBadgeTextColor({ color: BADGE_TEXT });
+}
+
+async function setErrorBadge() {
+  await stopTrackingJob();
+  setBadge("!", BADGE_ERROR);
+}
+
+// Terminal badge (✓ / !): linger, then return to idle (empty badge).
+function setBadge(text, color) {
+  chrome.action.setBadgeText({ text });
+  chrome.action.setBadgeBackgroundColor({ color });
+  chrome.action.setBadgeTextColor({ color: BADGE_TEXT });
+  chrome.alarms.create(CLEAR_BADGE_ALARM, { when: Date.now() + TERMINAL_BADGE_MS });
+}
+
+// ── notifications (context-menu submits — the popup is its own receipt) ─────
+
+async function notifySuccess(job) {
+  // The coordinator returns JobOut: { id, job_token, share_url, status, ... }.
+  const jobUrl = job.share_url || `${(await getConfig()).baseUrl}/app/#/job/${job.job_token}`;
+  const status = job.status ? `Status: ${job.status}. ` : "";
+  const message = `${status}Click to open job #${job.id}.`;
+  const notificationId = `karaoke-job-${job.id}-${Date.now()}`;
 
   const links = await getNotificationLinks();
   links[notificationId] = jobUrl;
@@ -245,7 +409,7 @@ async function notifySuccess(baseUrl, result) {
   chrome.notifications.create(notificationId, {
     type: "basic",
     iconUrl: NOTIFICATION_ICON,
-    title,
+    title: "Submitted to Karaoke",
     message,
     priority: 1,
   });
@@ -297,20 +461,12 @@ function formatHttpError(status, body, tokenConfigured) {
   return `Karaoke rejected the URL (${status}): ${formatDetail(body)}`;
 }
 
-function setBadge(text, color) {
-  chrome.action.setBadgeText({ text });
-  chrome.action.setBadgeBackgroundColor({ color });
-  if (text !== "...") {
-    chrome.alarms.create(CLEAR_BADGE_ALARM, { when: Date.now() + 3500 });
-  }
-}
-
 function truncate(value, limit) {
   const text = String(value);
   return text.length > limit ? `${text.slice(0, limit - 1)}...` : text;
 }
 
-// Note: status polling and live progress should subscribe to GET /jobs/{id}/status
-// and the WebSocket channel at `${baseUrl.replace(/^http/, 'ws')}/ws` once the SPA
-// or a popup UI is wired in. The toolbar/contextmenu submit flow above only needs
-// POST /jobs and a notification linking back to the SPA job page.
+// Note: the popup follows its receipt job via GET /jobs/{id}/status while
+// open; this worker's poll alarm keeps the toolbar badge honest afterwards.
+// The WebSocket channel at `${baseUrl.replace(/^http/, 'ws')}/ws` remains the
+// canonical live-progress feed for the SPA.

@@ -23,22 +23,20 @@ async function restoreOptions() {
 
 async function saveOptions(event) {
   event.preventDefault();
-  status.textContent = "";
+  setStatus("", true);
 
   let baseUrl;
   try {
     baseUrl = normalizeBaseUrl(baseUrlInput.value);
   } catch (error) {
-    status.textContent = error.message;
-    status.style.color = "#b3261e";
+    setStatus(error.message, false);
     return;
   }
 
   const originPattern = `${new URL(baseUrl).origin}/*`;
   const granted = await chrome.permissions.request({ origins: [originPattern] });
   if (!granted) {
-    status.textContent = `Chrome did not grant access to ${new URL(baseUrl).origin}.`;
-    status.style.color = "#b3261e";
+    setStatus(`Chrome did not grant access to ${new URL(baseUrl).origin}.`, false);
     return;
   }
 
@@ -46,8 +44,12 @@ async function saveOptions(event) {
     baseUrl,
     bearerToken: bearerTokenInput.value.trim(),
   });
-  status.style.color = "#137333";
-  status.textContent = "Saved.";
+  setStatus("saved ✓", true);
+}
+
+function setStatus(text, ok) {
+  status.textContent = text;
+  status.style.color = ok ? "var(--ok)" : "var(--err)";
 }
 
 function normalizeBaseUrl(value) {
