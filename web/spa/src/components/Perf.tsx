@@ -31,13 +31,16 @@
 //   * prefers-reduced-motion: the 3 s idle fade is disabled (controls stay
 //     visible) and the wipe doesn't sweep — the current line fills whole.
 //   * Recorded deviations: pointerdown also wakes the controls (a touch tap
-//     emits no pointermove); the wipe scales-to-fit long real-world lines
-//     (.m-wipe is nowrap by recipe — the fill overlay can't re-wrap);
-//     play/skip disable until the engine is ready.
+//     emits no pointermove); long real-world lines fit-to-width (#166): the
+//     active line downscales its font via --line-scale, or wraps to two
+//     balanced rows below FIT_FLOOR with the wipe fill split across the rows;
+//     prev/next get the same overflow guard at their scale (the pure math
+//     lives in lineFit.ts); play/skip disable until the engine is ready.
 
-import { type CSSProperties, useCallback, useEffect, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KaraokePlayerApi } from "../player/useKaraokePlayer";
 import type { StageTheme } from "../theme";
+import { FIT_FLOOR, balancedSplit, fitLineScale, splitFill } from "./lineFit";
 import { MBulbs, MicMark } from "./marks";
 import { lyricState, type TimedLine } from "./stage-core";
 
@@ -75,10 +78,26 @@ function usePhoneLayout(): boolean {
   return phone;
 }
 
+// Available width for a lyric row — the #166 cap: min(92vw, container
+// content width), so nothing ever reaches the viewport edges.
+function availWidth(container: HTMLElement): number {
+  return Math.min(window.innerWidth * 0.92, container.clientWidth);
+}
+
 // The current line rides the engine's raw tick feed (subscribeTime) and
 // writes the DOM directly — per-tick wipe updates bypass React rendering
 // (the same seam as the console LiveLyricWipe). Reduced motion: no sweep —
 // the line fills whole while it's current.
+//
+// Fit-to-width (#166): real LRC lines overflow the 150%-scaled row the design
+// assumes. On line change (never per tick) the natural single-row width is
+// measured at scale 1 and fitLineScale picks a proportional --line-scale —
+// font-size based, so layout and centering stay true (the previous
+// transform:scale left the overflowing box off-center and still clipped).
+// Below FIT_FLOOR the line wraps at the balancedSplit whitespace into two
+// stacked .m-wipe rows and splitFill carries the progressive fill across
+// them; a single giant word (no split point) falls back to the exact-fit
+// downscale so nothing ever clips.
 function PerfWipe({
   lines,
   subscribeTime,
@@ -94,37 +113,159 @@ function PerfWipe({
   reducedMotion: boolean;
 }) {
   const rootRef = useRef<HTMLSpanElement | null>(null);
-  const dimRef = useRef<HTMLSpanElement | null>(null);
-  const fillRef = useRef<HTMLSpanElement | null>(null);
+  const headRowRef = useRef<HTMLSpanElement | null>(null);
+  const headDimRef = useRef<HTMLSpanElement | null>(null);
+  const headFillRef = useRef<HTMLSpanElement | null>(null);
+  const tailWrapRef = useRef<HTMLSpanElement | null>(null);
+  const tailRowRef = useRef<HTMLSpanElement | null>(null);
+  const tailDimRef = useRef<HTMLSpanElement | null>(null);
+  const tailFillRef = useRef<HTMLSpanElement | null>(null);
   const mountTimeRef = useRef(currentTime);
   mountTimeRef.current = currentTime;
   useEffect(() => {
-    const apply = (t: number) => {
+    let lastText: string | null = null;
+    // Wrapped-mode [headLen, tailLen] for splitFill; null = single row.
+    let split: [number, number] | null = null;
+
+    const relayout = (text: string) => {
       const root = rootRef.current;
-      const dim = dimRef.current;
-      const fill = fillRef.current;
-      if (!root || !dim || !fill) return;
+      const headRow = headRowRef.current;
+      const headDim = headDimRef.current;
+      const headFill = headFillRef.current;
+      const tailWrap = tailWrapRef.current;
+      const tailRow = tailRowRef.current;
+      const tailDim = tailDimRef.current;
+      const tailFill = tailFillRef.current;
+      if (!root || !headRow || !headDim || !headFill || !tailWrap || !tailRow || !tailDim || !tailFill) return;
+      // Reset to a natural single row at scale 1 and measure.
+      split = null;
+      root.style.setProperty("--line-scale", "1");
+      headDim.textContent = text;
+      headFill.textContent = text;
+      tailWrap.style.display = "none";
+      tailDim.textContent = "";
+      tailFill.textContent = "";
+      const avail = availWidth(root);
+      if (!text || !(avail > 0)) return;
+      let fit = fitLineScale(headRow.getBoundingClientRect().width, avail);
+      const halves = fit.wrap ? balancedSplit(text) : null;
+      if (halves) {
+        headDim.textContent = halves[0];
+        headFill.textContent = halves[0];
+        tailDim.textContent = halves[1];
+        tailFill.textContent = halves[1];
+        tailWrap.style.display = "block";
+        split = [halves[0].length, halves[1].length];
+        fit = fitLineScale(Math.max(headRow.getBoundingClientRect().width, tailRow.getBoundingClientRect().width), avail);
+      }
+      root.style.setProperty("--line-scale", String(fit.scale));
+      // Glyph metrics aren't perfectly linear under font-size scaling —
+      // correct any residual overflow so no character ever clips.
+      const widest = Math.max(headRow.getBoundingClientRect().width, halves ? tailRow.getBoundingClientRect().width : 0);
+      if (widest > avail) root.style.setProperty("--line-scale", String(fit.scale * (avail / widest)));
+    };
+
+    const apply = (t: number) => {
+      const headFill = headFillRef.current;
+      const tailFill = tailFillRef.current;
+      if (!headFill || !tailFill) return;
       const ls = lyricState(lines, t);
       const text = ls.cur ? ls.cur.text : "";
-      if (dim.textContent !== text) {
-        dim.textContent = text;
-        fill.textContent = text;
-        // .m-wipe is nowrap by recipe (the fill overlay can't re-wrap), so a
-        // long real-world line scales down to the row instead of bleeding
-        // off-screen — across-the-room readability over geometric fidelity.
-        const avail = root.parentElement?.clientWidth ?? 0;
-        root.style.transform =
-          avail > 0 && root.scrollWidth > avail ? `scale(${avail / root.scrollWidth})` : "none";
+      if (lastText !== text) {
+        lastText = text;
+        relayout(text);
       }
-      fill.style.width = `${ls.cur ? (reducedMotion ? 100 : ls.sung) : 0}%`;
+      const sung = ls.cur ? (reducedMotion ? 100 : ls.sung) : 0;
+      if (split) {
+        const [head, tail] = splitFill(sung, split[0], split[1]);
+        headFill.style.width = `${head}%`;
+        tailFill.style.width = `${tail}%`;
+      } else {
+        headFill.style.width = `${sung}%`;
+      }
     };
     apply(mountTimeRef.current);
-    return subscribeTime(apply);
-  }, [lines, subscribeTime, reducedMotion]);
+    // Container/viewport resizes change the available width — re-fit the
+    // current line. Width-gated so font-size-driven height changes from
+    // relayout itself never re-trigger the observer.
+    const root = rootRef.current;
+    let lastW = root ? root.clientWidth : -1;
+    const ro =
+      root && typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => {
+            const w = root.clientWidth;
+            if (w === lastW) return;
+            lastW = w;
+            if (lastText !== null) relayout(lastText);
+          })
+        : null;
+    if (ro && root) ro.observe(root);
+    const unsub = subscribeTime(apply);
+    return () => {
+      ro?.disconnect();
+      unsub();
+    };
+  }, [lines, subscribeTime, reducedMotion, size]);
+  // The recipe's font-family is set per .m-wipe row (a class rule on the row
+  // would beat inheritance from the root); --line-scale is written only by
+  // relayout, so React never fights the manual style updates.
+  const rowStyle: CSSProperties = { fontFamily: "var(--font-display)" };
   return (
-    <span ref={rootRef} className="m-wipe" style={{ fontSize: size, fontFamily: "var(--font-display)", fontWeight: 700 }}>
-      <span className="w-dim" style={{ color: "var(--lyric-dim)" }} ref={dimRef}></span>
-      <span className="w-fill" style={{ color: "var(--accent)" }} ref={fillRef} aria-hidden="true"></span>
+    <span ref={rootRef} style={{ display: "block", fontWeight: 700, fontSize: `calc(${size}px * var(--line-scale, 1))` }}>
+      <span style={{ display: "block" }}>
+        <span ref={headRowRef} className="m-wipe" style={rowStyle}>
+          <span className="w-dim" style={{ color: "var(--lyric-dim)" }} ref={headDimRef}></span>
+          <span className="w-fill" style={{ color: "var(--accent)" }} ref={headFillRef} aria-hidden="true"></span>
+        </span>
+      </span>
+      <span ref={tailWrapRef} style={{ display: "none" }}>
+        <span ref={tailRowRef} className="m-wipe" style={rowStyle}>
+          <span className="w-dim" style={{ color: "var(--lyric-dim)" }} ref={tailDimRef}></span>
+          <span className="w-fill" style={{ color: "var(--accent)" }} ref={tailFillRef} aria-hidden="true"></span>
+        </span>
+      </span>
+    </span>
+  );
+}
+
+// Neighbour (prev/next) lines — the same overflow guard at their scale
+// (#166): render nowrap, measure once per text change (two-pass
+// useLayoutEffect, re-rendered before paint so nothing flashes), and
+// downscale the font to fit. Below FIT_FLOOR the line switches to a natural
+// balanced wrap at the floor scale instead — there is no fill to preserve
+// here, so CSS does the splitting.
+function FitLine({ text }: { text: string }) {
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const [fit, setFit] = useState<{ forText: string | null; scale: number; wrap: boolean }>({
+    forText: null,
+    scale: 1,
+    wrap: false,
+  });
+  const measured = fit.forText === text;
+  useLayoutEffect(() => {
+    if (measured) return;
+    const el = ref.current;
+    if (!el) return;
+    const avail = el.parentElement ? availWidth(el.parentElement) : 0;
+    const f = fitLineScale(el.getBoundingClientRect().width, avail);
+    setFit({ forText: text, scale: f.wrap ? FIT_FLOOR : f.scale, wrap: f.wrap });
+  });
+  useEffect(() => {
+    const onResize = () => setFit((s) => (s.forText === null ? s : { ...s, forText: null }));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return (
+    <span
+      ref={ref}
+      style={{
+        display: "inline-block",
+        whiteSpace: measured && fit.wrap ? "normal" : "nowrap",
+        textWrap: measured && fit.wrap ? "balance" : undefined,
+        fontSize: measured ? `${fit.scale}em` : "1em",
+      }}
+    >
+      {text}
     </span>
   );
 }
@@ -249,7 +390,7 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
       {lines.length > 0 ? (
         <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", gap: m.gap, padding: m.pad, textAlign: "center", minHeight: 0 }}>
           <div style={{ fontFamily: "var(--font-display)", fontSize: m.prev * sz, fontWeight: 500, color: "var(--lyric-prev)", lineHeight: m.lineLh, minHeight: m.prevH * sz }}>
-            {ls.prev ? ls.prev.text : ""}
+            {ls.prev ? <FitLine text={ls.prev.text} /> : ""}
           </div>
           <div style={{ fontFamily: "var(--font-display)", fontSize: m.cur * sz, fontWeight: 700, letterSpacing: m.track, lineHeight: m.lh, minHeight: m.curH * sz, textShadow: "var(--glow)" }}>
             {ls.cur ? (
@@ -267,7 +408,7 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
             )}
           </div>
           <div style={{ fontFamily: "var(--font-display)", fontSize: m.next * sz, fontWeight: 540, color: "var(--lyric-next)", lineHeight: m.lineLh, minHeight: m.nextH * sz }}>
-            {ls.next ? ls.next.text : "— end —"}
+            {ls.next ? <FitLine text={ls.next.text} /> : "— end —"}
           </div>
           <div style={{ display: "flex", justifyContent: "center", marginTop: 4, minHeight: 8 }}>
             {gapBulbs > 0 && <MBulbs n={8} lit={gapBulbs} size={7} gap={phone ? 9 : 10} />}
