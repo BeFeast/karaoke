@@ -9,9 +9,9 @@ import {
 import { formatRelativeTime } from "../lib/jobListUtils";
 import { goDashboard } from "../router";
 import { useTheme } from "../theme";
+import { MarqueeTopBar } from "./Booth";
 import { ConfirmDialog, type ConfirmState } from "./ConfirmDialog";
 import { Toast } from "./Toast";
-import { TopBar } from "./TopBar";
 
 const DEFAULT_LABEL = "Chrome extension";
 
@@ -25,10 +25,12 @@ const MINT_FORBIDDEN_HINT =
 // Same single-column chrome as the item page: topbar + centered pane with a
 // "Back" affordance, no dashboard sidebar.
 function SettingsShell({ authControl, children }: { authControl?: ReactNode; children: ReactNode }) {
-  const [theme, toggleTheme] = useTheme();
+  // Keeps <html data-theme> applied until the Stage issue scopes theming;
+  // the toggle button left with the old TopBar (booth rooms are always light).
+  useTheme();
   return (
     <div className="app app-item">
-      <TopBar theme={theme} onToggleTheme={toggleTheme} identity={authControl} />
+      <MarqueeTopBar authControl={authControl} />
       <main className="main">
         <div className="pane pane-narrow">
           <button type="button" className="link-btn back-link" onClick={goDashboard}>

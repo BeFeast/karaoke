@@ -1,19 +1,13 @@
 import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import {
-  ClerkProvider,
-  SignedIn,
-  SignedOut,
-  SignInButton,
-  useAuth,
-  UserButton,
-} from "@clerk/clerk-react";
+import { ClerkProvider, SignedIn, SignedOut, useAuth, useClerk, useUser } from "@clerk/clerk-react";
 import { App } from "./App";
 import { getConfig, type RuntimeConfig, setTokenGetter } from "./api";
 import { ItemPage } from "./components/ItemPage";
+import { MicMark } from "./components/marks";
 import { SettingsPage } from "./components/SettingsPage";
-import { MicMark } from "./components/TopBar";
-import { useRoute } from "./router";
+import { SignInScreen, UserAvatar } from "./components/SignInWall";
+import { navigate, settingsHash, useRoute } from "./router";
 // Self-hosted Marquee webfonts (#152) — latin subsets only, no external
 // font <link>. Geist = UI, Geist Mono = mono, Bricolage Grotesque = display,
 // Bungee = signage. Weights cover the 400–650 range the stylesheet asks for.
@@ -51,7 +45,7 @@ function Boot({ children }: { children: React.ReactNode }) {
   return (
     <div className="center">
       <span className="brand-mark">
-        <MicMark />
+        <MicMark size={28} accent="var(--accent-fg)" ink="var(--accent-fg)" />
       </span>
       {children}
     </div>
@@ -73,23 +67,38 @@ function ClerkTokenBridge() {
   return null;
 }
 
+// The design's UserAvatar (SignInWall.tsx) fed with the real Clerk session:
+// identity from useUser(), the menu actions from the Clerk client.
+function ClerkAvatar() {
+  const { user } = useUser();
+  const clerk = useClerk();
+  const email = user?.primaryEmailAddress?.emailAddress ?? "";
+  return (
+    <UserAvatar
+      name={user?.fullName || user?.username || email}
+      email={email}
+      onSignOut={() => void clerk.signOut({ redirectUrl: "/app/" })}
+      onSettings={() => navigate(settingsHash())}
+      onManage={() => void clerk.openUserProfile()}
+    />
+  );
+}
+
+// S1 — the stage door. The CTA opens the real Clerk sign-in (modal flow).
+function SignInGate() {
+  const clerk = useClerk();
+  return <SignInScreen onSignIn={() => void clerk.openSignIn()} />;
+}
+
 function ClerkShell({ config }: { config: RuntimeConfig }) {
   return (
     <ClerkProvider publishableKey={config.clerk_publishable_key}>
       <ClerkTokenBridge />
       <SignedOut>
-        <Boot>
-          <h1>Karaoke</h1>
-          <p>Sign in to submit and track jobs.</p>
-          <SignInButton mode="modal">
-            <button type="button" className="btn primary">
-              Sign in
-            </button>
-          </SignInButton>
-        </Boot>
+        <SignInGate />
       </SignedOut>
       <SignedIn>
-        <Routed config={config} authControl={<UserButton afterSignOutUrl="/app/" />} />
+        <Routed config={config} authControl={<ClerkAvatar />} />
       </SignedIn>
     </ClerkProvider>
   );
@@ -102,9 +111,8 @@ function LanShell({ config }: { config: RuntimeConfig }) {
     <Routed
       config={config}
       authControl={
-        <span className="chip lan">
-          <span className="dot" aria-hidden />
-          LAN mode
+        <span className="m-chip" style={{ textTransform: "uppercase", letterSpacing: "0.05em", fontSize: 10 }}>
+          trusted lan
         </span>
       }
     />

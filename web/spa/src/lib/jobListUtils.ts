@@ -65,6 +65,39 @@ export function sortJobs(jobs: JobOut[], sort: JobSort): JobOut[] {
   return copy;
 }
 
+/** "$0.31" from micro-dollars, or null when the job has no recorded cost. */
+export function costDollars(micros: number | null | undefined): string | null {
+  if (micros == null || !Number.isFinite(micros)) return null;
+  return `$${(micros / 1_000_000).toFixed(2)}`;
+}
+
+/** "m:ss" from seconds, or null when unknown. */
+export function fmtDuration(seconds: number | null | undefined): string | null {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return null;
+  const s = Math.round(seconds);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Σ gpu_cost_micros over jobs created today (viewer-local calendar day) —
+ * the booth infra strip's "today $X.XX". Jobs without a recorded cost or a
+ * parseable created_at contribute nothing.
+ */
+export function todaySpendMicros(jobs: JobOut[], nowMs: number = Date.now()): number {
+  const now = new Date(nowMs);
+  return jobs.reduce((sum, job) => {
+    if (job.gpu_cost_micros == null) return sum;
+    const ms = parseTime(job.created_at);
+    if (ms === null) return sum;
+    const d = new Date(ms);
+    const sameDay =
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate();
+    return sameDay ? sum + job.gpu_cost_micros : sum;
+  }, 0);
+}
+
 /**
  * Hand-rolled relative timestamp (zero npm deps): "just now", "5 min ago",
  * "2 h ago", "3 d ago"; past 7 days falls back to a short locale date

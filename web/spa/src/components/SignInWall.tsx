@@ -1,8 +1,33 @@
-// KARAOKE final — the stage door (sign-in, Clerk) + user avatar menu.
+// KARAOKE — the stage door (sign-in wall, S1) + the booth avatar menu.
+// Literal port of design/claude-export/proto/signin.jsx (#153): SignInScreen
+// :3-44, UserAvatar :47-86. Adaptations wire real data: the footer version
+// comes from GET /health, the CTA triggers the real Clerk sign-in flow via
+// the onSignIn prop (only ClerkShell renders this — LanShell never does, so
+// the trusted-LAN path carries zero Clerk code), and UserAvatar takes real
+// Clerk user data via props (the export's fake name/email defaults dropped,
+// "Manage account" wired).
 
-function SignInScreen({ onSignIn, vars = {} }) {
+import { useEffect, useState } from "react";
+import { getHealth } from "../api";
+import { MBulbs, MicMark } from "./marks";
+
+export function SignInScreen({ onSignIn }: { onSignIn: () => void }) {
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let on = true;
+    getHealth()
+      .then((h) => {
+        if (on) setVersion(h.version);
+      })
+      .catch(() => {
+        // /health unreachable — the footer simply omits the version.
+      });
+    return () => {
+      on = false;
+    };
+  }, []);
   return (
-    <div className="m-booth" style={{ minHeight: "100%", display: "grid", placeItems: "center", padding: 24, ...vars }}>
+    <div className="m-booth" style={{ minHeight: "100%", display: "grid", placeItems: "center", padding: 24 }}>
       <div style={{ display: "grid", justifyItems: "center", gap: 0, textAlign: "center", maxWidth: 360 }}>
         {/* the sign above the door */}
         <div style={{
@@ -32,7 +57,7 @@ function SignInScreen({ onSignIn, vars = {} }) {
           <span>trusted lan skips this door</span>
         </div>
         <div className="m-mono" style={{ marginTop: 10, display: "flex", gap: 14, fontSize: 10.5, color: "var(--muted)", alignItems: "center" }}>
-          <span>karaoke v0.4.0</span>
+          <span>karaoke{version ? ` v${version}` : ""}</span>
           <span style={{ color: "var(--border)" }}>·</span>
           <a href="https://github.com/BeFeast/karaoke" target="_blank" rel="noopener" style={{ color: "var(--info)", textDecoration: "none" }}>github.com/BeFeast/karaoke ↗</a>
           <span style={{ color: "var(--border)" }}>·</span>
@@ -43,15 +68,34 @@ function SignInScreen({ onSignIn, vars = {} }) {
   );
 }
 
-// Clerk-backed avatar + account menu for the booth header.
-function UserAvatar({ name = "Oleg", email = "oleg@oklabs.uk", onSignOut, onSettings }) {
-  const [open, setOpen] = React.useState(false);
-  React.useEffect(() => {
+// Clerk-backed avatar + account menu for the booth header. Pure presentation:
+// the caller (ClerkShell in main.tsx) supplies the real user identity and the
+// real Clerk actions — this file imports nothing from Clerk.
+export function UserAvatar({
+  name,
+  email,
+  onSignOut,
+  onSettings,
+  onManage,
+}: {
+  name: string;
+  email: string;
+  onSignOut: () => void;
+  onSettings: () => void;
+  onManage: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
     if (!open) return;
     const close = () => setOpen(false);
     window.addEventListener("pointerdown", close);
     return () => window.removeEventListener("pointerdown", close);
   }, [open]);
+  const entries: [string, () => void][] = [
+    ["Settings", onSettings],
+    ["Manage account", onManage],
+    ["Sign out", onSignOut],
+  ];
   return (
     <div style={{ position: "relative" }} onPointerDown={(e) => e.stopPropagation()}>
       <button type="button" onClick={() => setOpen(!open)} aria-label="Account" style={{
@@ -59,7 +103,7 @@ function UserAvatar({ name = "Oleg", email = "oleg@oklabs.uk", onSignOut, onSett
         border: "2px solid " + (open ? "var(--accent)" : "var(--border)"),
         background: "var(--accent-soft)", color: "var(--accent)",
         font: "700 12px/1 var(--font-ui)", display: "grid", placeItems: "center", padding: 0,
-      }}>{name[0]}</button>
+      }}>{(name || email || "?")[0]}</button>
       {open && (
         <div style={{
           position: "absolute", right: 0, top: 38, zIndex: 20, minWidth: 198,
@@ -70,19 +114,17 @@ function UserAvatar({ name = "Oleg", email = "oleg@oklabs.uk", onSignOut, onSett
             <div style={{ fontSize: 12.5, fontWeight: 650 }}>{name}</div>
             <div className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 1 }}>{email}</div>
           </div>
-          {[["Settings", onSettings], ["Manage account", null], ["Sign out", onSignOut]].map(([label, fn]) => (
-            <button key={label} type="button" onClick={() => { setOpen(false); fn && fn(); }} style={{
+          {entries.map(([label, fn]) => (
+            <button key={label} type="button" onClick={() => { setOpen(false); fn(); }} style={{
               appearance: "none", border: "none", cursor: "pointer", width: "100%", textAlign: "left",
               padding: "7px 10px", borderRadius: 6, background: "transparent",
               color: label === "Sign out" ? "var(--err)" : "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-ui)",
             }}
-            onMouseEnter={(e) => e.currentTarget.style.background = "var(--bg-soft)"}
-            onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>{label}</button>
+            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-soft)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>{label}</button>
           ))}
         </div>
       )}
     </div>
   );
 }
-
-Object.assign(window, { SignInScreen, UserAvatar });
