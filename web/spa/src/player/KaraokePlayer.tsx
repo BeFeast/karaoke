@@ -16,9 +16,9 @@ function fmt(sec: number): string {
 function readWaveColors(): { wave: string; progress: string; cursor: string } {
   const cs = getComputedStyle(document.documentElement);
   const get = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
-  const border = get("--border-soft", "#c8ccd3");
-  const accent = get("--accent", "#657153");
-  const fgSoft = get("--fg-soft", "#3a4234");
+  const border = get("--border-soft", "#e6e0d3");
+  const accent = get("--accent", "#5f7a4a");
+  const fgSoft = get("--fg-soft", "#4c463c");
   return { wave: border, progress: accent, cursor: fgSoft };
 }
 
