@@ -72,6 +72,30 @@ def test_config_key_set_but_gate_off_stays_disabled(client):
     assert body["clerk_enabled"] is False
 
 
+def test_ws_settings_defaults():
+    """WS heartbeats default to the documented 5s; WS stays on the shared
+    HTTP listener (:13140) by default, with :13141 reserved for a split
+    listener deployment (issue #8)."""
+    settings = Settings()
+    assert settings.ws_heartbeat_interval_s == 5.0
+    assert settings.ws_port == 13140
+
+
+def test_ws_settings_env_override():
+    """Heartbeat interval + WS port are overridable via KARAOKE_WS_* env."""
+    os.environ["KARAOKE_WS_HEARTBEAT_INTERVAL_S"] = "0.5"
+    os.environ["KARAOKE_WS_PORT"] = "13141"
+    reset_settings_for_tests()
+    try:
+        settings = get_settings()
+        assert settings.ws_heartbeat_interval_s == 0.5
+        assert settings.ws_port == 13141
+    finally:
+        os.environ.pop("KARAOKE_WS_HEARTBEAT_INTERVAL_S", None)
+        os.environ.pop("KARAOKE_WS_PORT", None)
+        reset_settings_for_tests()
+
+
 def test_pot_provider_base_url_default_and_env_override():
     """The bgutil PO-token provider base URL defaults to the documented sidecar
     and is overridable via ``KARAOKE_POT_PROVIDER_BASE_URL`` (issue #68)."""

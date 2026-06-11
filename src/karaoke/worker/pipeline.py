@@ -39,6 +39,7 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from karaoke.api import ws as ws_events
 from karaoke.db.models import Artifact, Job, JobStatus
 from karaoke.titles import derive_metadata
 from karaoke.worker import job_cookies
@@ -358,6 +359,9 @@ async def _set_stage(
                 if value is not None and getattr(job, field) is None:
                     setattr(job, field, value)
         await session.commit()
+    # WS push on every stage transition (issue #8) — the hard rule: WebSocket
+    # is the canonical progress channel; /status polling is the fallback.
+    ws_events.publish_stage(job_id, status, progress, stage_note=stage_note)
     return True
 
 
@@ -387,7 +391,11 @@ async def _mark_failed(
         job.status = JobStatus.failed
         job.stage_note = None
         job.error = error[:4000]
+        progress = job.progress
         await session.commit()
+    # WS: an explicit ``error`` event plus the terminal stage (issue #8).
+    ws_events.publish_error(job_id, error[:4000])
+    ws_events.publish_stage(job_id, JobStatus.failed, progress, error=error[:4000])
 
 
 # ---------------------------------------------------------------------------
@@ -626,9 +634,17 @@ async def run_real_job(
         if _use_runpod(settings):
             from karaoke.worker.runpod_client import RunpodClient
 
+            # RunPod Serverless has no provisioning moment (no instance we
+            # own); the teardown cost_update after the GPU window covers it.
             client = RunpodClient(settings, prior_24h_cost_micros=prior)
         else:
-            client = VastClient(settings, prior_24h_cost_micros=prior)
+            client = VastClient(
+                settings,
+                prior_24h_cost_micros=prior,
+                # ``client.run`` executes inside ``asyncio.to_thread``, so the
+                # provisioning cost_update must hop back to the app loop.
+                on_instance_created=_provision_cost_publisher(job_id),
+            )
 
         # VastClient.run is synchronous (urllib + ssh + httpx); offload it. It
         # runs BOTH /demucs (separating) and /whisper (transcribing) in one
@@ -649,6 +665,17 @@ async def run_real_job(
             align_text=align_text,
             align_lang=align_lang,
         )
+        # GPU window closed (the client destroyed the instance in its own
+        # ``finally``): push the final cost, then the WS-only ``finalizing``
+        # stage while we encode + write exports (issue #8). The Job row stays
+        # ``transcribing`` — ``finalizing`` has no DB enum value.
+        ws_events.publish_cost(
+            job_id,
+            gpu.vast_cost,
+            vast_instance_id=str(gpu.vast_instance_id),
+            phase="teardown",
+        )
+        ws_events.publish_stage(job_id, ws_events.STAGE_FINALIZING, 95)
 
         # --- finalize -------------------------------------------------------
         exports_dir.mkdir(parents=True, exist_ok=True)
@@ -724,8 +751,22 @@ async def run_real_job(
             job.vast_instance_id = str(gpu.vast_instance_id)
             job.vast_cost_micros = round(gpu.vast_cost * 1_000_000)
             await session.commit()
+        ws_events.publish_stage(job_id, JobStatus.completed, 100)
     except Exception as exc:  # noqa: BLE001 — surface as a failed job, never crash the loop
         await _mark_failed(session_factory, job_id, f"{type(exc).__name__}: {exc}")
+
+
+def _provision_cost_publisher(job_id: int):
+    """Callback for ``VastClient(on_instance_created=...)``: announce that a
+    vast instance now exists (cost accrual starts) over WS. Runs on the
+    ``asyncio.to_thread`` worker thread, hence the thread-safe publish."""
+
+    def _publish(instance_id: int) -> None:
+        ws_events.publish_cost_threadsafe(
+            job_id, 0.0, vast_instance_id=str(instance_id), phase="provisioned"
+        )
+
+    return _publish
 
 
 async def _run_gpu_with_capacity_retry(
