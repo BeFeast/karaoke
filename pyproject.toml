@@ -1,6 +1,6 @@
 [project]
 name = "karaoke"
-version = "0.19.0"
+version = "0.19.1"
 description = "URL → isolated vocals + instrumental playback + lyrics; coordinator on devbox + ephemeral vast.ai GPU."
 authors = [
     { name = "Oleg Kossoy", email = "oleg@kossoy.com" }

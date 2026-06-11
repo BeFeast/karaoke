@@ -1,51 +1,76 @@
 <!doctype html>
+<!-- Doorway options page — DOM/classes/inline styles ported from
+     design/m-doorway.jsx MOptionsBoard (lines 63-100), wired to the real
+     settings (storage.sync keys baseUrl/bearerToken, unchanged) in
+     options.js. The design's YouTube-session card copy was design fiction —
+     the card below describes the real shipped behavior instead: the per-job
+     ephemeral cookie model (#77, see docs/per-job-cookies.md). The
+     MarqueeMark SVG keeps the exported geometry verbatim
+     (design/marquee-mark.jsx); the unlit amber fallback carries the Wave-0
+     green bake (#a8650f -> #5f7a4a). -->
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <title>Karaoke extension settings</title>
-    <link rel="stylesheet" href="options.css">
+    <link rel="stylesheet" href="marquee.css">
+    <link rel="stylesheet" href="doorway.css">
   </head>
   <body>
-    <main>
-      <h1>Karaoke settings</h1>
-      <form id="settings-form">
-        <label>
-          Karaoke base URL
-          <input id="base-url" name="baseUrl" type="url" required placeholder="https://karaoke.oklabs.uk">
-          <span class="help">
-            Defaults to the public deployment <code>https://karaoke.oklabs.uk</code>,
-            so the extension works from any machine. On the LAN you can point it at
-            the runtime directly, e.g. <code>http://10.10.0.13:13140</code>.
-          </span>
-        </label>
-        <label>
-          Optional bearer token
-          <input id="bearer-token" name="bearerToken" type="password" autocomplete="off">
-          <span class="help">
-            Create a Chrome extension token (<code>ktx_...</code>) in Karaoke Settings, then paste it here.
-            It is required for protected Karaoke URLs outside trusted LAN.
-          </span>
-        </label>
-        <div class="actions">
-          <button type="submit">Save</button>
-          <span id="status" role="status" aria-live="polite"></span>
+    <div class="m-booth" style="min-height: 100vh; padding: 28px 34px">
+      <div style="display: flex; align-items: center; gap: 10px">
+        <svg width="26" height="26" viewBox="0 0 48 48" aria-label="Karaoke mark">
+          <rect x="2" y="2" width="44" height="44" rx="11" fill="var(--bg-card, #fbf9f4)"></rect>
+          <rect x="2" y="2" width="44" height="44" rx="11" fill="none" stroke="var(--fg, #24201a)" stroke-width="2.5"></rect>
+          <circle cx="14" cy="8.5" r="1.8" fill="var(--vox-ui, #5f7a4a)"></circle>
+          <circle cx="24" cy="8.5" r="1.8" fill="var(--vox-ui, #5f7a4a)"></circle>
+          <circle cx="34" cy="8.5" r="1.8" fill="var(--vox-ui, #5f7a4a)"></circle>
+          <circle cx="14" cy="39.5" r="1.8" fill="var(--vox-ui, #5f7a4a)"></circle>
+          <circle cx="24" cy="39.5" r="1.8" fill="var(--vox-ui, #5f7a4a)"></circle>
+          <circle cx="34" cy="39.5" r="1.8" fill="var(--vox-ui, #5f7a4a)"></circle>
+          <text x="24" y="33" text-anchor="middle" font-family="Bungee, sans-serif" font-size="20" fill="var(--fg, #24201a)">K</text>
+        </svg>
+        <span style="font-family: var(--font-display); font-weight: 650; font-size: 16px">Karaoke</span>
+        <span class="m-chip" style="font-size: 10px">extension settings</span>
+      </div>
+      <div style="font-size: 12.5px; color: var(--muted); margin: 4px 0 20px">The stage door — where this browser hands songs to your booth.</div>
+
+      <form id="settings-form" style="display: grid; gap: 17px; max-width: 460px">
+        <div>
+          <div style="font-size: 12.5px; font-weight: 600; margin-bottom: 5px">Booth address</div>
+          <input id="base-url" name="baseUrl" type="url" required placeholder="https://karaoke.oklabs.uk"
+            style="width: 100%; padding: 8px 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--fg); font-size: 13px; font-family: var(--font-mono)">
+          <div style="font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: 5px">
+            Where submits go. Defaults to <span class="m-mono">https://karaoke.oklabs.uk</span>; on the LAN, point
+            straight at the runtime — <span class="m-mono">http://10.10.0.13:13140</span>. Saving asks Chrome for
+            permission to reach that origin.
+          </div>
+        </div>
+        <div>
+          <div style="font-size: 12.5px; font-weight: 600; margin-bottom: 5px">Stage pass <span class="m-mono" style="font-weight: 400; color: var(--muted)">ktx_…</span></div>
+          <input id="bearer-token" name="bearerToken" type="password" autocomplete="off"
+            style="width: 100%; padding: 8px 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--fg); font-size: 13px; font-family: var(--font-mono)">
+          <div style="font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: 5px">
+            Mint one in the Booth → Settings. Only needed outside the trusted LAN; jobs stay scoped to you.
+          </div>
+        </div>
+        <div style="border: 1px dashed var(--border); border-radius: 9px; padding: 11px 13px; background: var(--bg-card)">
+          <div style="display: flex; gap: 8px; align-items: center; font-size: 12.5px; font-weight: 600">
+            <span style="color: var(--ok)">●</span> YouTube session — nothing to configure
+          </div>
+          <div style="font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: 5px">
+            Some videos demand a signed-in viewer. On each submit, this browser's YouTube cookies ride along
+            with <b>that one job</b> — the booth uses them once for the download, then deletes them; no jar,
+            no background sync. Just stay signed in.
+          </div>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center">
+          <button class="m-btn primary" type="submit">Save</button>
+          <span id="status" role="status" aria-live="polite" class="m-mono" style="font-size: 11.5px; color: var(--ok)"></span>
         </div>
       </form>
 
-      <section id="cookies-section">
-        <h2>YouTube cookies</h2>
-        <p class="help">
-          Karaoke needs a logged-in YouTube session to download videos that ask
-          you to &ldquo;sign in to confirm you&rsquo;re not a bot&rdquo;. This
-          extension reads your browser&rsquo;s YouTube cookies and attaches them
-          to <strong>each submit</strong> &mdash; they are used for that one job
-          only and are never stored by the extension or the server. Just stay
-          signed in to YouTube in this browser; there is nothing to configure.
-        </p>
-      </section>
-
-      <footer id="version" class="help"></footer>
-    </main>
+      <div id="version" class="m-mono" style="font-size: 10.5px; color: var(--muted); margin-top: 26px"></div>
+    </div>
     <script src="options.js"></script>
   </body>
 </html>

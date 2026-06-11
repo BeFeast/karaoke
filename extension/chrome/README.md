@@ -3,6 +3,25 @@
 Small Manifest V3 operator tool for submitting video URLs to the Karaoke service
 (YouTube / `yt-dlp`-supported pages → vocals + instrumental playback + lyrics).
 
+## Doorway UI (Marquee port, issue #155)
+
+The popup and options pages are ports of the accepted "Karaoke Final" design
+boards (`design/m-doorway.jsx` + `design/marquee-mark.jsx` hold the verbatim
+export sources; the live pages adapt their DOM/classes/styles):
+
+- **Popup-as-receipt** — the toolbar click opens `popup.html`, which submits
+  the active tab through the service worker and renders the real `POST /jobs`
+  response as the receipt card, plus the real `GET /jobs` "tonight" mini-feed.
+  Reopening the popup on the same tab+URL shows the existing receipt instead
+  of minting a second job (`chrome.storage.session` dedup).
+- **Toolbar badge** — idle (none) / working (job progress %) / ready (✓) /
+  error (!), following the submitted job via a poll alarm.
+- **`marquee.css`** — the extension's single styling source: the Marquee token
+  blocks (Wave-0 green bake literals) + the recipes block vendored byte-exact
+  from `web/spa/src/styles.css`. Re-vendor from the SPA stylesheet; never edit
+  by hand. `doorway.css` adds self-hosted webfonts (`fonts/`, the same
+  fontsource woff2 files the SPA uses) and page resets.
+
 ## Install
 
 1. Open `chrome://extensions`.
@@ -71,24 +90,26 @@ scribe (do not regress to a single shared bearer).
 2. If using a non-default Karaoke URL, open the extension options page, save
    the base URL, and approve Chrome's host access prompt.
 3. While **signed in to YouTube** in this browser, open a session-gated video
-   page and click the toolbar action; confirm a success notification and that
-   the job downloads (the per-job cookies were attached).
+   page and click the toolbar action; confirm the popup receipt shows the job
+   with "youtube session ✓ rode along" and that the job downloads (the
+   per-job cookies were attached).
 4. Open a public video page supported by `yt-dlp` and click the toolbar action.
-   Confirm Chrome shows a success notification and clicking it opens the job
-   page.
+   Confirm the popup receipt renders the job, the "tonight" feed lists real
+   jobs, and "open the booth →" opens the SPA. Close and reopen the popup on
+   the same tab; confirm no second job is created.
 5. Right-click a video page and choose Submit this video page to Karaoke;
-   confirm success or already-known status is shown clearly.
+   confirm a success notification and that clicking it opens the job page.
 6. Right-click a video link and choose Submit video link to Karaoke; confirm
-   success or already-known status is shown clearly.
+   a success notification.
 7. For a protected Karaoke URL, leave the bearer token blank and submit again;
-   confirm a 401/403 notification explains that auth is required.
+   confirm the receipt (toolbar) or notification (context menu) explains that
+   auth is required.
 8. Set an invalid `ktx_...` bearer token for a protected Karaoke URL and submit
-   again; confirm the notification explains that the token is invalid or
-   unauthorized.
-9. Set the base URL to an unreachable host and submit again; confirm the
-   notification includes a useful connectivity error.
-10. Submit a non-http(s) toolbar page; confirm the extension reports that an
-    http(s) video page is required.
+   again; confirm the error explains that the token is invalid or unauthorized.
+9. Set the base URL to an unreachable host and submit again; confirm the error
+   includes a useful connectivity message.
+10. Open the popup on a non-http(s) page (e.g. `chrome://extensions`); confirm
+    the receipt says nothing was submitted and asks for an http(s) video page.
 
 ## Versioning
 
@@ -112,6 +133,19 @@ present when cookies exist, omitted cleanly when none).
 
 ## Icons
 
-The current `icons/` directory ships placeholder PNGs copied from the scribe
-extension and renamed to `karaoke-{16,48,128}.png`. Replace with real Karaoke
-artwork before publishing — see `icons/TODO.md`.
+`icons/karaoke-{16,48,128}.png` and the SPA favicon (`web/spa/public/favicon.png`)
+are rasterized from `icons/karaoke.svg` — the MarqueeMark with the exported
+geometry kept verbatim (frame + 6 bulbs + Bungee letter, see the SVG header)
+and the Wave-0 green-bake colors. To regenerate:
+
+```bash
+cd extension/chrome
+bun install
+uvx --from fonttools --with brotli fonttools ttLib.woff2 decompress \
+  -o /tmp/bungee-latin-400.ttf \
+  ../../web/spa/node_modules/@fontsource/bungee/files/bungee-latin-400-normal.woff2
+bun run icons
+```
+
+Do not redraw the mark per size — `render-icons.mjs` renders the exact vector
+at each target size.
