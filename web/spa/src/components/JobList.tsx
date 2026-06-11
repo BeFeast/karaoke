@@ -1,5 +1,6 @@
 import type { JobOut } from "../api";
 import { ARTIFACTS, artifactHref, canRetry, sourceLabel, statusMeta } from "../jobStatus";
+import { formatRelativeTime } from "../lib/jobListUtils";
 import { itemHash } from "../router";
 import { StatusChip } from "./StatusChip";
 
@@ -14,6 +15,8 @@ function JobCard({ job, actions }: { job: JobOut; actions: JobActions }) {
   const label = job.title?.trim() || job.source_url;
   const pct = Math.max(0, Math.min(100, Math.round(job.progress)));
   const indeterminate = meta.active && pct <= 0;
+  // Null for a missing/unparseable timestamp — the span simply isn't rendered.
+  const createdAgo = formatRelativeTime(job.created_at);
 
   return (
     <div className="job">
@@ -30,6 +33,11 @@ function JobCard({ job, actions }: { job: JobOut; actions: JobActions }) {
           >
             {sourceLabel(job.source_url)} ↗
           </a>
+          {createdAgo && (
+            <span className="job-time" title={job.created_at}>
+              {createdAgo}
+            </span>
+          )}
         </div>
 
         <h3 className="job-title" title={label}>
