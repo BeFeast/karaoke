@@ -165,8 +165,8 @@ def _seed_job_with_metadata(
             "INSERT INTO jobs "
             "(job_token, owner_subject, source_url, title, artist, track, album, "
             " duration, vast_instance_id, vast_cost_micros, status, progress, "
-            " created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " created_at, updated_at, completed_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 token,
                 "lan-default",
@@ -182,6 +182,7 @@ def _seed_job_with_metadata(
                 100,
                 "2026-06-01 00:00:00+00:00",
                 "2026-06-01 00:00:00+00:00",
+                "2026-06-01 00:05:00+00:00",
             ),
         )
         con.commit()
@@ -300,7 +301,12 @@ def test_jobout_exposes_gpu_fields_after_mock_completion(client):
 
 
 def test_share_payload_exposes_album_duration_but_no_private_keys(client):
-    """SharePayload gains album/duration only — never cost, identity, or timestamps."""
+    """SharePayload carries display metadata — never cost, identity, or created_at.
+
+    The Stage page (#154) reads ``source_url`` + ``completed_at`` for its meta
+    row, so those are public; GPU cost/receipt and the owner subject must not
+    leak through an unlisted share link.
+    """
     _, token = _seed_job_with_metadata(
         artist="Queen",
         track="Bohemian Rhapsody",
@@ -315,6 +321,9 @@ def test_share_payload_exposes_album_duration_but_no_private_keys(client):
     body = share.json()
     assert body["album"] == "A Night at the Opera"
     assert body["duration"] == 355
+    assert body["source_url"] == "https://example.com/seed"
+    assert body["completed_at"] is not None
+    datetime.fromisoformat(body["completed_at"])
     # The share token is an unlisted public link — cost/identity must not leak.
     for private_key in (
         "gpu_instance_id",

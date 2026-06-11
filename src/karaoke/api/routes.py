@@ -170,7 +170,11 @@ class SharePayload(BaseModel):
     """Public share-page payload — owner-aware + unlisted-token-aware.
 
     The token itself is the unlisted-access secret; we therefore expose
-    only the owner *display* attributes, never the Clerk subject.
+    only the owner *display* attributes, never the Clerk subject. Cost and
+    GPU bookkeeping stay private too — anonymous share viewers must not
+    see what a job cost. ``completed_at`` + ``source_url`` feed the Stage
+    page's meta row ("split <when>" + the original-video link, #154);
+    ``created_at`` remains unexposed.
     """
 
     job_token: str
@@ -183,6 +187,8 @@ class SharePayload(BaseModel):
     progress: int
     stage_note: str | None
     owner_display_name: str | None
+    source_url: str
+    completed_at: dt.datetime | None
     artifacts: list[ArtifactOut]
 
 
@@ -713,6 +719,8 @@ async def share_page(
             progress=job.progress,
             stage_note=job.stage_note,
             owner_display_name=job.owner_display_name,
+            source_url=job.source_url,
+            completed_at=job.completed_at,
             artifacts=[
                 ArtifactOut(
                     kind=a.kind,

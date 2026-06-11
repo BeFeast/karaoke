@@ -101,7 +101,7 @@ export interface ArtifactView {
   href: string;
   /** Bare allowlisted filename, e.g. "karaoke.mp3". */
   name: string;
-  /** True when the artifact is audio and should get an <audio> player. */
+  /** True when the artifact is an audio stem (feeds the Web Audio player). */
   isAudio: boolean;
 }
 

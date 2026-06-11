@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
@@ -7,16 +7,9 @@
          from the exported vector (extension/chrome/icons/render-icons.mjs). -->
     <link rel="icon" type="image/png" href="/favicon.png" />
     <title>Karaoke</title>
-    <script>
-      // Set the theme before first paint to avoid a flash of the wrong palette.
-      try {
-        var t = localStorage.getItem("karaoke-theme");
-        if (t !== "light" && t !== "dark") {
-          t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-        }
-        document.documentElement.setAttribute("data-theme", t);
-      } catch (e) {}
-    </script>
+    <!-- Theming is room-scoped (#154): booth rooms are always light; the
+         stage room flips day/night via its container class. No pre-paint
+         <html data-theme> needed. -->
   </head>
   <body>
     <div id="root"></div>
