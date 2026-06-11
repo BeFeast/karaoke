@@ -1,0 +1,69 @@
+/* Doorway page chrome (issue #155): self-hosted webfonts + minimal page
+   resets shared by popup.html and options.html. All colors come from the
+   vendored marquee.css tokens — no raw color literals here on purpose
+   (mirrors the SPA design guards). Fonts are the fontsource woff2 files the
+   SPA self-hosts (OFL/SIL licensed), vendored under fonts/. */
+
+@font-face {
+  font-family: "Bungee";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/bungee-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Bricolage Grotesque";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/bricolage-grotesque-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Bricolage Grotesque";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/bricolage-grotesque-latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/geist-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/geist-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/geist-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/geist-mono-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/geist-mono-latin-500-normal.woff2") format("woff2");
+}
+
+html, body { margin: 0; padding: 0; }
+
+/* Chrome sizes the action popup to the document; give the receipt the
+   design's board footprint. Options renders as a normal full page. */
+body.doorway-popup { width: 360px; min-height: 420px; }
+body.doorway-popup .m-booth { min-height: 420px; }

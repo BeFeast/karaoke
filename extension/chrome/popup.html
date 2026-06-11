@@ -1,0 +1,55 @@
+<!doctype html>
+<!-- Doorway popup — the click already submitted; this is the receipt.
+     DOM/classes/inline styles ported from design/m-doorway.jsx MPopupBoard
+     (lines 4-60), wired to the real submit + GET /jobs feed in popup.js.
+     The MarqueeMark SVG keeps the exported geometry verbatim
+     (design/marquee-mark.jsx); the amber fallbacks carry the Wave-0 green
+     bake (#ffb84d -> #9fd07a), same literals as the vendored marquee.css. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Karaoke</title>
+    <link rel="stylesheet" href="marquee.css">
+    <link rel="stylesheet" href="doorway.css">
+  </head>
+  <body class="doorway-popup">
+    <div class="m-booth" style="height: 100%; display: flex; flex-direction: column; font-size: 13px">
+      <div style="display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--border)">
+        <svg width="20" height="20" viewBox="0 0 48 48" aria-label="Karaoke mark">
+          <rect x="2" y="2" width="44" height="44" rx="11" fill="#161210"></rect>
+          <rect x="2" y="2" width="44" height="44" rx="11" fill="none" stroke="var(--bulb, #9fd07a)" stroke-width="2.5"></rect>
+          <circle cx="14" cy="8.5" r="1.8" fill="var(--bulb, #9fd07a)"></circle>
+          <circle cx="24" cy="8.5" r="1.8" fill="var(--bulb, #9fd07a)"></circle>
+          <circle cx="34" cy="8.5" r="1.8" fill="var(--bulb, #9fd07a)"></circle>
+          <circle cx="14" cy="39.5" r="1.8" fill="var(--bulb, #9fd07a)"></circle>
+          <circle cx="24" cy="39.5" r="1.8" fill="var(--bulb, #9fd07a)"></circle>
+          <circle cx="34" cy="39.5" r="1.8" fill="var(--bulb, #9fd07a)"></circle>
+          <text x="24" y="33" text-anchor="middle" font-family="Bungee, sans-serif" font-size="20" fill="var(--bulb, #9fd07a)">K</text>
+        </svg>
+        <span style="font-family: var(--font-display); font-weight: 650; font-size: 14px">Karaoke</span>
+        <span style="flex: 1"></span>
+        <span class="m-chip ok" style="font-size: 10px"><span class="m-dot"></span><span id="booth-host">booth</span></span>
+        <button id="open-settings" class="m-btn sm ghost" type="button" title="Settings" style="padding: 2px 6px">⚙</button>
+      </div>
+
+      <!-- the receipt — submitted on open, already running -->
+      <div style="padding: 12px 14px 0">
+        <div id="receipt" class="m-sign" style="border-color: var(--accent); padding: 11px 13px"></div>
+        <div class="m-mono" style="font-size: 10px; color: var(--muted); margin: 7px 2px 0">
+          the toolbar click already submitted this tab — this popup is just the receipt
+        </div>
+      </div>
+
+      <!-- tonight -->
+      <div style="padding: 12px 14px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1">
+        <div class="m-mono" style="font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted)">tonight</div>
+        <div id="feed" style="display: contents"></div>
+        <div class="m-mono" style="margin-top: auto; font-size: 10.5px; color: var(--muted); display: flex; justify-content: space-between">
+          <a id="open-booth" href="#" target="_blank" style="color: var(--accent); text-decoration: none">open the booth →</a>
+          <span id="version"></span>
+        </div>
+      </div>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>
