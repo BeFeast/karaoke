@@ -610,6 +610,39 @@ def test_share_lyrics_plain_only(client, tmp_path):
     assert body["source"] == "whisper_asr"
 
 
+def test_share_lyrics_whisper_asr_synced(client, tmp_path):
+    """ASR-floor tracks with a segment-timed LRC (#145) serve synced lyrics
+    with the ``whisper_asr_synced`` provenance passed through verbatim."""
+    from karaoke.config import get_settings
+
+    _, token = _seed_job_with_metadata(artist="A", track="B")
+    exports = Path(tmp_path) / token / "exports"
+    exports.mkdir(parents=True, exist_ok=True)
+    (exports / "lyrics.lrc").write_text(
+        "[00:01.50]asr one\n[00:10.25]asr two\n", encoding="utf-8"
+    )
+    (exports / "lyrics.txt").write_text("asr one\nasr two\n", encoding="utf-8")
+    (exports / "metadata.json").write_text(
+        '{"lyrics_source": "whisper_asr_synced", "synced": true, "instrumental": false}',
+        encoding="utf-8",
+    )
+
+    _override_artifact_root(client, tmp_path)
+    try:
+        r = client.get(f"/share/{token}/lyrics")
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["synced"] is True
+    assert body["source"] == "whisper_asr_synced"
+    assert body["lines"] == [
+        {"t": 1.5, "text": "asr one"},
+        {"t": 10.25, "text": "asr two"},
+    ]
+
+
 def test_share_lyrics_instrumental(client, tmp_path):
     from karaoke.config import get_settings
 

@@ -49,8 +49,10 @@ from karaoke.worker.lyrics import (
     SOURCE_LRCLIB_PLAIN,
     SOURCE_LRCLIB_SYNCED,
     SOURCE_WHISPER_ASR,
+    SOURCE_WHISPER_ASR_SYNCED,
     LyricsResult,
     LyricsSource,
+    whisper_segments_to_lrc,
 )
 
 _log = logging.getLogger(__name__)
@@ -391,6 +393,7 @@ def _resolve_lyrics(
     exports_dir: Path,
     whisper_lyrics_txt: Path,
     aligned_lrc_path: Path | None = None,
+    whisper_lyrics_json: Path | None = None,
 ) -> dict[str, object]:
     """Apply the lyrics precedence and write the chosen export files.
 
@@ -402,11 +405,20 @@ def _resolve_lyrics(
       3. LRCLIB plain (no usable aligned LRC) → write ``exports/lyrics.txt``
          (untimed) from LRCLIB.
       4. LRCLIB instrumental  → no lyrics; mark the job instrumental.
-      5. LRCLIB miss          → keep the Whisper transcript (``lyrics.txt``).
+      5. LRCLIB miss          → keep the Whisper transcript (``lyrics.txt``);
+         when the GPU job's ``lyrics.json`` segment timestamps are usable, also
+         synthesize an approximate ``exports/lyrics.lrc`` from them (provenance
+         ``whisper_asr_synced``, #145) so the ASR floor still gets synced
+         highlight.
 
     ``aligned_lrc_path`` is the optional GPU-produced force-aligned LRC (#55).
     It is only consulted in the plain-only branch — synced LRCLIB always wins,
     and we never force-align when there's nothing to align.
+
+    ``whisper_lyrics_json`` is the GPU job's faster-whisper ``lyrics.json``
+    (segment timestamps). It is only consulted in the LRCLIB-miss branch; a
+    missing/unreadable/segment-less file degrades silently to the untimed
+    ``whisper_asr`` floor.
 
     Returns a mapping with provenance for ``metadata.json`` and a flag for
     whether an ``.lrc`` was written::
@@ -462,8 +474,20 @@ def _resolve_lyrics(
             "lrc_written": False,
         }
 
-    # LRCLIB miss → keep the Whisper transcript.
+    # LRCLIB miss → keep the Whisper transcript (the ASR floor). When the GPU
+    # job's segment timestamps are usable, also emit an approximate LRC so the
+    # floor still gets synced highlight (#145). Tolerant: a missing/unreadable
+    # lyrics.json or one that yields no timed lines degrades to untimed ASR.
     lyrics_txt.write_bytes(whisper_lyrics_txt.read_bytes())
+    asr_lrc = whisper_segments_to_lrc(_read_whisper_segments(whisper_lyrics_json))
+    if asr_lrc:
+        lyrics_lrc.write_text(asr_lrc, encoding="utf-8")
+        return {
+            "lyrics_source": SOURCE_WHISPER_ASR_SYNCED,
+            "synced": True,
+            "instrumental": False,
+            "lrc_written": True,
+        }
     return {
         "lyrics_source": SOURCE_WHISPER_ASR,
         "synced": False,
@@ -526,6 +550,25 @@ def _read_aligned_lrc(aligned_lrc_path: Path | None) -> str | None:
     if not body.strip() or not _LRC_TIMESTAMP_RE.search(body):
         return None
     return body
+
+
+def _read_whisper_segments(lyrics_json_path: Path | None) -> list[dict] | None:
+    """Read the ``segments`` list from the GPU job's ``lyrics.json`` (#145).
+
+    Tolerant by design: returns ``None`` on a missing/unreadable file, invalid
+    JSON, or a body without a ``segments`` list — the pipeline then keeps the
+    untimed Whisper transcript instead of failing the job over an LRC nicety.
+    """
+    if lyrics_json_path is None:
+        return None
+    try:
+        body = json.loads(lyrics_json_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    segments = body.get("segments")
+    return segments if isinstance(segments, list) else None
 
 
 # ---------------------------------------------------------------------------
@@ -674,9 +717,14 @@ async def run_real_job(
         # LRCLIB plain (untimed) > Whisper ASR (floor). Tolerant: if the GPU
         # returned no usable aligned LRC (old image / alignment failed), we
         # degrade to LRCLIB plain text; if LRCLIB missed entirely, we keep the
-        # Whisper transcript. Never fails the job over alignment.
+        # Whisper transcript — synthesizing an approximate LRC from its segment
+        # timestamps when usable (#145). Never fails the job over alignment.
         lyrics_prov = _resolve_lyrics(
-            lyrics, exports_dir, gpu.lyrics_txt_path, gpu.aligned_lrc_path
+            lyrics,
+            exports_dir,
+            gpu.lyrics_txt_path,
+            gpu.aligned_lrc_path,
+            gpu.lyrics_json_path,
         )
 
         lyrics_txt = exports_dir / "lyrics.txt"

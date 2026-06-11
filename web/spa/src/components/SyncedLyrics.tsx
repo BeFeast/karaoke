@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getLyricsLrc } from "../api";
+import { getLyrics } from "../api";
 
 // ─── LRC parsing ────────────────────────────────────────────────────────────
 //
@@ -108,23 +108,30 @@ export function SyncedLyrics({
   reducedMotion = false,
 }: SyncedLyricsProps) {
   // null = not resolved yet; "" or a body once the fetch settles. We track a
-  // separate `resolved` flag so a 404 (→ null) doesn't look like "loading".
+  // separate `resolved` flag so a miss (→ null) doesn't look like "loading".
+  // `source` is the lyrics provenance from the structured payload — it drives
+  // the badge so approximate ASR timing isn't labelled as LRCLIB (#145).
   const [lrc, setLrc] = useState<string | null>(null);
+  const [source, setSource] = useState<string | null>(null);
   const [resolved, setResolved] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setResolved(false);
     setLrc(null);
-    getLyricsLrc(token)
-      .then((body) => {
+    setSource(null);
+    getLyrics(token)
+      .then((payload) => {
         if (cancelled) return;
+        const body = payload?.lrc;
         setLrc(body && body.trim() ? body : null);
+        setSource(payload?.source ?? null);
         setResolved(true);
       })
       .catch(() => {
         if (cancelled) return;
         setLrc(null);
+        setSource(null);
         setResolved(true);
       });
     return () => {
@@ -170,7 +177,7 @@ export function SyncedLyrics({
       <div className="synced-lyrics" data-synced="true">
         <div className="synced-lyrics-prov">
           <span className="synced-lyrics-badge">synced</span>
-          <span className="synced-lyrics-src">LRCLIB · click a line to seek</span>
+          <span className="synced-lyrics-src">{sourceLabel(source)} · click a line to seek</span>
         </div>
         <ol
           className="synced-lyrics-list"
@@ -214,6 +221,15 @@ export function SyncedLyrics({
       <div>No lyrics available for this job.</div>
     </div>
   );
+}
+
+/**
+ * Badge label for the sync provenance. Whisper-segment timing is approximate,
+ * so it's flagged as such instead of being passed off as LRCLIB (#145);
+ * everything else (native LRCLIB synced, force-aligned LRCLIB text) is LRCLIB.
+ */
+export function sourceLabel(source: string | null): string {
+  return source === "whisper_asr_synced" ? "ASR (approximate)" : "LRCLIB";
 }
 
 /** mm:ss for a line timestamp (provenance / tooltip only). */
