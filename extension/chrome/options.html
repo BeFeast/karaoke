@@ -4,10 +4,12 @@
      settings (storage.sync keys baseUrl/bearerToken, unchanged) in
      options.js. The design's YouTube-session card copy was design fiction —
      the card below describes the real shipped behavior instead: the per-job
-     ephemeral cookie model (#77, see docs/per-job-cookies.md). The
-     MarqueeMark SVG keeps the exported geometry verbatim
-     (design/marquee-mark.jsx); the unlit amber fallback carries the Wave-0
-     green bake (#a8650f -> #5f7a4a). -->
+     ephemeral cookie model (#77, see docs/per-job-cookies.md). The header
+     mark is the sign-in mic card (#163): the SignInWall rounded card scaled
+     from 76px to 26px (radius 20 -> 7, border 2 -> 1) around the MicMark
+     glyph verbatim (marks.tsx: 24-viewBox, capsule rect x=9 y=2 w=6 h=12
+     rx=3, stroke-width 2, round caps/joins) at the sign-in 38/76 ratio.
+     Colors route through the vendored marquee.css tokens. -->
 <html lang="en">
   <head>
     <meta charset="utf-8">
@@ -18,17 +20,12 @@
   <body>
     <div class="m-booth" style="min-height: 100vh; padding: 28px 34px">
       <div style="display: flex; align-items: center; gap: 10px">
-        <svg width="26" height="26" viewBox="0 0 48 48" aria-label="Karaoke mark">
-          <rect x="2" y="2" width="44" height="44" rx="11" fill="var(--bg-card, #fbf9f4)"></rect>
-          <rect x="2" y="2" width="44" height="44" rx="11" fill="none" stroke="var(--fg, #24201a)" stroke-width="2.5"></rect>
-          <circle cx="14" cy="8.5" r="1.8" fill="var(--vox-ui, #5f7a4a)"></circle>
-          <circle cx="24" cy="8.5" r="1.8" fill="var(--vox-ui, #5f7a4a)"></circle>
-          <circle cx="34" cy="8.5" r="1.8" fill="var(--vox-ui, #5f7a4a)"></circle>
-          <circle cx="14" cy="39.5" r="1.8" fill="var(--vox-ui, #5f7a4a)"></circle>
-          <circle cx="24" cy="39.5" r="1.8" fill="var(--vox-ui, #5f7a4a)"></circle>
-          <circle cx="34" cy="39.5" r="1.8" fill="var(--vox-ui, #5f7a4a)"></circle>
-          <text x="24" y="33" text-anchor="middle" font-family="Bungee, sans-serif" font-size="20" fill="var(--fg, #24201a)">K</text>
-        </svg>
+        <div style="width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; flex: none; background: var(--bg-card); border: 1px solid var(--accent); box-shadow: var(--shadow)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-label="Karaoke mark">
+            <rect x="9" y="2" width="6" height="12" rx="3" fill="var(--accent)"></rect>
+            <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" stroke="var(--fg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </div>
         <span style="font-family: var(--font-display); font-weight: 650; font-size: 16px">Karaoke</span>
         <span class="m-chip" style="font-size: 10px">extension settings</span>
       </div>
