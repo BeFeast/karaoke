@@ -14,6 +14,22 @@ import { ItemPage } from "./components/ItemPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { MicMark } from "./components/TopBar";
 import { useRoute } from "./router";
+// Self-hosted Marquee webfonts (#152) — latin subsets only, no external
+// font <link>. Geist = UI, Geist Mono = mono, Bricolage Grotesque = display,
+// Bungee = signage. Weights cover the 400–650 range the stylesheet asks for.
+import "@fontsource/geist/latin-400.css";
+import "@fontsource/geist/latin-500.css";
+import "@fontsource/geist/latin-600.css";
+import "@fontsource/geist/latin-700.css";
+import "@fontsource/geist-mono/latin-400.css";
+import "@fontsource/geist-mono/latin-500.css";
+import "@fontsource/geist-mono/latin-600.css";
+import "@fontsource/geist-mono/latin-700.css";
+import "@fontsource/bricolage-grotesque/latin-400.css";
+import "@fontsource/bricolage-grotesque/latin-500.css";
+import "@fontsource/bricolage-grotesque/latin-600.css";
+import "@fontsource/bricolage-grotesque/latin-700.css";
+import "@fontsource/bungee/latin-400.css";
 import "./styles.css";
 
 // Routes between the dashboard (App), the item page (/app/#/job/:token) and
