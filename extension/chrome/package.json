@@ -1,0 +1,12 @@
+{
+  "name": "karaoke-submitter",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "icons": "bun icons/render-icons.mjs"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2"
+  }
+}
