@@ -56,3 +56,20 @@ jobs:
         run: uv sync --frozen --all-extras --all-groups
       - name: Alembic upgrade head (clean Postgres)
         run: uv run alembic upgrade head
+
+  spa:
+    name: spa
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/spa
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install deps
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Build
+        run: bun run build
