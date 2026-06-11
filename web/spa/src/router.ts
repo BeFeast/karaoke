@@ -8,12 +8,14 @@
 // Routes:
 //   #/                     → dashboard (also the empty hash and `#`)
 //   #/job/:token           → item page for a single job
+//   #/settings             → settings page (ktx_ extension tokens)
 
 import { useEffect, useState } from "react";
 
 export type Route =
   | { name: "dashboard" }
-  | { name: "item"; token: string };
+  | { name: "item"; token: string }
+  | { name: "settings" };
 
 function parseHash(hash: string): Route {
   // Strip a leading "#" and optional leading "/".
@@ -23,6 +25,9 @@ function parseHash(hash: string): Route {
 
   if (segments[0] === "job" && segments[1]) {
     return { name: "item", token: decodeURIComponent(segments[1]) };
+  }
+  if (segments[0] === "settings") {
+    return { name: "settings" };
   }
   return { name: "dashboard" };
 }
@@ -41,6 +46,11 @@ export function useRoute(): Route {
 /** Build the in-app (hash) link for a job's item page. */
 export function itemHash(token: string): string {
   return `#/job/${encodeURIComponent(token)}`;
+}
+
+/** Build the in-app (hash) link for the settings page. */
+export function settingsHash(): string {
+  return "#/settings";
 }
 
 /** Build the absolute in-app URL (used for copy-to-clipboard / Share). */

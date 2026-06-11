@@ -11,17 +11,22 @@ import {
 import { App } from "./App";
 import { getConfig, type RuntimeConfig, setTokenGetter } from "./api";
 import { ItemPage } from "./components/ItemPage";
+import { SettingsPage } from "./components/SettingsPage";
 import { MicMark } from "./components/TopBar";
 import { useRoute } from "./router";
 import "./styles.css";
 
-// Routes between the dashboard (App) and the item page (/app/#/job/:token).
-// Item page is rendered inside the auth context so owner-scoped reads carry
-// the Clerk bearer when signed in; on the LAN it works without auth too.
+// Routes between the dashboard (App), the item page (/app/#/job/:token) and
+// the settings page (/app/#/settings). All are rendered inside the auth
+// context so owner-scoped reads carry the Clerk bearer when signed in; on the
+// LAN they work without auth too.
 function Routed({ config, authControl }: { config: RuntimeConfig; authControl?: React.ReactNode }) {
   const route = useRoute();
   if (route.name === "item") {
     return <ItemPage token={route.token} authControl={authControl} />;
+  }
+  if (route.name === "settings") {
+    return <SettingsPage authControl={authControl} />;
   }
   return <App config={config} authControl={authControl} />;
 }
