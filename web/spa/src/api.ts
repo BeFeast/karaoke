@@ -74,13 +74,22 @@ export interface ArtifactOut {
 
 // Public share-page payload (server `SharePayload`) — fetched from
 // GET /share/{token} with Accept: application/json. The token itself is the
-// unlisted-access secret, so only owner *display* attributes are exposed.
+// unlisted-access secret, so only owner *display* attributes are exposed;
+// cost/receipt and created_at stay server-side. Mirrors routes.SharePayload
+// 1:1 — keep the two in sync field-for-field.
 export interface SharePayload {
   job_token: string;
   title: string | null;
+  artist: string | null;
+  track: string | null;
+  album: string | null;
+  duration: number | null;
   status: JobStatus;
   progress: number;
+  stage_note: string | null;
   owner_display_name: string | null;
+  source_url: string;
+  completed_at: string | null;
   artifacts: ArtifactOut[];
 }
 
