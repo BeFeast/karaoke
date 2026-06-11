@@ -1,274 +1,148 @@
-import { type ReactNode, useCallback, useEffect, useState } from "react";
-import {
-  type ExtensionTokenMinted,
-  type ExtensionTokenOut,
-  listTokens,
-  mintToken,
-  revokeToken,
-} from "../api";
-import { formatRelativeTime } from "../lib/jobListUtils";
-import { goDashboard } from "../router";
-import { MarqueeTopBar } from "./Booth";
-import { ConfirmDialog, type ConfirmState } from "./ConfirmDialog";
-import { Toast } from "./Toast";
+// KARAOKE final — Settings: stage passes (extension tokens), pipeline defaults, about.
 
-const DEFAULT_LABEL = "Chrome extension";
+const K_VERSION = "v0.4.0";
+const K_REPO = "https://github.com/BeFeast/karaoke";
 
-// The server 403s a mint from an actor that may not mint (trusted-LAN,
-// extension-token callers) — translate that into a hint instead of dumping
-// the raw "403 Forbidden: {…}" string on the user.
-const MINT_FORBIDDEN_HINT =
-  "Minting requires Clerk sign-in or the machine bearer. " +
-  "Trusted-LAN callers can list and revoke tokens but not mint them.";
-
-// Single-column chrome: topbar + centered pane with a "Back" affordance, no
-// dashboard sidebar. Booth rooms are always light — theming is scoped to the
-// stage room (#154), so no theme hook is needed here.
-function SettingsShell({ authControl, children }: { authControl?: ReactNode; children: ReactNode }) {
+function SettingsSection({ title, children }) {
   return (
-    <div className="app app-item">
-      <MarqueeTopBar authControl={authControl} />
-      <main className="main">
-        <div className="pane pane-narrow">
-          <button type="button" className="link-btn back-link" onClick={goDashboard}>
-            ← Back to jobs
-          </button>
-          {children}
-        </div>
-      </main>
+    <div style={{ marginTop: 26 }}>
+      <div className="m-mono" style={{ fontSize: 10.5, letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 10 }}>{title}</div>
+      {children}
     </div>
   );
 }
 
-function TokensSkeleton() {
+function PassRow({ pass, onRevoke }) {
   return (
-    <div className="tokens" aria-hidden>
-      {[0, 1].map((i) => (
-        <div className="skel-job" key={i}>
-          <span className="skel skel-line s" />
-          <div>
-            <span className="skel skel-line m" />
-            <span className="skel skel-line l" />
-          </div>
+    <div style={{ display: "flex", gap: 14, alignItems: "baseline", padding: "12px 2px", borderTop: "1px solid var(--border-soft)" }}>
+      <span className="m-mono" style={{ fontSize: 11.5, color: "var(--muted)", width: 22 }}>#{pass.n}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 13.5, fontWeight: 600 }}>{pass.name}</span>
+          {pass.revoked && <span className="m-chip err" style={{ fontSize: 10 }}>revoked</span>}
         </div>
-      ))}
-    </div>
-  );
-}
-
-function TokenRow({
-  token,
-  onRevoke,
-}: {
-  token: ExtensionTokenOut;
-  onRevoke: (token: ExtensionTokenOut) => void;
-}) {
-  const created = formatRelativeTime(token.created_at);
-  const lastUsed = formatRelativeTime(token.last_used_at);
-  return (
-    <div className="token-row">
-      <div className="token-num mono">#{token.id}</div>
-      <div className="token-body">
-        <div className="token-top">
-          <span className="token-label">{token.label?.trim() || "(no label)"}</span>
-          {token.disabled && <span className="chip err">revoked</span>}
-        </div>
-        <div className="token-meta">
-          {created && <span title={token.created_at}>created {created}</span>}
-          <span title={token.last_used_at ?? undefined}>
-            {lastUsed ? `last used ${lastUsed}` : "never used"}
-          </span>
-          <span className="token-owner" title={token.owner_subject}>
-            {token.owner_subject}
-          </span>
+        <div className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 3, display: "flex", gap: 14, flexWrap: "wrap" }}>
+          <span>created {pass.created}</span>
+          <span>last used {pass.used}</span>
+          <span>{pass.scope}</span>
         </div>
       </div>
-      {!token.disabled && (
-        <button
-          type="button"
-          className="link-btn danger"
-          onClick={() => onRevoke(token)}
-          title="Revoke this token"
-        >
-          Revoke
-        </button>
+      {!pass.revoked && (
+        <button className="m-btn sm ghost" type="button" onClick={() => onRevoke(pass.n)} style={{ color: "var(--err)" }}>Revoke</button>
       )}
     </div>
   );
 }
 
-export function SettingsPage({ authControl }: { authControl?: ReactNode }) {
-  const [tokens, setTokens] = useState<ExtensionTokenOut[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [listError, setListError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [label, setLabel] = useState(DEFAULT_LABEL);
-  const [minting, setMinting] = useState(false);
-  const [mintError, setMintError] = useState<string | null>(null);
-  const [minted, setMinted] = useState<ExtensionTokenMinted | null>(null);
-  const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      setTokens(await listTokens());
-      setListError(null);
-    } catch (err) {
-      setListError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoaded(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  const onMint = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault();
-      if (minting) return;
-      setMinting(true);
-      setMintError(null);
-      try {
-        setMinted(await mintToken(label));
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setMintError(/^403\b/.test(msg) ? MINT_FORBIDDEN_HINT : msg);
-      } finally {
-        setMinting(false);
-        await refresh();
-      }
-    },
-    [label, minting, refresh],
-  );
-
-  const onCopyMinted = useCallback(async () => {
-    if (!minted) return;
-    try {
-      await navigator.clipboard.writeText(minted.token);
-      setToast("Token copied");
-    } catch {
-      // Clipboard API blocked (insecure context / permissions) — fall back.
-      window.prompt("Copy this token:", minted.token);
-    }
-  }, [minted]);
-
-  const onRevoke = useCallback(
-    (token: ExtensionTokenOut) => {
-      setConfirmState({
-        title: "Revoke token",
-        message: `Revoke token #${token.id} (${token.label?.trim() || "no label"})? Anything still using it will stop working.`,
-        confirmLabel: "Revoke",
-        danger: true,
-        onConfirm: () => {
-          setActionError(null);
-          void (async () => {
-            try {
-              await revokeToken(token.id);
-            } catch (err) {
-              setActionError(err instanceof Error ? err.message : String(err));
-            } finally {
-              await refresh();
-            }
-          })();
-        },
-      });
-    },
-    [refresh],
-  );
-
+function Select({ value, options }) {
   return (
-    <SettingsShell authControl={authControl}>
-      <div className="pane-header">
-        <div>
-          <h1 className="pane-h1">Settings</h1>
-          <p className="pane-sub">
-            {tokens.length} {tokens.length === 1 ? "token" : "tokens"}
-          </p>
-        </div>
-      </div>
-
-      <section className="tokens-panel">
-        <div className="sec-label">extension tokens</div>
-
-        <form className="submit-card" onSubmit={(e) => void onMint(e)}>
-          <div className="submit-row">
-            <input
-              type="text"
-              className="field"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder={DEFAULT_LABEL}
-              maxLength={255}
-              aria-label="Token label"
-              disabled={minting}
-            />
-            <button type="submit" className="btn primary" disabled={minting}>
-              {minting && <span className="spinner" aria-hidden />}
-              {minting ? "Minting…" : "Mint token"}
-            </button>
-          </div>
-          <p className="form-note">
-            ktx_ tokens let the Chrome extension submit jobs as you. The raw value is shown
-            exactly once, right after minting.
-          </p>
-          {mintError && <div className="form-error">Mint failed: {mintError}</div>}
-        </form>
-
-        {minted && (
-          <div className="token-reveal" role="status">
-            <div className="token-reveal-head">
-              <span className="chip ok">new token</span>
-              <span className="token-reveal-label">{minted.label}</span>
-            </div>
-            <code className="token-value">{minted.token}</code>
-            <p className="token-reveal-note">
-              Save it now — it will not be shown again. Only a hash is stored on the server.
-            </p>
-            <div className="token-reveal-actions">
-              <button type="button" className="btn primary sm" onClick={() => void onCopyMinted()}>
-                ⧉ Copy token
-              </button>
-              <button type="button" className="btn sm" onClick={() => setMinted(null)}>
-                Done
-              </button>
-            </div>
-          </div>
-        )}
-
-        {listError && (
-          <div className="form-error" style={{ marginBottom: "16px" }}>
-            Couldn’t load tokens: {listError}{" "}
-            <button type="button" className="link-btn" onClick={() => void refresh()}>
-              ↻ Retry
-            </button>
-          </div>
-        )}
-        {actionError && (
-          <div className="form-error" style={{ marginBottom: "16px" }}>
-            Revoke failed: {actionError}
-          </div>
-        )}
-
-        {!loaded ? (
-          <TokensSkeleton />
-        ) : tokens.length === 0 && !listError ? (
-          <div className="empty">
-            <div className="empty-title">No tokens yet</div>
-            <div>Mint one above and paste it into the extension’s options page.</div>
-          </div>
-        ) : (
-          <div className="tokens">
-            {tokens.map((t) => (
-              <TokenRow key={t.id} token={t} onRevoke={onRevoke} />
-            ))}
-          </div>
-        )}
-      </section>
-
-      <ConfirmDialog state={confirmState} onClose={() => setConfirmState(null)} />
-      <Toast message={toast} onDone={() => setToast(null)} />
-    </SettingsShell>
+    <select defaultValue={value} style={{
+      appearance: "none", padding: "7px 28px 7px 11px", border: "1px solid var(--border)", borderRadius: 7,
+      background: "var(--bg-card)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", cursor: "pointer",
+      backgroundImage: "linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%)",
+      backgroundPosition: "calc(100% - 14px) 55%, calc(100% - 9px) 55%", backgroundSize: "5px 5px", backgroundRepeat: "no-repeat",
+    }}>
+      {options.map((o) => <option key={o} value={o}>{o}</option>)}
+    </select>
   );
 }
+
+function SettingRow({ label, help, control }) {
+  return (
+    <div style={{ display: "flex", gap: 16, alignItems: "center", padding: "11px 2px", borderTop: "1px solid var(--border-soft)" }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>{label}</div>
+        {help && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2, lineHeight: 1.45 }}>{help}</div>}
+      </div>
+      {control}
+    </div>
+  );
+}
+
+function SettingsScreen({ onBack, onSignOut, vars = {} }) {
+  const [passes, setPasses] = React.useState([
+    { n: 3, name: "desk-session-10", created: "2 h ago", used: "1 h ago", scope: "karaoke:operator-extension" },
+    { n: 2, name: "operator desktop Chrome extension", created: "Jun 1", used: "23 h ago", scope: "karaoke:operator-extension" },
+    { n: 1, name: "prisma launchd cookie-sync (#10)", created: "Jun 1", used: "5 h ago", scope: "karaoke:cookie-rotation-cron", revoked: true },
+  ]);
+  const [mintName, setMintName] = React.useState("");
+  const [fresh, setFresh] = React.useState(null);
+  const mint = () => {
+    if (!mintName.trim()) return;
+    const n = Math.max(...passes.map((p) => p.n)) + 1;
+    setPasses([{ n, name: mintName.trim(), created: "just now", used: "never", scope: "karaoke:operator-extension" }, ...passes]);
+    setFresh("ktx_" + Math.random().toString(36).slice(2, 12));
+    setMintName("");
+  };
+  const revoke = (n) => setPasses((ps) => ps.map((p) => p.n === n ? { ...p, revoked: true } : p));
+  const active = passes.filter((p) => !p.revoked).length;
+
+  return (
+    <div className="m-booth" style={{ minHeight: "100%", display: "flex", flexDirection: "column", ...vars }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "0 24px", height: 56, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+        <MicMark size={24} />
+        <span style={{ fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 17, letterSpacing: "-0.01em" }}>Karaoke</span>
+        <span style={{ flex: 1 }}></span>
+        <span className="m-chip" style={{ textTransform: "uppercase", letterSpacing: "0.05em", fontSize: 10 }}>trusted lan</span>
+        <UserAvatar onSignOut={onSignOut} />
+      </div>
+
+      <div style={{ flex: 1, padding: "24px 24px 20px", maxWidth: 720, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column" }}>
+        <button className="m-btn sm ghost" type="button" onClick={onBack} style={{ alignSelf: "flex-start", marginLeft: -9 }}>← back to the booth</button>
+        <h1 style={{ margin: "10px 0 2px", fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 26, letterSpacing: "-0.015em" }}>Settings</h1>
+        <div className="m-mono" style={{ fontSize: 11.5, color: "var(--muted)" }}>{active} active stage passes</div>
+
+        <SettingsSection title="stage passes — extension tokens">
+          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)", padding: 14 }}>
+            <div style={{ display: "flex", gap: 10 }}>
+              <input value={mintName} onChange={(e) => setMintName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && mint()}
+                placeholder="Name this pass — e.g. Chrome on the desk machine"
+                style={{ flex: 1, padding: "9px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--bg)", color: "var(--fg)", fontSize: 13, fontFamily: "var(--font-ui)", outline: "none" }}></input>
+              <button className="m-btn primary" type="button" onClick={mint}>Mint pass</button>
+            </div>
+            {fresh && (
+              <div className="m-mono" style={{ marginTop: 10, padding: "8px 11px", borderRadius: 7, background: "var(--accent-soft)", color: "var(--accent)", fontSize: 12, display: "flex", gap: 10, alignItems: "center" }}>
+                <span style={{ fontWeight: 700 }}>{fresh}</span>
+                <span style={{ color: "var(--fg-soft)" }}>— copy it now; it's shown exactly once</span>
+                <button className="m-btn sm" type="button" style={{ marginLeft: "auto" }} onClick={() => setFresh(null)}>⧉ Copied</button>
+              </div>
+            )}
+            <div className="m-mono" style={{ marginTop: 9, fontSize: 10.5, color: "var(--muted)", lineHeight: 1.5 }}>
+              ktx_ passes let the Chrome extension submit jobs as you. Raw value appears once, right after minting.
+            </div>
+          </div>
+          <div style={{ marginTop: 6 }}>
+            {passes.map((p) => <PassRow key={p.n} pass={p} onRevoke={revoke}></PassRow>)}
+          </div>
+        </SettingsSection>
+
+        <SettingsSection title="pipeline defaults">
+          <SettingRow label="Cost cap per job" help="A job that would exceed this is cancelled and the instance destroyed."
+            control={<Select value="$0.80" options={["$0.40", "$0.80", "$1.50", "no cap"]} />} />
+          <SettingRow label="Daily spend cap" help="Hard ceiling across all jobs; submits queue until tomorrow once hit."
+            control={<Select value="$6.00" options={["$3.00", "$6.00", "$12.00"]} />} />
+          <SettingRow label="Separation model" help="htdemucs_ft is slower but noticeably cleaner on vocals."
+            control={<Select value="htdemucs_ft" options={["htdemucs", "htdemucs_ft"]} />} />
+          <SettingRow label="Lyrics model" help="large-v3 for accuracy; medium roughly halves GPU time."
+            control={<Select value="large-v3" options={["medium", "large-v3"]} />} />
+        </SettingsSection>
+
+        <SettingsSection title="sharing">
+          <SettingRow label="Share links" help="Anyone with the link can play and download — no account needed."
+            control={<Select value="unlisted" options={["unlisted", "signed-in only"]} />} />
+          <SettingRow label="Link lifetime" help="Old party links quietly expire."
+            control={<Select value="30 days" options={["7 days", "30 days", "forever"]} />} />
+        </SettingsSection>
+
+        <div className="m-mono" style={{ marginTop: "auto", paddingTop: 26, display: "flex", gap: 16, fontSize: 11, color: "var(--muted)", borderTop: "1px dashed var(--border-soft)", alignItems: "center", flexWrap: "wrap" }}>
+          <span>karaoke {K_VERSION}</span>
+          <a href={K_REPO} target="_blank" rel="noopener" style={{ color: "var(--info)", textDecoration: "none" }}>github.com/BeFeast/karaoke ↗</a>
+          <span>open source · MIT</span>
+          <span style={{ marginLeft: "auto" }}>self-hosted · your music never leaves your boxes</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, { SettingsScreen, K_VERSION, K_REPO });
