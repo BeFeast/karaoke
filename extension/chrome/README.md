@@ -45,9 +45,10 @@ download only and never persists them.
 - If you are not signed in to YouTube, the field is omitted entirely and the
   server falls back to a public (un-authenticated) download.
 
-This replaces the older central-jar model (a 6h alarm + a standing
-`POST /cookies/youtube` upload); the extension no longer keeps a server-side
-credential fresh.
+Per-job cookies are the only cookie path: the server keeps no cookie jar and
+has no upload endpoint, so there is no server-side credential to keep fresh —
+each submit carries its own session and the server forgets it after the
+download.
 
 ## API
 

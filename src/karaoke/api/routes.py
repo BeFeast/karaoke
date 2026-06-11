@@ -1,7 +1,6 @@
 """HTTP and WebSocket routes for the karaoke API."""
 from __future__ import annotations
 
-import asyncio
 import datetime as dt
 import json
 import logging
@@ -33,9 +32,7 @@ from karaoke.api.auth import (
 )
 from karaoke.api.cookies_store import (
     CookieValidationError,
-    previous_path,
     validate_netscape_cookies,
-    write_cookies_atomically,
 )
 from karaoke.api.ws import forget_job, publish_stage
 from karaoke.config import Settings, get_settings
@@ -66,15 +63,19 @@ class JobCreate(BaseModel):
     youtube_cookies: str | None = None
 
 
+# Hard ceiling on an accepted per-job cookie payload. A real logged-in YouTube
+# jar is a few KiB; 1 MiB is generous and bounds abuse.
+MAX_COOKIE_BYTES = 1024 * 1024
+
+
 def _validate_job_cookies(raw: str | None) -> str | None:
     """Validate an optional per-job Netscape cookie blob (issue #77).
 
     Returns the blob unchanged when usable, or ``None`` when absent (omitted /
-    null / whitespace-only — the caller then falls back to public download or
-    the central jar bridge). Raises ``HTTPException`` with a value-free message
-    on a too-large (413) or malformed (422) blob; the cookie value is NEVER
-    echoed back. ``MAX_COOKIE_BYTES`` / ``validate_netscape_cookies`` are shared
-    with the central ``/cookies/youtube`` path (defined lower in this module).
+    null / whitespace-only — the job then proceeds as a public, cookie-less
+    download). Raises ``HTTPException`` with a value-free message on a
+    too-large (413) or malformed (422) blob; the cookie value is NEVER echoed
+    back.
     """
     if raw is None or not raw.strip():
         return None
@@ -957,140 +958,3 @@ def _can_owner_view(owner: Owner, job: Job) -> bool:
     if owner.state in {AuthState.trusted_lan, AuthState.machine_bearer}:
         return True
     return owner.subject == job.owner_subject
-
-
-# ---------------------------------------------------------------------------
-# YouTube cookie rotation (issue #73)
-# ---------------------------------------------------------------------------
-
-# Only callers that prove they hold a logged-in YouTube session may rotate the
-# jar: the Chrome extension (``ktx_`` token) or a trusted machine bearer. A
-# trusted-LAN-anonymous or Clerk-user request is rejected — those layers do not
-# imply possession of YouTube cookies.
-COOKIE_WRITER_STATES = {AuthState.extension_token, AuthState.machine_bearer}
-
-# Hard ceiling on an accepted payload. A real logged-in YouTube jar is a few KiB;
-# 1 MiB is generous and bounds abuse.
-MAX_COOKIE_BYTES = 1024 * 1024
-
-# Serialise concurrent writers (two extension instances posting at once) so the
-# last-known-good snapshot + atomic replace never interleave.
-_COOKIE_WRITE_LOCK = asyncio.Lock()
-
-
-async def require_cookie_writer(owner: Owner = Depends(require_owner)) -> Owner:
-    """Restrict cookie rotation to the extension token / machine bearer."""
-    if owner.state not in COOKIE_WRITER_STATES:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="cookie upload requires an extension token or machine bearer",
-        )
-    return owner
-
-
-class CookieUploadResult(BaseModel):
-    """Non-secret result of a cookie rotation."""
-
-    accepted: bool
-    cookies: int
-    youtube_cookies: int
-    bytes: int
-    last_good_kept: bool
-
-
-class CookieStoreStatus(BaseModel):
-    """Non-secret metadata about the stored jar (no cookie values)."""
-
-    configured: bool
-    present: bool
-    bytes: int | None = None
-    modified_at: str | None = None
-    last_good_present: bool = False
-
-
-@router.post("/cookies/youtube", response_model=CookieUploadResult, tags=["cookies"])
-async def upload_youtube_cookies(
-    request: Request,
-    owner: Owner = Depends(require_cookie_writer),
-    settings: Settings = Depends(get_settings),
-) -> CookieUploadResult:
-    """Accept a Netscape ``cookies.txt`` and persist it for the pipeline.
-
-    The raw body (``text/plain``) is validated as a Netscape jar, then written
-    atomically to ``Settings.ytdlp_cookies_file`` with a last-known-good
-    snapshot. Cookie values are never logged or echoed."""
-    target = (settings.ytdlp_cookies_file or "").strip()
-    if not target:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="cookie store is not configured",
-        )
-
-    raw = await request.body()
-    if len(raw) > MAX_COOKIE_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            detail="cookie payload too large",
-        )
-    if not raw.strip():
-        raise HTTPException(status_code=422, detail="empty cookie payload")
-    try:
-        blob = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(
-            status_code=422, detail="cookie payload must be UTF-8 text"
-        ) from exc
-
-    try:
-        stats = validate_netscape_cookies(blob)
-    except CookieValidationError as exc:
-        # ``exc`` is value-free by construction (see cookies_store).
-        raise HTTPException(
-            status_code=422, detail=f"invalid Netscape cookie file: {exc}"
-        ) from exc
-
-    async with _COOKIE_WRITE_LOCK:
-        kept = write_cookies_atomically(_PathLib(target), blob)
-
-    # Log counts only — never values.
-    _log.info(
-        "youtube cookies rotated by %s: %d cookies (%d youtube), %d bytes",
-        owner.state.value,
-        stats.total,
-        stats.youtube,
-        len(raw),
-    )
-    return CookieUploadResult(
-        accepted=True,
-        cookies=stats.total,
-        youtube_cookies=stats.youtube,
-        bytes=len(raw),
-        last_good_kept=kept,
-    )
-
-
-@router.get("/cookies/youtube", response_model=CookieStoreStatus, tags=["cookies"])
-async def youtube_cookie_status(
-    owner: Owner = Depends(require_cookie_writer),
-    settings: Settings = Depends(get_settings),
-) -> CookieStoreStatus:
-    """Report jar presence/freshness metadata — never the cookie values."""
-    target = (settings.ytdlp_cookies_file or "").strip()
-    if not target:
-        return CookieStoreStatus(configured=False, present=False)
-    path = _PathLib(target)
-    if not path.is_file():
-        return CookieStoreStatus(
-            configured=True,
-            present=False,
-            last_good_present=previous_path(path).is_file(),
-        )
-    stat = path.stat()
-    modified = dt.datetime.fromtimestamp(stat.st_mtime, dt.UTC).isoformat()
-    return CookieStoreStatus(
-        configured=True,
-        present=True,
-        bytes=stat.st_size,
-        modified_at=modified,
-        last_good_present=previous_path(path).is_file(),
-    )

@@ -115,22 +115,11 @@ class Settings(BaseSettings):
     # only). See https://github.com/yt-dlp/yt-dlp/wiki/EJS.
     ytdlp_remote_components: str = "ejs:github"
 
-    # ---- yt-dlp anti-bot: cookies for session-gated videos (issue #68) ----
-    # Path (inside the container) to a Netscape-format cookies.txt exported
-    # from a logged-in YouTube browser. Some videos require a logged-in
-    # *session* even though they are public and un-age-gated — YouTube returns
-    # a per-video "Sign in to confirm you're not a bot" on the player API
-    # regardless of client or PO-token. yt-dlp uses these cookies when the file
-    # is present and non-empty; public videos keep working without it. The
-    # pipeline copies this file to a per-job writable temp before invoking
-    # yt-dlp (yt-dlp rotates + writes the cookie jar back on close, so it must
-    # never target the read-only mounted secret). Empty / missing → no cookies.
-    #
-    # Opt-in by default (empty): mount a cookies file and point this at it via
-    # KARAOKE_YTDLP_COOKIES_FILE. The mount target must live OUTSIDE the
-    # read-only ``/secrets`` volume — Docker cannot create a nested mountpoint
-    # inside a ``:ro`` mount (the karaoke stack mounts it at ``/cookies/...``).
-    ytdlp_cookies_file: str = ""
+    # Cookies for session-gated YouTube videos are per-job and client-supplied
+    # (issue #77): the submitting client attaches a Netscape blob to
+    # ``POST /jobs`` and the worker uses it for that one download only. There
+    # is deliberately no server-side cookie file setting (#132 retired the
+    # central jar).
 
     # Offer-selection / budget tunables (mirror scribe naming). Overridable via
     # Infisical (KARAOKE_VAST_*).
