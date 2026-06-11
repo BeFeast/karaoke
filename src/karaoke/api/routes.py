@@ -222,6 +222,7 @@ class ConfigOut(BaseModel):
 
     clerk_publishable_key: str
     clerk_enabled: bool
+    trusted_client: bool
     public_base_url: str
 
 
@@ -241,6 +242,7 @@ async def health() -> dict[str, str]:
 
 @router.get("/config", response_model=ConfigOut, tags=["meta"])
 async def runtime_config(
+    request: Request,
     settings: Settings = Depends(get_settings),
 ) -> ConfigOut:
     """Public runtime config for the SPA — no auth.
@@ -248,12 +250,17 @@ async def runtime_config(
     ``clerk_enabled`` is true only when ``clerk_spa_enabled`` is set AND a
     publishable key exists; otherwise the SPA renders in trusted-LAN "LAN
     mode" with no sign-in UI (the default until Clerk origins are set up).
+
+    ``trusted_client`` reports whether THIS request would pass the trusted-LAN
+    auth layer (same predicate the auth dependency uses), so the SPA can keep
+    anonymous LAN mode even when Clerk is enabled for public clients.
     """
     key = settings.clerk_publishable_key.strip()
     enabled = settings.clerk_spa_enabled and bool(key)
     return ConfigOut(
         clerk_publishable_key=key,
         clerk_enabled=enabled,
+        trusted_client=is_trusted_lan_request(request, settings),
         public_base_url=settings.public_base_url,
     )
 

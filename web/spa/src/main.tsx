@@ -112,9 +112,15 @@ async function bootstrap() {
     return;
   }
 
+  // Trusted-LAN clients stay anonymous (LanShell) even when Clerk is enabled;
+  // only untrusted (public) clients get the Clerk sign-in wall.
   root.render(
     <StrictMode>
-      {config.clerk_enabled ? <ClerkShell config={config} /> : <LanShell config={config} />}
+      {config.clerk_enabled && !config.trusted_client ? (
+        <ClerkShell config={config} />
+      ) : (
+        <LanShell config={config} />
+      )}
     </StrictMode>,
   );
 }
