@@ -4,6 +4,10 @@ const form = document.querySelector("#settings-form");
 const baseUrlInput = document.querySelector("#base-url");
 const bearerTokenInput = document.querySelector("#bearer-token");
 const status = document.querySelector("#status");
+const versionFooter = document.querySelector("#version");
+
+const manifest = chrome.runtime.getManifest();
+versionFooter.textContent = `${manifest.name} v${manifest.version}`;
 
 document.addEventListener("DOMContentLoaded", restoreOptions);
 form.addEventListener("submit", saveOptions);

@@ -57,6 +57,34 @@ jobs:
       - name: Alembic upgrade head (clean Postgres)
         run: uv run alembic upgrade head
 
+  extension-version-guard:
+    name: extension-version-guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require manifest version bump on extension changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          ext_changed="$(git diff --name-only "$BASE_SHA"...HEAD -- extension/chrome/ \
+            | grep -v '^extension/chrome/README\.md$' || true)"
+          if [ -z "$ext_changed" ]; then
+            echo "No extension/chrome/ changes (beyond README.md) — version bump not required."
+            exit 0
+          fi
+          if git diff "$BASE_SHA"...HEAD -- extension/chrome/manifest.json \
+            | grep -E '^[+-][[:space:]]*"version"' >/dev/null; then
+            echo 'extension/chrome/ changed and manifest.json "version" was bumped — OK.'
+            exit 0
+          fi
+          echo '::error file=extension/chrome/manifest.json::extension/chrome/ changed without bumping "version" in extension/chrome/manifest.json. Changed files:'
+          printf '%s\n' "$ext_changed"
+          echo 'Policy: any change under extension/chrome/ (except README.md) must bump the manifest "version". See extension/chrome/README.md.'
+          exit 1
+
   spa:
     name: spa
     runs-on: ubuntu-latest
