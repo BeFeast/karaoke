@@ -20,5 +20,8 @@
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests run under `bun test` (which provides bun:test / node:* natively);
+  // keeping them out of tsc avoids needing @types/bun as a devDependency.
+  "exclude": ["src/**/*.test.ts"]
 }
