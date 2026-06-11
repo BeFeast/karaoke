@@ -90,6 +90,16 @@ scribe (do not regress to a single shared bearer).
 10. Submit a non-http(s) toolbar page; confirm the extension reports that an
     http(s) video page is required.
 
+## Versioning
+
+Any PR that changes files under `extension/chrome/` (except this README) must
+also bump the `"version"` field in `manifest.json` — the CI job
+`extension-version-guard` enforces this on every pull request. The extension
+version line is independent of the service version in `pyproject.toml`; do not
+sync them. The options page shows the loaded version in its footer (read at
+runtime from `chrome.runtime.getManifest().version`), so you can check whether
+an unpacked copy is current without opening files.
+
 ## Tests
 
 ```bash
