@@ -157,15 +157,19 @@ async def job_status(
     return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
 
 
-@router.get("/share/{job_token}", response_model=SharePayload, tags=["share"])
-async def share_page(
+@router.get("/api/share/{job_token}", response_model=SharePayload, tags=["share"])
+async def share_payload(
     job_token: str,
     request: Request,
     owner: Owner | None = Depends(resolve_owner),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> SharePayload:
-    """Owner-aware + unlisted-token-aware share endpoint.
+    """Owner-aware + unlisted-token-aware share endpoint (JSON).
+
+    The HTML share page lives at ``GET /share/{job_token}`` (see
+    ``karaoke.web.views``); this endpoint returns the same data as
+    structured JSON for API clients.
 
     - The owner of the job can always see it.
     - Anyone holding the unlisted ``job_token`` can see it.

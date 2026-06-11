@@ -71,12 +71,12 @@ def test_share_endpoint_works_with_unlisted_token(client):
     # Wait briefly for the mock worker to advance state at least once.
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline:
-        share = client.get(f"/share/{token}")
+        share = client.get(f"/api/share/{token}")
         if share.status_code == 200 and share.json()["status"] == JobStatus.completed.value:
             break
         time.sleep(0.05)
 
-    share = client.get(f"/share/{token}")
+    share = client.get(f"/api/share/{token}")
     assert share.status_code == 200, share.text
     body = share.json()
     assert body["job_token"] == token
@@ -92,7 +92,7 @@ def test_share_endpoint_works_with_unlisted_token(client):
 
 
 def test_share_endpoint_404_for_unknown_token(client):
-    response = client.get("/share/does-not-exist")
+    response = client.get("/api/share/does-not-exist")
     assert response.status_code == 404
 
 

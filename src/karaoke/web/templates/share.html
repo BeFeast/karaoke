@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} · karaoke{% endblock %}
+{% block head_extra %}
+<link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css">
+{% endblock %}
+{% block search %}{% endblock %}
+{% block content %}
+<article>
+  <div class="mb-6">
+    <p class="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400">Share</p>
+    <h1 class="mt-1 text-3xl font-semibold tracking-tight">{{ job.title }}</h1>
+    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">
+      <a href="{{ job.source_url }}" rel="noopener noreferrer" class="underline hover:no-underline" target="_blank">{{ job.source_url }}</a>
+      {% if job.owner_display_name %} · by {{ job.owner_display_name }}{% endif %}
+      {% if job.completed_at %} · {{ job.completed_at|relative }}{% endif %}
+    </p>
+  </div>
+
+  {% if job.status != 'completed' %}
+    <div class="rounded-md border border-slate-200 dark:border-slate-800 p-4 mb-6">
+      <p class="text-sm text-slate-600 dark:text-slate-300">
+        Job is <strong>{{ job.status }}</strong> — {{ job.progress }}%.
+      </p>
+      <div class="mt-2 h-1.5 w-full rounded bg-slate-100 dark:bg-slate-800 overflow-hidden">
+        <div class="h-full bg-slate-400 dark:bg-slate-500" style="width: {{ job.progress }}%"></div>
+      </div>
+    </div>
+  {% endif %}
+
+  <section class="grid gap-6 md:grid-cols-2">
+    <div>
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Vocals</h2>
+      {% if vocals %}
+        <audio class="kar-player w-full" controls preload="metadata">
+          <source src="{{ vocals.url }}" type="{{ vocals.content_type or 'audio/mpeg' }}">
+          Your browser does not support the audio element.
+        </audio>
+      {% else %}
+        <p class="text-sm text-slate-500 dark:text-slate-400">Not ready yet.</p>
+      {% endif %}
+    </div>
+    <div>
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Karaoke (instrumental)</h2>
+      {% if karaoke %}
+        <audio class="kar-player w-full" controls preload="metadata">
+          <source src="{{ karaoke.url }}" type="{{ karaoke.content_type or 'audio/mpeg' }}">
+          Your browser does not support the audio element.
+        </audio>
+      {% else %}
+        <p class="text-sm text-slate-500 dark:text-slate-400">Not ready yet.</p>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="mt-10">
+    <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Lyrics</h2>
+    {% if lyrics %}
+      <pre id="lyrics" class="rounded-md border border-slate-200 dark:border-slate-800 p-4 text-sm whitespace-pre-wrap font-mono text-slate-700 dark:text-slate-200" data-src="{{ lyrics.url }}">Loading…</pre>
+    {% else %}
+      <p class="text-sm text-slate-500 dark:text-slate-400">Not ready yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="mt-10 text-xs text-slate-500 dark:text-slate-400 border-t border-slate-200 dark:border-slate-800 pt-4">
+    <dl class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div>
+        <dt class="uppercase tracking-wider">Status</dt>
+        <dd class="mt-0.5 text-slate-700 dark:text-slate-200">{{ job.status }}</dd>
+      </div>
+      <div>
+        <dt class="uppercase tracking-wider">Token</dt>
+        <dd class="mt-0.5 font-mono text-slate-700 dark:text-slate-200 truncate" title="{{ job.job_token }}">{{ job.job_token }}</dd>
+      </div>
+      {% if job.vast_cost_micros is not none %}
+      <div>
+        <dt class="uppercase tracking-wider">vast cost</dt>
+        <dd class="mt-0.5 text-slate-700 dark:text-slate-200">${{ "%.4f"|format(job.vast_cost_micros / 1000000) }}</dd>
+      </div>
+      {% endif %}
+      <div>
+        <dt class="uppercase tracking-wider">Created</dt>
+        <dd class="mt-0.5 text-slate-700 dark:text-slate-200">{{ job.created_at|relative }}</dd>
+      </div>
+    </dl>
+  </section>
+</article>
+{% endblock %}
+{% block body_extra %}
+<script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
+<script>
+  (function () {
+    if (window.Plyr) {
+      document.querySelectorAll(".kar-player").forEach(function (el) { new Plyr(el); });
+    }
+    var pre = document.getElementById("lyrics");
+    if (pre && pre.dataset.src) {
+      fetch(pre.dataset.src, { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); })
+        .then(function (txt) { pre.textContent = txt; })
+        .catch(function () { pre.textContent = "Could not load lyrics."; });
+    }
+  })();
+</script>
+{% endblock %}

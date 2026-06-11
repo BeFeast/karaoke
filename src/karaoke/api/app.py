@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from karaoke.api.routes import router
 from karaoke.config import Settings, get_settings
 from karaoke.db.session import init_engine, shutdown_engine
+from karaoke.web.views import router as web_router
 
 
 def _cors_origins(settings: Settings) -> list[str]:
@@ -65,4 +66,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.include_router(router)
+    app.include_router(web_router)
     return app

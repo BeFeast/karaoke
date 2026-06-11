@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Submit · karaoke{% endblock %}
+{% block search %}{% endblock %}
+{% block content %}
+<section class="max-w-xl">
+  <h1 class="text-2xl font-semibold tracking-tight mb-2">Submit a track</h1>
+  <p class="text-sm text-slate-500 dark:text-slate-400 mb-6">
+    Paste a YouTube (or other <code class="px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800">yt-dlp</code>-supported) URL.
+    The coordinator will download the audio, separate vocals on an ephemeral GPU, and transcribe lyrics.
+  </p>
+
+  <form id="submit-form" class="space-y-4">
+    <div>
+      <label for="url" class="block text-sm font-medium mb-1">URL</label>
+      <input id="url" name="url" type="url" required
+             placeholder="https://www.youtube.com/watch?v=…"
+             class="w-full px-3 py-2 text-sm rounded-md border border-slate-200 dark:border-slate-800 bg-transparent placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400/40">
+    </div>
+    <div>
+      <label for="title" class="block text-sm font-medium mb-1">Title <span class="text-slate-400">(optional)</span></label>
+      <input id="title" name="title" type="text"
+             class="w-full px-3 py-2 text-sm rounded-md border border-slate-200 dark:border-slate-800 bg-transparent placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400/40">
+    </div>
+    <div class="flex items-center gap-3">
+      <button type="submit" class="px-4 py-2 text-sm font-medium rounded-md bg-slate-900 text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">
+        Submit
+      </button>
+      <span id="submit-status" class="text-sm text-slate-500 dark:text-slate-400"></span>
+    </div>
+  </form>
+
+  <p class="mt-8 text-xs text-slate-500 dark:text-slate-400">
+    Authenticated as <code class="px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800">{{ owner.subject }}</code>
+    {% if owner.email %} ({{ owner.email }}){% endif %}.
+  </p>
+</section>
+{% endblock %}
+{% block body_extra %}
+<script>
+  (function () {
+    var form = document.getElementById("submit-form");
+    var statusEl = document.getElementById("submit-status");
+    if (!form) return;
+    form.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      statusEl.textContent = "Submitting…";
+      var fd = new FormData(form);
+      var body = { url: fd.get("url") };
+      var title = fd.get("title");
+      if (title) body.title = title;
+      try {
+        var r = await fetch("/jobs", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        var job = await r.json();
+        statusEl.textContent = "Queued — ";
+        var a = document.createElement("a");
+        a.href = "/share/" + job.job_token;
+        a.className = "underline hover:no-underline";
+        a.textContent = "view";
+        statusEl.appendChild(a);
+      } catch (err) {
+        statusEl.textContent = "Failed: " + err.message;
+      }
+    });
+  })();
+</script>
+{% endblock %}

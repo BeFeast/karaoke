@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # Public base URL used when constructing share links.
     public_base_url: str = "http://localhost:13140"
 
+    # Filesystem root for produced artifacts. The HTML web UI serves files from
+    # ``<artifacts_dir>/<job_token>/<relative_path>`` via /artifacts/{token}/{f}
+    # (owner-aware). In production this is the TrueNAS NFS mount; tests use a
+    # tmp dir.
+    artifacts_dir: str = "./artifacts"
+
     # ---- Auth: machine bearer ----
     service_token: str = ""  # KARAOKE_SERVICE_TOKEN; empty disables.
 

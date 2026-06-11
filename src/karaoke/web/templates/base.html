@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}karaoke{% endblock %}</title>
+<link rel="alternate" type="application/rss+xml" title="karaoke RSS" href="/feed.xml">
+<link rel="icon" type="image/svg+xml" href="/favicon.ico">
+<script>
+  // Apply stored theme before paint to avoid a flash of the wrong palette.
+  (function () {
+    try {
+      var t = localStorage.getItem("theme");
+      if (t === "dark" || (t !== "light" && window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+        document.documentElement.classList.add("dark");
+      }
+    } catch (e) {}
+  })();
+</script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: [
+            "-apple-system", "BlinkMacSystemFont", "Segoe UI", "system-ui", "sans-serif"
+          ],
+        },
+      },
+    },
+  };
+</script>
+{% block head_extra %}{% endblock %}
+<style>
+  body { font-feature-settings: "ss01", "cv11"; }
+</style>
+</head>
+<body class="min-h-full bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100 antialiased">
+<header class="border-b border-slate-200 dark:border-slate-800">
+  <div class="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center gap-4">
+    <a href="/" class="font-semibold tracking-tight text-lg">karaoke</a>
+    <nav class="hidden sm:flex items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
+      <a href="/" class="hover:text-slate-900 dark:hover:text-slate-100">Library</a>
+      <a href="/submit" class="hover:text-slate-900 dark:hover:text-slate-100">Submit</a>
+      <a href="/feed.xml" class="hover:text-slate-900 dark:hover:text-slate-100">RSS</a>
+    </nav>
+    <div class="flex-1"></div>
+    {% block search %}
+    <form method="get" action="/" class="hidden md:block">
+      <label class="sr-only" for="search">Search</label>
+      <input id="search" type="search" name="q" placeholder="Search…" autocomplete="off"
+             class="w-56 px-3 py-1.5 text-sm rounded-md border border-slate-200 dark:border-slate-800 bg-transparent placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400/40">
+    </form>
+    {% endblock %}
+    <button type="button" id="theme-toggle"
+            class="px-2.5 py-1.5 text-sm rounded-md border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800"
+            aria-label="Toggle dark mode">
+      <span class="block dark:hidden" aria-hidden="true">☾</span>
+      <span class="hidden dark:block" aria-hidden="true">☀</span>
+    </button>
+  </div>
+</header>
+
+<main class="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+  {% block content %}{% endblock %}
+</main>
+
+<footer class="max-w-5xl mx-auto px-4 sm:px-6 py-8 text-xs text-slate-400 dark:text-slate-500">
+  <span>karaoke · vocals + instrumental + lyrics</span>
+</footer>
+
+<script>
+  (function () {
+    var btn = document.getElementById("theme-toggle");
+    if (!btn) return;
+    var root = document.documentElement;
+    function isDark() { return root.classList.contains("dark"); }
+    function apply(dark) {
+      root.classList.toggle("dark", !!dark);
+      try { localStorage.setItem("theme", dark ? "dark" : "light"); } catch (e) {}
+    }
+    btn.addEventListener("click", function () { apply(!isDark()); });
+  })();
+</script>
+{% block body_extra %}{% endblock %}
+</body>
+</html>
