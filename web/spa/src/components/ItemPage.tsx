@@ -3,10 +3,10 @@ import { getLyricsText, getShare, type SharePayload } from "../api";
 import { artifactView, statusMeta } from "../jobStatus";
 import { goDashboard, itemUrl } from "../router";
 import { useTheme } from "../theme";
+import { MarqueeTopBar } from "./Booth";
 import { StatusChip } from "./StatusChip";
 import { SyncedLyrics } from "./SyncedLyrics";
 import { Toast } from "./Toast";
-import { TopBar } from "./TopBar";
 
 // Lazy so wavesurfer.js (+ its WebAudio engine) only loads on the item route,
 // keeping the dashboard bundle lean.
@@ -17,10 +17,12 @@ const POLL_MS = 3000;
 // Wraps the item page in the standard topbar chrome + a centered pane with a
 // "Back" affordance. Single-column layout (no dashboard sidebar).
 function ItemShell({ authControl, children }: { authControl?: ReactNode; children: ReactNode }) {
-  const [theme, toggleTheme] = useTheme();
+  // Keeps <html data-theme> applied until the Stage issue scopes theming;
+  // the toggle button left with the old TopBar (booth rooms are always light).
+  useTheme();
   return (
     <div className="app app-item">
-      <TopBar theme={theme} onToggleTheme={toggleTheme} identity={authControl} />
+      <MarqueeTopBar authControl={authControl} />
       <main className="main">
         <div className="pane pane-narrow">
           <button type="button" className="link-btn back-link" onClick={goDashboard}>

@@ -1,4 +1,4 @@
-import type { JobStatus } from "./api";
+import type { JobOut, JobStatus } from "./api";
 
 export type ChipKind = "ok" | "err" | "run" | "info" | "neutral";
 
@@ -27,6 +27,33 @@ const FALLBACK: StatusMeta = { label: "unknown", chip: "neutral", spinner: false
 
 export function statusMeta(status: JobStatus): StatusMeta {
   return META[status] ?? FALLBACK;
+}
+
+// Dashboard status filters (ex-Sidebar logic, relocated here when the booth
+// port replaced the sidebar with filter chips — #153).
+export type JobFilter = "all" | "active" | "completed" | "failed";
+
+export function jobMatchesFilter(job: JobOut, filter: JobFilter): boolean {
+  switch (filter) {
+    case "active":
+      return statusMeta(job.status).active;
+    case "completed":
+      return job.status === "completed";
+    case "failed":
+      return job.status === "failed";
+    default:
+      return true;
+  }
+}
+
+/** Per-filter counts for the chip badges. */
+export function jobCounts(jobs: JobOut[]): Record<JobFilter, number> {
+  return {
+    all: jobs.length,
+    active: jobs.filter((j) => statusMeta(j.status).active).length,
+    completed: jobs.filter((j) => j.status === "completed").length,
+    failed: jobs.filter((j) => j.status === "failed").length,
+  };
 }
 
 /** Short host label for a source URL, e.g. "youtube.com". */

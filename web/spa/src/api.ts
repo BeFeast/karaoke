@@ -145,6 +145,23 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await resp.json()) as T;
 }
 
+// Server /health payload — deploy-truth version, no auth, no DB hit.
+export interface HealthOut {
+  status: string;
+  version: string;
+}
+
+// /health is public — fetched by the sign-in wall (pre-auth) and the booth
+// infra strip, so no auth header is ever attached.
+export async function getHealth(): Promise<HealthOut> {
+  const resp = await fetch("/health", { headers: { Accept: "application/json" } });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`health fetch failed: ${resp.status} ${text}`.trim());
+  }
+  return (await resp.json()) as HealthOut;
+}
+
 // /config is public — never attach auth (fetched before sign-in).
 export async function getConfig(): Promise<RuntimeConfig> {
   const resp = await fetch("/config", { headers: { Accept: "application/json" } });

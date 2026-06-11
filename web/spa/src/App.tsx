@@ -4,20 +4,15 @@ import {
   clearFailedJobs,
   createJob,
   deleteJob,
-  getMe,
+  getHealth,
   type JobOut,
   listJobs,
-  type MeOut,
   type RuntimeConfig,
 } from "./api";
+import { BoothScreen, type JobActions } from "./components/Booth";
 import { ConfirmDialog, type ConfirmState } from "./components/ConfirmDialog";
-import { type JobActions, JobList } from "./components/JobList";
-import { type JobFilter, jobMatchesFilter, Sidebar } from "./components/Sidebar";
-import { SubmitForm } from "./components/SubmitForm";
-import { TopBar } from "./components/TopBar";
-import { statusMeta } from "./jobStatus";
-import { filterJobs, type JobSort, sortJobs } from "./lib/jobListUtils";
-import { useTheme } from "./theme";
+import { jobCounts, type JobFilter, jobMatchesFilter } from "./jobStatus";
+import { filterJobs, type JobSort, sortJobs, todaySpendMicros } from "./lib/jobListUtils";
 import { connectJobSocket, isTerminal, type JobEvent } from "./ws";
 
 const POLL_MS = 3000;
@@ -36,12 +31,10 @@ export function App(props: {
   // config is still part of the boot contract (clerk_enabled is read in main.tsx);
   // the dashboard itself no longer needs it now that links are same-origin.
   config: RuntimeConfig;
-  // The auth-control node from the boot shell: a LAN chip, or Clerk's UserButton.
+  // The auth-control node from the boot shell: a LAN chip, or the Clerk avatar.
   authControl?: ReactNode;
 }) {
   const { authControl } = props;
-  const [theme, toggleTheme] = useTheme();
-  const [me, setMe] = useState<MeOut | null>(null);
   const [jobs, setJobs] = useState<JobOut[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
@@ -51,6 +44,7 @@ export function App(props: {
   const [sort, setSort] = useState<JobSort>("newest");
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const [wsOpen, setWsOpen] = useState(false);
+  const [version, setVersion] = useState<string | null>(null);
   // Mirror of `jobs` for the WS handler — reading state there would force
   // the socket effect to re-run (and reconnect) on every list change.
   const jobsRef = useRef<JobOut[]>([]);
@@ -72,14 +66,15 @@ export function App(props: {
   }, [jobs]);
 
   useEffect(() => {
-    getMe()
-      .then(setMe)
-      .catch(() => setMe(null));
-  }, []);
-
-  useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Deploy-truth version for the infra strip (GET /health).
+  useEffect(() => {
+    getHealth()
+      .then((h) => setVersion(h.version))
+      .catch(() => setVersion(null));
+  }, []);
 
   // Merge one WS frame into the list in place. Frames carry only
   // status/progress/stage_note/error — never the full row — so unknown jobs
@@ -153,10 +148,14 @@ export function App(props: {
     [refresh],
   );
 
-  const onCreated = useCallback(() => {
-    setFilter("all"); // make the freshly-queued job visible regardless of current filter
-    void refresh();
-  }, [refresh]);
+  const onCreate = useCallback(
+    async (url: string) => {
+      await createJob({ url });
+      setFilter("all"); // make the freshly-queued job visible regardless of current filter
+      await refresh();
+    },
+    [refresh],
+  );
 
   const actions: JobActions = useMemo(
     () => ({
@@ -194,25 +193,13 @@ export function App(props: {
     });
   }, [jobs, runAction]);
 
-  // Status filter (sidebar) → text search → sort. All client-side, all pure.
+  // Status filter (chips) → text search → sort. All client-side, all pure.
   const visible = useMemo(
     () => sortJobs(filterJobs(jobs.filter((j) => jobMatchesFilter(j, filter)), query), sort),
     [jobs, filter, query, sort],
   );
-  const activeCount = useMemo(() => jobs.filter((j) => statusMeta(j.status).active).length, [jobs]);
-  const failedCount = useMemo(() => jobs.filter((j) => j.status === "failed").length, [jobs]);
-
-  const subtitle = `${jobs.length} ${jobs.length === 1 ? "job" : "jobs"}${
-    activeCount > 0 ? ` · ${activeCount} active` : ""
-  }`;
-
-  const identity = (
-    <>
-      {me && <span className="identity-name">{me.email || me.subject}</span>}
-      {me?.is_admin && <span className="chip admin">admin</span>}
-      {authControl}
-    </>
-  );
+  const counts = useMemo(() => jobCounts(jobs), [jobs]);
+  const todaySpend = useMemo(() => todaySpendMicros(jobs), [jobs]);
 
   // A non-blank search that matches nothing gets its own empty copy — the
   // status-filter copy ("No jobs yet") would be misleading there.
@@ -222,69 +209,31 @@ export function App(props: {
     : EMPTY_COPY[filter];
 
   return (
-    <div className="app">
-      <TopBar theme={theme} onToggleTheme={toggleTheme} identity={identity} />
-      <Sidebar jobs={jobs} filter={filter} onFilter={setFilter} />
-      <main className="main">
-        <div className="pane pane-narrow">
-          <div className="pane-header">
-            <div>
-              <h1 className="pane-h1">Jobs</h1>
-              <p className="pane-sub">{subtitle}</p>
-            </div>
-            {failedCount > 0 && (
-              <div className="pane-actions">
-                <button type="button" className="btn sm" onClick={onClearFailed}>
-                  Clear failed ({failedCount})
-                </button>
-              </div>
-            )}
-          </div>
-
-          <SubmitForm onCreated={onCreated} />
-
-          <div className="list-toolbar">
-            <input
-              type="search"
-              className="field field-search"
-              placeholder="Search title, artist or URL…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              aria-label="Search jobs"
-            />
-            <select
-              className="field field-sort"
-              value={sort}
-              onChange={(e) => setSort(e.target.value as JobSort)}
-              aria-label="Sort jobs"
-            >
-              <option value="newest">Newest first</option>
-              <option value="oldest">Oldest first</option>
-              <option value="title">Title A–Z</option>
-            </select>
-          </div>
-
-          {listError && (
-            <div className="form-error" style={{ marginBottom: "16px" }}>
-              Couldn’t load jobs: {listError}
-            </div>
-          )}
-          {actionError && (
-            <div className="form-error" style={{ marginBottom: "16px" }}>
-              Action failed: {actionError}
-            </div>
-          )}
-
-          <JobList
-            jobs={visible}
-            loading={!loaded}
-            actions={actions}
-            emptyTitle={copy.title}
-            emptySub={copy.sub}
-          />
-        </div>
-      </main>
-      <ConfirmDialog state={confirmState} onClose={() => setConfirmState(null)} />
+    <div style={{ height: "100%", overflow: "auto" }}>
+      <BoothScreen
+        jobs={visible}
+        counts={counts}
+        filter={filter}
+        onFilter={setFilter}
+        query={query}
+        onQuery={setQuery}
+        sort={sort}
+        onSort={setSort}
+        loaded={loaded}
+        listError={listError}
+        actionError={actionError}
+        emptyTitle={copy.title}
+        emptySub={copy.sub}
+        wsOpen={wsOpen}
+        version={version}
+        todaySpend={todaySpend}
+        onCreate={onCreate}
+        actions={actions}
+        onClearFailed={onClearFailed}
+        authControl={authControl}
+      >
+        <ConfirmDialog state={confirmState} onClose={() => setConfirmState(null)} />
+      </BoothScreen>
     </div>
   );
 }
