@@ -12,11 +12,15 @@
 // faders are a visual skin over that ONE parameter — VOX = vocalLevel, INST
 // displays/drives 1 − vocalLevel (mirrored). DROP / hold-V ducking is pure UI
 // over setVocalLevel (save level → 0 → restore). The hook API is not extended.
-// The ⤢ Performance control ships with the Performance-mode issue.
+// The ⤢ Performance control (stage.jsx:19-20) opens the #156 fullscreen
+// overlay (components/Perf.tsx), rendered INSIDE this component as plain
+// component state — no route change, no re-mount — so the engine instance
+// (and playback) persists across enter/exit.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { lyricState, ProtoFader, type TimedLine } from "../components/stage-core";
 import { MBulbs, MWipe } from "../components/marks";
+import { Perf } from "../components/Perf";
 import type { StageTheme } from "../theme";
 import { type KaraokePlayerApi, PLAYBACK_RATES, useKaraokePlayer } from "./useKaraokePlayer";
 
@@ -54,7 +58,7 @@ function prefersReducedMotion(): boolean {
 // PLAYBACK_RATES (unchanged). The design's loop cycle (none → A set → A–B →
 // none) maps onto markA/markB/clearRegion: the engine wraps at B whenever a
 // region is set, and a B within 1 s of A cancels (the design's guard).
-function TransportBar({ player }: { player: KaraokePlayerApi }) {
+function TransportBar({ player, onPerf }: { player: KaraokePlayerApi; onPerf: () => void }) {
   const { a, b } = player.region;
   const cycleLoop = () => {
     if (a == null) player.markA();
@@ -86,6 +90,9 @@ function TransportBar({ player }: { player: KaraokePlayerApi }) {
           <option key={r} value={r}>{r}×</option>
         ))}
       </select>
+      <button className="m-btn sm primary" type="button" onClick={onPerf} disabled={!player.ready}
+        title="Performance mode — fullscreen lyrics (esc exits)"
+        style={{ background: "transparent", color: "var(--accent)", borderColor: "var(--accent)" }}>⤢ Performance</button>
     </div>
   );
 }
@@ -244,9 +251,16 @@ export interface KaraokePlayerProps {
   lines: TimedLine[];
   /** Room theme — the ◐ flip re-reads canvas colors off the room container. */
   theme: StageTheme;
+  /** Real share title (already defaulted by the Stage) — the perf top strip. */
+  title: string;
+  artist: string | null;
+  /** Plain lyrics for the perf overlay's no-synced-data fallback. */
+  plainLyrics: string | null;
+  /** Flip the room's persisted ◐ theme — shared with the perf overlay. */
+  onToggleTheme: () => void;
 }
 
-export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, view, lines, theme }: KaraokePlayerProps) {
+export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, view, lines, theme, title, artist, plainLyrics, onToggleTheme }: KaraokePlayerProps) {
   const rootRef = useRef<HTMLElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [container, setContainer] = useState<HTMLElement | null>(null);
@@ -337,6 +351,14 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
   const voxPct = Math.round((ducked ? prior : player.vocalLevel) * 100);
   const instPct = 100 - voxPct;
 
+  // ── Performance mode (#156) — overlay open/close is component state on the
+  // item route (no hash route). The overlay mounts as a sibling of the player
+  // chrome below, so this hook instance — and the engine behind it — is the
+  // SAME object the overlay drives: playback never re-mounts on enter/exit.
+  const [perfOpen, setPerfOpen] = useState(false);
+  const openPerf = useCallback(() => setPerfOpen(true), []);
+  const exitPerf = useCallback(() => setPerfOpen(false), []);
+
   // Keyboard transport. Scoped to the player root so it doesn't hijack typing
   // elsewhere; Space/←/→ are the karaoke staples.
   const onKeyDown = useCallback(
@@ -387,7 +409,7 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
       {view === "console" ? (
         <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap" }}>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 11, justifyContent: "center", minWidth: 0 }}>
-            <TransportBar player={player} />
+            <TransportBar player={player} onPerf={openPerf} />
             <div className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)" }}>space play · ←/→ seek · V drops vocals · click wave to seek</div>
             <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 650, minHeight: 22 }}>
               {lines.length > 0 && <LiveLyricWipe lines={lines} subscribeTime={player.subscribeTime} />}
@@ -408,8 +430,23 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <SetlistModule player={player} lines={lines} />
-          <TransportBar player={player} />
+          <TransportBar player={player} onPerf={openPerf} />
         </div>
+      )}
+
+      {/* performance mode overlay (#156) — position:fixed over the Stage */}
+      {perfOpen && (
+        <Perf
+          player={player}
+          title={title}
+          artist={artist}
+          lines={lines}
+          plain={plainLyrics}
+          theme={theme}
+          onToggleTheme={onToggleTheme}
+          onExit={exitPerf}
+          reducedMotion={reducedMotion}
+        />
       )}
     </section>
   );

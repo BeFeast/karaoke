@@ -7,8 +7,8 @@
 // payload, real artifact downloads, and the room-scoped ◐ day/night theme
 // (booth rooms stay always light). Recorded deviations: cost + receipt are
 // OMITTED on this page (not in SharePayload — anonymous share viewers must
-// not see cost); the ⤢ Performance control ships with the Performance-mode
-// issue (no dead button).
+// not see cost); the ⤢ Performance control opens the #156 fullscreen overlay
+// (components/Perf.tsx), mounted inside the player so the engine persists.
 
 import { type CSSProperties, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getLyrics, getShare, type LyricsPayload, type SharePayload } from "../api";
@@ -176,6 +176,7 @@ export function Stage({ token }: { token: string }) {
         view={view}
         setView={setView}
         theme={theme}
+        onToggleTheme={toggleTheme}
         currentTime={currentTime}
         onTime={onTime}
         seekRef={seekRef}
@@ -216,6 +217,7 @@ function StageBody({
   view,
   setView,
   theme,
+  onToggleTheme,
   currentTime,
   onTime,
   seekRef,
@@ -228,6 +230,8 @@ function StageBody({
   view: StageView;
   setView: (v: StageView) => void;
   theme: StageTheme;
+  /** Flip the room's persisted ◐ theme — the perf overlay shares it (#156). */
+  onToggleTheme: () => void;
   currentTime: number;
   onTime: (t: number) => void;
   seekRef: React.MutableRefObject<((time: number) => void) | null>;
@@ -343,6 +347,10 @@ function StageBody({
             view={view}
             lines={timed}
             theme={theme}
+            title={title}
+            artist={payload.artist}
+            plainLyrics={lyrics?.plain ?? null}
+            onToggleTheme={onToggleTheme}
           />
         </Suspense>
       )}
