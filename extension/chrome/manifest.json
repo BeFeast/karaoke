@@ -3,7 +3,7 @@
   "name": "Karaoke Submitter",
   "short_name": "Karaoke",
   "description": "Submit the current video page or link to a configured Karaoke queue (vocals + instrumental playback + lyrics).",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "action": {
     "default_title": "Submit video to Karaoke"
   },
