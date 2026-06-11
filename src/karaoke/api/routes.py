@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import datetime as dt
 import json
 import logging
@@ -16,8 +15,6 @@ from fastapi import (
     Depends,
     HTTPException,
     Request,
-    WebSocket,
-    WebSocketDisconnect,
     status,
 )
 from fastapi.responses import FileResponse, HTMLResponse, Response
@@ -40,6 +37,7 @@ from karaoke.api.cookies_store import (
     validate_netscape_cookies,
     write_cookies_atomically,
 )
+from karaoke.api.ws import forget_job, publish_stage
 from karaoke.config import Settings, get_settings
 from karaoke.db.models import Job, JobStatus
 from karaoke.db.session import get_session, get_session_factory
@@ -279,6 +277,10 @@ async def create_job(
     # never triggers an async lazy-load.
     await session.refresh(job, attribute_names=["artifacts"])
 
+    # First WS event of the job's life: subscribers (and the latest-stage
+    # replay cache) see ``queued`` before the worker takes over (issue #8).
+    publish_stage(job.id, JobStatus.queued, 0)
+
     # Dispatch to the real vast.ai worker, or the in-process mock when no
     # vast key is configured (CI / dev default). See worker.scheduler.
     if cookies_blob is not None:
@@ -404,11 +406,15 @@ async def clear_failed_jobs(
         stmt = stmt.where(Job.owner_subject == owner.subject)
     jobs = (await session.scalars(stmt)).all()
     tokens = [j.job_token for j in jobs]
+    ids = [j.id for j in jobs]
     for job in jobs:
         await session.delete(job)
     await session.commit()
     for token in tokens:
         _remove_artifact_files(settings, token)
+    for job_id in ids:
+        # Deleted rows must not replay stale WS state (#8).
+        forget_job(job_id)
     return ClearResult(deleted=len(tokens))
 
 
@@ -433,6 +439,9 @@ async def cancel_job(
     job.status = JobStatus.cancelled
     await session.commit()
     await session.refresh(job, attribute_names=["artifacts"])
+    # Terminal WS event: stops the job's heartbeats and lets subscribers
+    # drop the spinner immediately (issue #8).
+    publish_stage(job.id, JobStatus.cancelled, job.progress)
     # Drop any per-job cookies still stashed for this job (#77): a cancel
     # before the worker popped them would otherwise leave the blob lingering
     # in the in-memory registry.
@@ -461,6 +470,9 @@ async def delete_job(
     await session.delete(job)
     await session.commit()
     _remove_artifact_files(settings, token)
+    # Drop the WS hub's cached stage/heartbeats so a deleted (possibly still
+    # non-terminal) job can't keep heartbeating or replaying stale state (#8).
+    forget_job(job_id)
     # Drop any per-job cookies still stashed for this job (#77).
     job_cookies.discard(job_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -913,70 +925,8 @@ async def share_artifact(
     )
 
 
-# ---------------------------------------------------------------------------
-# WebSocket — live progress
-# ---------------------------------------------------------------------------
-
-
-@router.websocket("/ws")
-async def websocket_progress(websocket: WebSocket) -> None:
-    """Live-progress channel.
-
-    The client subscribes with ``{"action": "subscribe", "job_id": N}``
-    and receives status snapshots until the job is terminal or the
-    socket disconnects. Polling /jobs/{id}/status remains the
-    fallback channel.
-    """
-    await websocket.accept()
-    try:
-        msg = await websocket.receive_json()
-    except WebSocketDisconnect:
-        return
-
-    job_id = msg.get("job_id") if isinstance(msg, dict) else None
-    if not isinstance(job_id, int):
-        await websocket.send_json({"error": "expected {action: subscribe, job_id: int}"})
-        await websocket.close(code=1003)
-        return
-
-    factory = get_session_factory()
-    last_status: JobStatus | None = None
-    last_progress: int | None = None
-    last_stage_note: str | None = None
-    terminal = {JobStatus.completed, JobStatus.failed, JobStatus.cancelled}
-
-    try:
-        while True:
-            async with factory() as session:
-                job = await session.get(Job, job_id)
-            if job is None:
-                await websocket.send_json({"error": "job not found"})
-                break
-            if (
-                job.status != last_status
-                or job.progress != last_progress
-                or job.stage_note != last_stage_note
-            ):
-                await websocket.send_json(
-                    {
-                        "job_id": job.id,
-                        "status": job.status.value,
-                        "progress": job.progress,
-                        "stage_note": job.stage_note,
-                        "error": job.error,
-                    }
-                )
-                last_status = job.status
-                last_progress = job.progress
-                last_stage_note = job.stage_note
-            if job.status in terminal:
-                break
-            await asyncio.sleep(0.1)
-    except WebSocketDisconnect:
-        return
-    finally:
-        with contextlib.suppress(Exception):  # pragma: no cover - already closed
-            await websocket.close()
+# The WebSocket live-progress channel (``WS /ws`` + ``WS /ws/{job_id}``)
+# lives in ``karaoke.api.ws`` (issue #8); ``create_app`` mounts its router.
 
 
 # ---------------------------------------------------------------------------

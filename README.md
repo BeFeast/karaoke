@@ -37,6 +37,21 @@ Status: **scaffolding** — just the empty seed; implementation tracked in issue
   [`docker/api/README.md`](docker/api/README.md) and
   [`docs/yt-dlp-runbook.md`](docs/yt-dlp-runbook.md).
 
+## Live progress (WebSocket)
+
+`WS /ws` (global broadcast) and `WS /ws/{job_id}` (per-job) push typed JSON
+events — `stage_change` (`queued`/`downloading`/`separating`/`transcribing`/
+`finalizing`/`completed`/`failed`), `heartbeat` (every
+`KARAOKE_WS_HEARTBEAT_INTERVAL_S` seconds, default **5s**, while a stage is in
+progress), `cost_update` (carries `vast_cost`; fired after vast provisioning
+and on teardown), and `error`. On connect the server replays the latest known
+stage/heartbeat for the job, so late subscribers see current state instantly
+(`wscat -c ws://localhost:13140/ws/<job_id>`). WS is served on the same
+listener as HTTP (`:13140`); `:13141` is reserved (`KARAOKE_WS_PORT`) should
+the deployment split WS onto its own listener. `/jobs/{id}/status` polling
+stays supported as the fallback channel. Full event schema:
+[`src/karaoke/api/ws.py`](src/karaoke/api/ws.py).
+
 ## Verification gate
 
 A job is done only when `vocals.mp3`, `karaoke.mp3`, and `lyrics.txt` exist on the NFS store,

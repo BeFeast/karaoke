@@ -39,13 +39,16 @@ def _reset_module_state(
 
     # Clear caches.
     from karaoke.api import auth as auth_module
+    from karaoke.api import ws as ws_module
 
     auth_module._JWKS_CACHE.clear()
+    ws_module.reset_hub_for_tests()
 
     reset_settings_for_tests()
     db_session._engine = None
     db_session._session_factory = None
     yield
+    ws_module.reset_hub_for_tests()
     reset_settings_for_tests()
 
 

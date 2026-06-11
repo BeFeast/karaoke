@@ -59,6 +59,18 @@ class Settings(BaseSettings):
     # Test-only escape hatch: skip Clerk JWT validation when set.
     auth_test_mode: bool = False
 
+    # ---- WebSocket live progress (issue #8) ----
+    # Heartbeat cadence (seconds) on /ws and /ws/{job_id} while a job is in a
+    # non-terminal stage. This is the documented default of 5s; override via
+    # KARAOKE_WS_HEARTBEAT_INTERVAL_S.
+    ws_heartbeat_interval_s: float = 5.0
+    # WS listener port. The default keeps WS on the SAME uvicorn listener as
+    # HTTP (:13140) — the app itself never binds this value; it documents the
+    # deployment contract. :13141 is RESERVED for a split WS listener (a
+    # second uvicorn process serving only /ws) should the deployment choose
+    # to separate the channels.
+    ws_port: int = 13140
+
     # ---- SPA (Submitter single-page app) ----
     # Filesystem path to the built Vite SPA (``web/spa/dist``) inside the
     # container. Mounted at ``/app`` by ``create_app`` only when present, so

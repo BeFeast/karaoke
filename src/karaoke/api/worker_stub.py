@@ -14,6 +14,7 @@ import secrets
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from karaoke.api import ws as ws_events
 from karaoke.db.models import Artifact, Job, JobStatus
 from karaoke.worker import job_cookies
 
@@ -57,6 +58,8 @@ async def run_mock_job(
                 JobStatus.transcribing: 90,
             }[stage]
             await session.commit()
+            # WS push on every transition (issue #8) — mirrors the real worker.
+            ws_events.publish_stage(job_id, stage, job.progress)
         if sleep:
             await asyncio.sleep(sleep)
 
@@ -81,6 +84,12 @@ async def run_mock_job(
                 )
             )
         await session.commit()
+        # Mirror the real worker's WS teardown events: final cost, then the
+        # terminal stage (issue #8). The mock spends $0 by definition.
+        ws_events.publish_cost(
+            job_id, 0.0, vast_instance_id=job.vast_instance_id, phase="teardown"
+        )
+        ws_events.publish_stage(job_id, JobStatus.completed, 100)
 
 
 def schedule_mock_job(
