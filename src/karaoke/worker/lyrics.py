@@ -16,7 +16,11 @@ Lookup strategy (mirrors LRCLIB's own client guidance):
   1. ``GET /api/get`` with ``artist_name`` / ``track_name`` / ``album_name`` /
      ``duration`` — an exact match; LRCLIB matches duration within ±2s.
   2. On a 404 (or any miss), fall back to ``GET /api/search`` (fuzzy) and pick
-     the best candidate by title similarity + duration proximity.
+     the best candidate by title similarity + duration proximity. A best
+     candidate whose duration is more than ``_DURATION_REJECT_S`` away from
+     the actual audio is rejected outright (#148): it is the wrong edit/cut,
+     and its synced timings would drift against our track — strictly worse
+     than the Whisper ASR floor, which is timed against the real audio.
 
 Results are cached in-process by ``(artist, track, duration)`` so re-running a
 job (or a retry) does not re-hit LRCLIB.
@@ -41,6 +45,11 @@ USER_AGENT = "karaoke/1.0 (+https://github.com/BeFeast/karaoke)"
 # LRCLIB matches the supplied duration within this many seconds for /api/get;
 # we reuse it to score /api/search candidates.
 _DURATION_TOLERANCE_S = 2
+# Hard ceiling for /api/search candidates (#148): a best candidate further
+# than this from the actual audio duration is the wrong edit/cut, so the whole
+# record is rejected (text included) and the pipeline falls through to the
+# Whisper ASR floor. Does not apply to /api/get — LRCLIB enforces ±2s there.
+_DURATION_REJECT_S = 5
 
 # Lyrics-source provenance values recorded in metadata.json.
 SOURCE_LRCLIB_SYNCED = "lrclib_synced"
@@ -103,12 +112,16 @@ class LyricsResult:
     * ``instrumental`` — LRCLIB flagged the track as instrumental (no lyrics).
     * ``source`` — where the data came from for provenance / logging:
       ``"lrclib_get"``, ``"lrclib_search"``, ``"instrumental"`` or ``"none"``.
+    * ``rejected`` — why a record LRCLIB *did* return was dropped anyway
+      (e.g. ``"duration_mismatch (28s)"``, #148), or ``None``. Only ever set
+      alongside ``source="none"``; surfaced in ``metadata.json`` provenance.
     """
 
     synced_lrc: str | None = None
     plain: str | None = None
     instrumental: bool = False
     source: str = "none"
+    rejected: str | None = None
 
     @property
     def found(self) -> bool:
@@ -161,6 +174,18 @@ def _from_record(record: dict[str, Any], source: str) -> LyricsResult:
     return LyricsResult(synced_lrc=synced, plain=plain, source=source)
 
 
+def _duration_delta(record: dict[str, Any], duration: int | None) -> float | None:
+    """Absolute duration delta (seconds) between a candidate and the actual
+    audio, or ``None`` when either side is unknown/unparseable."""
+    rec_dur = record.get("duration")
+    if duration is None or rec_dur is None:
+        return None
+    try:
+        return abs(float(rec_dur) - float(duration))
+    except (TypeError, ValueError):
+        return None
+
+
 def _score_candidate(
     record: dict[str, Any], track: str, duration: int | None
 ) -> tuple[int, float]:
@@ -170,15 +195,10 @@ def _score_candidate(
     Returns a tuple usable as a sort key (both ascending-friendly when negated).
     """
     # Duration proximity: within tolerance is best, then by absolute delta.
-    within = 0
-    delta = float("inf")
-    rec_dur = record.get("duration")
-    if duration is not None and rec_dur is not None:
-        try:
-            delta = abs(float(rec_dur) - float(duration))
-        except (TypeError, ValueError):
-            delta = float("inf")
-        within = 1 if delta <= _DURATION_TOLERANCE_S else 0
+    delta = _duration_delta(record, duration)
+    within = 1 if delta is not None and delta <= _DURATION_TOLERANCE_S else 0
+    if delta is None:
+        delta = float("inf")
 
     # Title-token overlap (cheap fuzzy match, no extra deps).
     want = {t for t in track.lower().split() if t}
@@ -257,7 +277,9 @@ class LyricsSource:
         if get_result is not None and get_result.found:
             return get_result
         search_result = self._try_search(artist, track, duration)
-        if search_result is not None and search_result.found:
+        # Keep a duration-rejected result (#148) as-is: it carries the
+        # rejection reason for metadata.json provenance.
+        if search_result is not None and (search_result.found or search_result.rejected):
             return search_result
         return LyricsResult(source="none")
 
@@ -296,4 +318,15 @@ class LyricsSource:
         if not candidates:
             return None
         best = max(candidates, key=lambda c: _score_candidate(c, track, duration))
+        # Hard reject (#148): a best candidate too far from the actual audio
+        # duration is the wrong edit/cut — its synced timings would drift, and
+        # its text covers the wrong cut too. Drop the entire record so the
+        # pipeline falls through to the Whisper ASR floor (timed against the
+        # real audio). Unknown durations (either side) are never rejected.
+        delta = _duration_delta(best, duration)
+        if delta is not None and delta > _DURATION_REJECT_S:
+            return LyricsResult(
+                source="none",
+                rejected=f"duration_mismatch ({round(delta, 1):g}s)",
+            )
         return _from_record(best, source="lrclib_search")

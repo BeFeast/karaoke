@@ -425,6 +425,10 @@ def _resolve_lyrics(
 
         {"lyrics_source": str, "synced": bool, "instrumental": bool,
          "lrc_written": bool}
+
+    When the LRCLIB lookup *had* a record but dropped it (duration hard-reject,
+    #148), the miss-branch mapping additionally carries the reason under
+    ``"lyrics_lrclib_rejected"`` for ``metadata.json`` debuggability.
     """
     lyrics_txt = exports_dir / "lyrics.txt"
     lyrics_lrc = exports_dir / "lyrics.lrc"
@@ -482,18 +486,22 @@ def _resolve_lyrics(
     asr_lrc = whisper_segments_to_lrc(_read_whisper_segments(whisper_lyrics_json))
     if asr_lrc:
         lyrics_lrc.write_text(asr_lrc, encoding="utf-8")
-        return {
+        prov: dict[str, object] = {
             "lyrics_source": SOURCE_WHISPER_ASR_SYNCED,
             "synced": True,
             "instrumental": False,
             "lrc_written": True,
         }
-    return {
-        "lyrics_source": SOURCE_WHISPER_ASR,
-        "synced": False,
-        "instrumental": False,
-        "lrc_written": False,
-    }
+    else:
+        prov = {
+            "lyrics_source": SOURCE_WHISPER_ASR,
+            "synced": False,
+            "instrumental": False,
+            "lrc_written": False,
+        }
+    if lyrics.rejected:
+        prov["lyrics_lrclib_rejected"] = lyrics.rejected
+    return prov
 
 
 def _lrc_to_plain(lrc: str) -> str:
@@ -745,6 +753,10 @@ async def run_real_job(
             "synced": lyrics_prov["synced"],
             "instrumental": lyrics_prov["instrumental"],
         }
+        # Why an LRCLIB record was dropped (duration hard-reject, #148) — only
+        # present when it happened, so normal jobs keep a stable metadata shape.
+        if lyrics_prov.get("lyrics_lrclib_rejected"):
+            metadata["lyrics_lrclib_rejected"] = lyrics_prov["lyrics_lrclib_rejected"]
         (exports_dir / "metadata.json").write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
         )

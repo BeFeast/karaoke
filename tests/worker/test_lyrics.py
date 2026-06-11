@@ -9,6 +9,7 @@ network. Covers the cases issue #54 calls out:
   * ``instrumental: true``
   * no-match (both endpoints miss → empty result; caller keeps Whisper)
   * in-process caching by (artist, track, duration)
+  * duration hard-reject of the best ``/api/search`` candidate (#148)
 """
 from __future__ import annotations
 
@@ -248,6 +249,119 @@ def test_no_artist_skips_get_and_uses_search():
     result = src.fetch(artist=None, track="Song", duration=200)
     assert result.source == "lrclib_search"
     assert [c[1].rsplit("/", 1)[-1] for c in rec.calls] == ["search"]
+
+
+# ---------------------------------------------------------------------------
+# 8. duration hard-reject on the /api/search path (#148)
+# ---------------------------------------------------------------------------
+def _search_script(candidates: list[dict]) -> list[dict]:
+    return [
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": candidates},
+    ]
+
+
+def test_search_rejects_best_candidate_on_duration_mismatch():
+    """Best (and only) candidate is the wrong edit (delta > 5 s): the ENTIRE
+    record is dropped — synced AND plain — so the pipeline falls through to
+    the Whisper ASR floor, whose timings track the actual audio (#148/job #64)."""
+    rec = _Recorder(_search_script([
+        {
+            # The canonical EP cut vs the 229 s official-video edit.
+            "trackName": "Song",
+            "duration": 257,
+            "syncedLyrics": SYNCED_BODY,
+            "plainLyrics": PLAIN_BODY,
+        },
+    ]))
+    src = LyricsSource(http=rec)
+    result = src.fetch(artist="Artist", track="Song", duration=229)
+
+    assert result.found is False
+    assert result.source == "none"
+    assert result.synced_lrc is None
+    assert result.plain is None
+    assert result.rejected == "duration_mismatch (28s)"
+
+
+def test_search_reject_drops_instrumental_flag_too():
+    """A wrong-edit record's ``instrumental`` flag must not silence lyrics."""
+    rec = _Recorder(_search_script([
+        {"trackName": "Song", "duration": 400, "instrumental": True},
+    ]))
+    src = LyricsSource(http=rec)
+    result = src.fetch(artist="Artist", track="Song", duration=229)
+
+    assert result.instrumental is False
+    assert result.source == "none"
+    assert result.rejected == "duration_mismatch (171s)"
+
+
+def test_search_accepts_candidate_at_reject_threshold():
+    """Delta == 5 s (the threshold itself) is still accepted — only > 5 rejects."""
+    rec = _Recorder(_search_script([
+        {
+            "trackName": "Song",
+            "duration": 234,
+            "syncedLyrics": SYNCED_BODY,
+            "plainLyrics": PLAIN_BODY,
+        },
+    ]))
+    src = LyricsSource(http=rec)
+    result = src.fetch(artist="Artist", track="Song", duration=229)
+
+    assert result.source == "lrclib_search"
+    assert result.synced_lrc == SYNCED_BODY
+    assert result.rejected is None
+
+
+def test_search_keeps_candidate_when_duration_unknown():
+    """No duration on the candidate, or none for the actual audio → the edit
+    can't be judged, so missing data never rejects (today's behavior)."""
+    # Candidate carries no duration.
+    rec = _Recorder(_search_script([
+        {"trackName": "Song", "syncedLyrics": SYNCED_BODY, "plainLyrics": PLAIN_BODY},
+    ]))
+    result = LyricsSource(http=rec).fetch(artist="Artist", track="Song", duration=229)
+    assert result.source == "lrclib_search"
+    assert result.rejected is None
+
+    # Actual duration unknown; candidate duration wildly off would-be-rejected.
+    rec = _Recorder(_search_script([
+        {
+            "trackName": "Song",
+            "duration": 999,
+            "syncedLyrics": SYNCED_BODY,
+            "plainLyrics": PLAIN_BODY,
+        },
+    ]))
+    result = LyricsSource(http=rec).fetch(artist="Artist", track="Song", duration=None)
+    assert result.source == "lrclib_search"
+    assert result.rejected is None
+
+
+def test_get_path_unaffected_by_duration_reject():
+    """/api/get already matches duration ±2 s server-side; the client-side
+    hard reject applies only to /api/search candidates."""
+    rec = _Recorder([
+        {
+            "expect_in": "/api/get",
+            "code": 200,
+            "body": {
+                "duration": 999,  # whatever the record claims, /api/get wins
+                "syncedLyrics": SYNCED_BODY,
+                "plainLyrics": PLAIN_BODY,
+                "instrumental": False,
+            },
+        },
+    ])
+    src = LyricsSource(http=rec)
+    result = src.fetch(artist="Artist", track="Song", duration=229)
+
+    assert result.source == "lrclib_get"
+    assert result.synced_lrc == SYNCED_BODY
+    assert result.rejected is None
+    assert len(rec.calls) == 1
 
 
 # ---------------------------------------------------------------------------

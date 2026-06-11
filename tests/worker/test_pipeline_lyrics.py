@@ -2,7 +2,9 @@
 
 Exercises :func:`karaoke.worker.pipeline._resolve_lyrics` directly (pure file
 I/O + provenance) so we lock down the precedence without standing up the full
-async job / GPU / DB machinery.
+async job / GPU / DB machinery — plus one end-to-end ``run_real_job`` check
+(mocked yt-dlp/ffmpeg/GPU/LRCLIB) that a duration hard-reject (#148) lands in
+``exports/metadata.json``.
 
 Precedence: LRCLIB synced > LRCLIB plain (force-aligned when possible) >
 Whisper ASR (with an approximate segment-timed LRC when usable, #145);
@@ -10,7 +12,10 @@ Whisper ASR (with an approximate segment-timed LRC when usable, #145);
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
 
 from karaoke.worker.lyrics import (
     SOURCE_FORCED_ALIGNED,
@@ -363,3 +368,173 @@ def test_read_whisper_segments_tolerant(tmp_path):
     good = _whisper_json(tmp_path, SEGMENTS_JSON)
     segs = _read_whisper_segments(good)
     assert isinstance(segs, list) and len(segs) == 2
+
+
+# ---------------------------------------------------------------------------
+# duration hard-reject provenance (#148): rejection reason flows to metadata
+# ---------------------------------------------------------------------------
+def test_rejected_lookup_falls_to_asr_floor_with_provenance(tmp_path):
+    """A duration-rejected LRCLIB record behaves as a miss (ASR floor, synced
+    when segments are usable) AND carries the rejection reason in provenance."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path, text="asr one\nasr two")
+    lyrics_json = _whisper_json(tmp_path, SEGMENTS_JSON)
+
+    prov = _resolve_lyrics(
+        LyricsResult(source="none", rejected="duration_mismatch (28s)"),
+        exports,
+        whisper,
+        None,
+        lyrics_json,
+    )
+    assert prov["lyrics_source"] == SOURCE_WHISPER_ASR_SYNCED
+    assert prov["lrc_written"] is True
+    assert prov["lyrics_lrclib_rejected"] == "duration_mismatch (28s)"
+
+
+def test_rejected_lookup_without_segments_keeps_reason(tmp_path):
+    """Untimed ASR floor (no usable segments) still records the rejection."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path)
+
+    prov = _resolve_lyrics(
+        LyricsResult(source="none", rejected="duration_mismatch (171s)"),
+        exports,
+        whisper,
+        None,
+        None,
+    )
+    assert prov["lyrics_source"] == SOURCE_WHISPER_ASR
+    assert prov["lyrics_lrclib_rejected"] == "duration_mismatch (171s)"
+
+
+def test_plain_miss_has_no_rejection_key(tmp_path):
+    """A plain LRCLIB miss (nothing returned, nothing rejected) keeps the
+    provenance mapping shape unchanged — no spurious key."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path)
+
+    prov = _resolve_lyrics(LyricsResult(source="none"), exports, whisper)
+    assert "lyrics_lrclib_rejected" not in prov
+
+
+@pytest.mark.asyncio
+async def test_run_real_job_writes_rejection_to_metadata(tmp_path, monkeypatch):
+    """End-to-end (mocked yt-dlp/ffmpeg/GPU/LRCLIB): the only search candidate
+    is the wrong edit (257 s vs the actual 229 s) → the job completes on the
+    whisper_asr_synced floor and ``metadata.json`` records the rejection."""
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.config import Settings
+    from karaoke.db.models import Base, Job, JobStatus
+    from karaoke.db.session import create_engine_and_sessionmaker
+    from karaoke.worker.lyrics import LyricsSource
+    from karaoke.worker.runpod_client import RunpodClient
+    from karaoke.worker.vast_client import GpuJobResult
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'lyr.db'}"
+    engine, factory = create_engine_and_sessionmaker(url)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with factory() as session:
+            job = Job(
+                job_token="tok-lyr",
+                owner_subject="owner",
+                source_url="https://example.com/song",
+                status=JobStatus.queued,
+                progress=0,
+            )
+            session.add(job)
+            await session.commit()
+            await session.refresh(job)
+            job_id = job.id
+
+        monkeypatch.setattr(
+            pipeline,
+            "_ytdlp_metadata",
+            lambda url, settings=None, **_: {
+                "title": "Artist - Song",
+                "artist": "Artist",
+                "track": "Song",
+                "duration": 229,
+            },
+        )
+
+        def fake_file(src, dest: Path, *a, **k):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"x")
+            return dest
+
+        monkeypatch.setattr(pipeline, "_download_audio", fake_file)
+        monkeypatch.setattr(pipeline, "_to_wav", fake_file)
+        monkeypatch.setattr(pipeline, "_wav_to_mp3", fake_file)
+
+        # LRCLIB: /api/get misses; /api/search has only the wrong edit.
+        script = [
+            (404, {"code": 404}),
+            (
+                200,
+                [
+                    {
+                        "trackName": "Song",
+                        "duration": 257,
+                        "syncedLyrics": "[00:10.00]wrong edit line",
+                        "plainLyrics": "wrong edit line",
+                    }
+                ],
+            ),
+        ]
+        monkeypatch.setattr(
+            pipeline,
+            "_LYRICS_SOURCE",
+            LyricsSource(http=lambda method, url, params: script.pop(0)),
+        )
+
+        def fake_gpu_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+            work_dir.mkdir(parents=True, exist_ok=True)
+            voc = work_dir / "vocals.wav"
+            inst = work_dir / "instrumental.wav"
+            ltxt = work_dir / "lyrics.txt"
+            ljson = work_dir / "lyrics.json"
+            voc.write_bytes(b"v")
+            inst.write_bytes(b"i")
+            ltxt.write_text("asr line", encoding="utf-8")
+            ljson.write_text(
+                '{"segments": [{"start": 1.0, "end": 2.0, "text": "asr line"}]}',
+                encoding="utf-8",
+            )
+            return GpuJobResult(
+                vast_instance_id="rp-1",
+                vast_cost=0.01,
+                gpu_model="RTX 4090",
+                vocals_path=voc,
+                instrumental_path=inst,
+                lyrics_txt_path=ltxt,
+                lyrics_json_path=ljson,
+            )
+
+        monkeypatch.setattr(RunpodClient, "run", fake_gpu_run)
+
+        settings = Settings(
+            device_mode="runpod",
+            runpod_api_key="k",
+            runpod_endpoint_id="ep",
+            artifact_root=str(tmp_path),
+        )
+        await pipeline.run_real_job(factory, job_id, settings)
+
+        async with factory() as session:
+            job = await session.get(Job, job_id)
+            assert job.status == JobStatus.completed, job.error
+
+        meta = json.loads(
+            (tmp_path / "tok-lyr" / "exports" / "metadata.json").read_text(encoding="utf-8")
+        )
+        assert meta["lyrics_lrclib_rejected"] == "duration_mismatch (28s)"
+        assert meta["lyrics_source"] == SOURCE_WHISPER_ASR_SYNCED
+        assert meta["synced"] is True
+    finally:
+        await engine.dispose()
