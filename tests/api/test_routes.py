@@ -7,6 +7,7 @@ import os
 import secrets
 import sqlite3
 import time
+from datetime import datetime
 from pathlib import Path
 
 from karaoke.db.models import JobStatus
@@ -142,9 +143,19 @@ def test_status_404_for_missing_job(client):
 
 
 def _seed_job_with_metadata(
-    *, artist: str, track: str, album: str | None = None, duration: int | None = None
+    *,
+    artist: str,
+    track: str,
+    album: str | None = None,
+    duration: int | None = None,
+    gpu_instance_id: str | None = None,
+    gpu_cost_micros: int | None = None,
 ) -> tuple[int, str]:
-    """Insert a job row carrying the new source-metadata columns."""
+    """Insert a job row carrying the new source-metadata + GPU columns.
+
+    The GPU kwargs map onto the legacy ``vast_*`` DB columns (JobOut exposes
+    them under runtime-neutral ``gpu_*`` names).
+    """
     db_path = os.environ["KARAOKE_DATABASE_URL"].split("///", 1)[1]
     token = secrets.token_urlsafe(16)
     con = sqlite3.connect(db_path)
@@ -153,8 +164,9 @@ def _seed_job_with_metadata(
         con.execute(
             "INSERT INTO jobs "
             "(job_token, owner_subject, source_url, title, artist, track, album, "
-            " duration, status, progress, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " duration, vast_instance_id, vast_cost_micros, status, progress, "
+            " created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 token,
                 "lan-default",
@@ -164,6 +176,8 @@ def _seed_job_with_metadata(
                 track,
                 album,
                 duration,
+                gpu_instance_id,
+                gpu_cost_micros,
                 JobStatus.completed.value,
                 100,
                 "2026-06-01 00:00:00+00:00",
@@ -203,6 +217,112 @@ def test_share_payload_exposes_artist_and_track(client):
     body = share.json()
     assert body["artist"] == "Queen"
     assert body["track"] == "Bohemian Rhapsody"
+
+
+def test_jobout_exposes_seeded_metadata_and_gpu_cost(client):
+    """Seeded album/duration/GPU columns surface via /jobs/{id}/status and /jobs."""
+    job_id, _ = _seed_job_with_metadata(
+        artist="ABBA",
+        track="SOS",
+        album="ABBA",
+        duration=202,
+        gpu_instance_id="runpod-abc123",
+        gpu_cost_micros=43210,
+    )
+
+    status_resp = client.get(f"/jobs/{job_id}/status")
+    assert status_resp.status_code == 200, status_resp.text
+    body = status_resp.json()
+    assert body["album"] == "ABBA"
+    assert body["duration"] == 202
+    assert body["gpu_instance_id"] == "runpod-abc123"
+    assert body["gpu_cost_micros"] == 43210
+    # ISO-8601 parseable; SQLite returns naive datetimes, so no offset assert.
+    datetime.fromisoformat(body["created_at"])
+
+    list_resp = client.get("/jobs")
+    assert list_resp.status_code == 200, list_resp.text
+    match = next(j for j in list_resp.json() if j["id"] == job_id)
+    assert match["album"] == "ABBA"
+    assert match["duration"] == 202
+    assert match["gpu_instance_id"] == "runpod-abc123"
+    assert match["gpu_cost_micros"] == 43210
+    datetime.fromisoformat(match["created_at"])
+
+
+def test_jobout_null_metadata_for_fresh_job(client):
+    """A queued job has nulls for the optional metadata, but a created_at."""
+    job_id, _ = _seed_job(JobStatus.queued.value)
+
+    status_resp = client.get(f"/jobs/{job_id}/status")
+    assert status_resp.status_code == 200, status_resp.text
+    body = status_resp.json()
+    assert body["album"] is None
+    assert body["duration"] is None
+    assert body["gpu_instance_id"] is None
+    assert body["gpu_cost_micros"] is None
+    assert body["completed_at"] is None
+    datetime.fromisoformat(body["created_at"])
+
+    list_resp = client.get("/jobs")
+    assert list_resp.status_code == 200, list_resp.text
+    match = next(j for j in list_resp.json() if j["id"] == job_id)
+    assert match["album"] is None
+    assert match["duration"] is None
+    assert match["gpu_instance_id"] is None
+    assert match["gpu_cost_micros"] is None
+    assert match["completed_at"] is None
+    datetime.fromisoformat(match["created_at"])
+
+
+def test_jobout_exposes_gpu_fields_after_mock_completion(client):
+    """The mock worker's GPU bookkeeping + completed_at surface in JobOut."""
+    create = client.post("/jobs", json={"url": "https://example.com/song"})
+    job_id = create.json()["id"]
+
+    deadline = time.monotonic() + 5.0
+    body: dict | None = None
+    while time.monotonic() < deadline:
+        body = client.get(f"/jobs/{job_id}/status").json()
+        if body["status"] == JobStatus.completed.value:
+            break
+        time.sleep(0.05)
+    assert body is not None and body["status"] == JobStatus.completed.value, body
+
+    assert body["gpu_instance_id"] is not None
+    assert body["gpu_instance_id"].startswith("mock-")
+    # The mock spends $0 — assert explicitly, 0 is falsy.
+    assert body["gpu_cost_micros"] is not None
+    assert body["gpu_cost_micros"] == 0
+    assert body["completed_at"] is not None
+    datetime.fromisoformat(body["created_at"])
+    datetime.fromisoformat(body["completed_at"])
+
+
+def test_share_payload_exposes_album_duration_but_no_private_keys(client):
+    """SharePayload gains album/duration only — never cost, identity, or timestamps."""
+    _, token = _seed_job_with_metadata(
+        artist="Queen",
+        track="Bohemian Rhapsody",
+        album="A Night at the Opera",
+        duration=355,
+        gpu_instance_id="runpod-xyz789",
+        gpu_cost_micros=99999,
+    )
+
+    share = client.get(f"/share/{token}", headers={"Accept": "application/json"})
+    assert share.status_code == 200, share.text
+    body = share.json()
+    assert body["album"] == "A Night at the Opera"
+    assert body["duration"] == 355
+    # The share token is an unlisted public link — cost/identity must not leak.
+    for private_key in (
+        "gpu_instance_id",
+        "gpu_cost_micros",
+        "owner_subject",
+        "created_at",
+    ):
+        assert private_key not in body
 
 
 def test_mock_worker_completes_job(client):

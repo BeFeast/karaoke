@@ -9,10 +9,10 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-from fastapi.staticfiles import StaticFiles
 
 from karaoke import __version__
 from karaoke.api.routes import router
+from karaoke.api.spa_static import SpaStaticFiles
 from karaoke.api.ws import get_hub, shutdown_hub, ws_router
 from karaoke.config import Settings, get_settings
 from karaoke.db.session import get_session_factory, init_engine, shutdown_engine
@@ -91,9 +91,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url="/app/")
 
     # Serve the built Submitter SPA at /app, but only when a build exists —
-    # dev/test runs without a `vite build` still boot cleanly.
+    # dev/test runs without a `vite build` still boot cleanly. SpaStaticFiles
+    # sets Cache-Control: no-cache on index.html (and other root files) and
+    # immutable on hashed assets/, so a release never leaves browsers with a
+    # stale index referencing old bundles (issue #122).
     spa = Path(settings.spa_dist_path)
     if spa.is_dir():
-        app.mount("/app", StaticFiles(directory=str(spa), html=True), name="spa")
+        app.mount("/app", SpaStaticFiles(directory=str(spa), html=True), name="spa")
 
     return app

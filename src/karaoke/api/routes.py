@@ -110,12 +110,20 @@ class JobOut(BaseModel):
     title: str | None
     artist: str | None
     track: str | None
+    album: str | None
+    duration: int | None
     status: JobStatus
     progress: int
     stage_note: str | None
     error: str | None
     share_url: str
     owner_subject: str
+    # GPU bookkeeping, runtime-neutral names — the ORM columns keep their
+    # legacy ``vast_*`` names but the RunPod path writes them too.
+    gpu_instance_id: str | None
+    gpu_cost_micros: int | None
+    created_at: dt.datetime
+    completed_at: dt.datetime | None
     artifacts: list[JobArtifactOut]
 
     @classmethod
@@ -128,12 +136,18 @@ class JobOut(BaseModel):
             title=job.title,
             artist=job.artist,
             track=job.track,
+            album=job.album,
+            duration=job.duration,
             status=job.status,
             progress=job.progress,
             stage_note=job.stage_note,
             error=job.error,
             share_url=share,
             owner_subject=job.owner_subject,
+            gpu_instance_id=job.vast_instance_id,
+            gpu_cost_micros=job.vast_cost_micros,
+            created_at=job.created_at,
+            completed_at=job.completed_at,
             artifacts=[
                 JobArtifactOut(
                     kind=a.kind,
@@ -162,6 +176,8 @@ class SharePayload(BaseModel):
     title: str | None
     artist: str | None
     track: str | None
+    album: str | None
+    duration: int | None
     status: JobStatus
     progress: int
     stage_note: str | None
@@ -683,6 +699,8 @@ async def share_page(
             title=job.title,
             artist=job.artist,
             track=job.track,
+            album=job.album,
+            duration=job.duration,
             status=job.status,
             progress=job.progress,
             stage_note=job.stage_note,
