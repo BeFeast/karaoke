@@ -14,3 +14,10 @@ updates:
           - "yt-dlp"
           - "yt-dlp-ejs"
           - "bgutil-ytdlp-pot-provider"
+      python-deps:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "yt-dlp"
+          - "yt-dlp-ejs"
+          - "bgutil-ytdlp-pot-provider"
