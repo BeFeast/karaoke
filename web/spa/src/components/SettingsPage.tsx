@@ -1,9 +1,41 @@
-// KARAOKE final — Settings: stage passes (extension tokens), pipeline defaults, about.
+// KARAOKE — Settings: stage passes + footer on #/settings (Marquee port, #157).
+// Literal port of design/claude-export/proto/settings.jsx (SettingsScreen
+// :78-146, SettingsSection :6-13, PassRow :15-35, footer :137-142); the topbar
+// is the booth shell's MarqueeTopBar (same composition as settings.jsx:82-88).
+// The DOM tree and inline styles are the design's; the adaptations wire real
+// data only: pass rows come from GET /tokens, "Mint pass" hits POST /tokens
+// and the reveal banner shows the real one-time mint response (the export's
+// fake ktx_ random generator, settings.jsx:70-77, is gone), Revoke is
+// DELETE /tokens/{id} behind ConfirmDialog, and the footer version comes from
+// GET /health. The export's design-fiction sections — "pipeline defaults"
+// (:119-128) and "sharing" (:130-135), plus their Select/SettingRow helpers —
+// have no backing product and are deleted, not stubbed.
 
-const K_VERSION = "v0.4.0";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
+import {
+  type ExtensionTokenMinted,
+  type ExtensionTokenOut,
+  getHealth,
+  listTokens,
+  mintToken,
+  revokeToken,
+} from "../api";
+import { formatRelativeTime } from "../lib/jobListUtils";
+import { goDashboard } from "../router";
+import { MarqueeTopBar } from "./Booth";
+import { ConfirmDialog, type ConfirmState } from "./ConfirmDialog";
+import { Toast } from "./Toast";
+
 const K_REPO = "https://github.com/BeFeast/karaoke";
 
-function SettingsSection({ title, children }) {
+// The server 403s a mint from an actor that may not mint (trusted-LAN,
+// extension-token callers) — translate that into a hint instead of dumping
+// the raw "403 Forbidden: {…}" string on the user.
+const MINT_FORBIDDEN_HINT =
+  "Minting requires Clerk sign-in or the machine bearer. " +
+  "Trusted-LAN callers can list and revoke passes but not mint them.";
+
+function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div style={{ marginTop: 26 }}>
       <div className="m-mono" style={{ fontSize: 10.5, letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 10 }}>{title}</div>
@@ -12,137 +44,206 @@ function SettingsSection({ title, children }) {
   );
 }
 
-function PassRow({ pass, onRevoke }) {
+function PassRow({ token, onRevoke }: { token: ExtensionTokenOut; onRevoke: (token: ExtensionTokenOut) => void }) {
+  const created = formatRelativeTime(token.created_at);
+  const used = formatRelativeTime(token.last_used_at);
   return (
     <div style={{ display: "flex", gap: 14, alignItems: "baseline", padding: "12px 2px", borderTop: "1px solid var(--border-soft)" }}>
-      <span className="m-mono" style={{ fontSize: 11.5, color: "var(--muted)", width: 22 }}>#{pass.n}</span>
+      <span className="m-mono" style={{ fontSize: 11.5, color: "var(--muted)", width: 22 }}>#{token.id}</span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 13.5, fontWeight: 600 }}>{pass.name}</span>
-          {pass.revoked && <span className="m-chip err" style={{ fontSize: 10 }}>revoked</span>}
+          <span style={{ fontSize: 13.5, fontWeight: 600 }}>{token.label?.trim() || "(no label)"}</span>
+          {token.disabled && <span className="m-chip err" style={{ fontSize: 10 }}>revoked</span>}
         </div>
         <div className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 3, display: "flex", gap: 14, flexWrap: "wrap" }}>
-          <span>created {pass.created}</span>
-          <span>last used {pass.used}</span>
-          <span>{pass.scope}</span>
+          <span title={token.created_at}>created {created ?? "—"}</span>
+          <span title={token.last_used_at ?? undefined}>last used {used ?? "never"}</span>
+          <span title={token.owner_subject} style={{ maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{token.owner_subject}</span>
         </div>
       </div>
-      {!pass.revoked && (
-        <button className="m-btn sm ghost" type="button" onClick={() => onRevoke(pass.n)} style={{ color: "var(--err)" }}>Revoke</button>
+      {!token.disabled && (
+        <button className="m-btn sm ghost" type="button" onClick={() => onRevoke(token)} style={{ color: "var(--err)" }}>Revoke</button>
       )}
     </div>
   );
 }
 
-function Select({ value, options }) {
+// Loading placeholder shaped like the pass rows (booth skeleton idiom).
+function PassesSkeleton() {
   return (
-    <select defaultValue={value} style={{
-      appearance: "none", padding: "7px 28px 7px 11px", border: "1px solid var(--border)", borderRadius: 7,
-      background: "var(--bg-card)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", cursor: "pointer",
-      backgroundImage: "linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%)",
-      backgroundPosition: "calc(100% - 14px) 55%, calc(100% - 9px) 55%", backgroundSize: "5px 5px", backgroundRepeat: "no-repeat",
-    }}>
-      {options.map((o) => <option key={o} value={o}>{o}</option>)}
-    </select>
-  );
-}
-
-function SettingRow({ label, help, control }) {
-  return (
-    <div style={{ display: "flex", gap: 16, alignItems: "center", padding: "11px 2px", borderTop: "1px solid var(--border-soft)" }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>{label}</div>
-        {help && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2, lineHeight: 1.45 }}>{help}</div>}
-      </div>
-      {control}
+    <div style={{ marginTop: 6 }} aria-hidden>
+      {[0, 1].map((i) => (
+        <div key={i} style={{ display: "flex", gap: 14, alignItems: "baseline", padding: "12px 2px", borderTop: "1px solid var(--border-soft)" }}>
+          <div style={{ width: 22, height: 9, borderRadius: "var(--radius-sm)", background: "var(--bg-soft)" }}></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ height: 10, width: "40%", borderRadius: "var(--radius-sm)", background: "var(--bg-soft)" }}></div>
+            <div style={{ height: 8, width: "65%", marginTop: 7, borderRadius: "var(--radius-sm)", background: "var(--bg-soft)" }}></div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
 
-function SettingsScreen({ onBack, onSignOut, vars = {} }) {
-  const [passes, setPasses] = React.useState([
-    { n: 3, name: "desk-session-10", created: "2 h ago", used: "1 h ago", scope: "karaoke:operator-extension" },
-    { n: 2, name: "operator desktop Chrome extension", created: "Jun 1", used: "23 h ago", scope: "karaoke:operator-extension" },
-    { n: 1, name: "prisma launchd cookie-sync (#10)", created: "Jun 1", used: "5 h ago", scope: "karaoke:cookie-rotation-cron", revoked: true },
-  ]);
-  const [mintName, setMintName] = React.useState("");
-  const [fresh, setFresh] = React.useState(null);
-  const mint = () => {
-    if (!mintName.trim()) return;
-    const n = Math.max(...passes.map((p) => p.n)) + 1;
-    setPasses([{ n, name: mintName.trim(), created: "just now", used: "never", scope: "karaoke:operator-extension" }, ...passes]);
-    setFresh("ktx_" + Math.random().toString(36).slice(2, 12));
-    setMintName("");
-  };
-  const revoke = (n) => setPasses((ps) => ps.map((p) => p.n === n ? { ...p, revoked: true } : p));
-  const active = passes.filter((p) => !p.revoked).length;
+export function SettingsPage({ authControl }: { authControl?: ReactNode }) {
+  const [tokens, setTokens] = useState<ExtensionTokenOut[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [mintName, setMintName] = useState("");
+  const [minting, setMinting] = useState(false);
+  const [mintError, setMintError] = useState<string | null>(null);
+  const [fresh, setFresh] = useState<ExtensionTokenMinted | null>(null);
+  const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [version, setVersion] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setTokens(await listTokens());
+      setListError(null);
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  // Deploy-truth version for the footer (GET /health) — never hardcoded.
+  useEffect(() => {
+    getHealth()
+      .then((h) => setVersion(h.version))
+      .catch(() => setVersion(null));
+  }, []);
+
+  const mint = useCallback(async () => {
+    const name = mintName.trim();
+    if (!name || minting) return;
+    setMinting(true);
+    setMintError(null);
+    try {
+      setFresh(await mintToken(name));
+      setMintName("");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setMintError(/^403\b/.test(msg) ? MINT_FORBIDDEN_HINT : msg);
+    } finally {
+      setMinting(false);
+      await refresh();
+    }
+  }, [mintName, minting, refresh]);
+
+  // One-time reveal: the banner's single button copies, then dismisses — after
+  // this render the raw value is gone for good (only a hash is stored).
+  const copyFresh = useCallback(async () => {
+    if (!fresh) return;
+    try {
+      await navigator.clipboard.writeText(fresh.token);
+      setToast("Pass copied");
+    } catch {
+      // Clipboard API blocked (http LAN origin / permissions) — fall back.
+      window.prompt("Copy this pass:", fresh.token);
+    }
+    setFresh(null);
+  }, [fresh]);
+
+  const onRevoke = useCallback(
+    (token: ExtensionTokenOut) => {
+      setConfirmState({
+        title: "Revoke pass",
+        message: `Revoke pass #${token.id} (${token.label?.trim() || "no label"})? Anything still using it will stop working.`,
+        confirmLabel: "Revoke",
+        danger: true,
+        onConfirm: () => {
+          setActionError(null);
+          void (async () => {
+            try {
+              await revokeToken(token.id);
+            } catch (err) {
+              setActionError(err instanceof Error ? err.message : String(err));
+            } finally {
+              await refresh();
+            }
+          })();
+        },
+      });
+    },
+    [refresh],
+  );
+
+  const active = tokens.filter((t) => !t.disabled).length;
 
   return (
-    <div className="m-booth" style={{ minHeight: "100%", display: "flex", flexDirection: "column", ...vars }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "0 24px", height: 56, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-        <MicMark size={24} />
-        <span style={{ fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 17, letterSpacing: "-0.01em" }}>Karaoke</span>
-        <span style={{ flex: 1 }}></span>
-        <span className="m-chip" style={{ textTransform: "uppercase", letterSpacing: "0.05em", fontSize: 10 }}>trusted lan</span>
-        <UserAvatar onSignOut={onSignOut} />
-      </div>
+    <div style={{ height: "100%", overflow: "auto" }}>
+      <div className="m-booth" style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}>
+        <MarqueeTopBar authControl={authControl} />
 
-      <div style={{ flex: 1, padding: "24px 24px 20px", maxWidth: 720, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column" }}>
-        <button className="m-btn sm ghost" type="button" onClick={onBack} style={{ alignSelf: "flex-start", marginLeft: -9 }}>← back to the booth</button>
-        <h1 style={{ margin: "10px 0 2px", fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 26, letterSpacing: "-0.015em" }}>Settings</h1>
-        <div className="m-mono" style={{ fontSize: 11.5, color: "var(--muted)" }}>{active} active stage passes</div>
+        <div style={{ flex: 1, padding: "24px 24px 20px", maxWidth: 720, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column" }}>
+          <button className="m-btn sm ghost" type="button" onClick={goDashboard} style={{ alignSelf: "flex-start", marginLeft: -9 }}>← back to the booth</button>
+          <h1 style={{ margin: "10px 0 2px", fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 26, letterSpacing: "-0.015em" }}>Settings</h1>
+          <div className="m-mono" style={{ fontSize: 11.5, color: "var(--muted)" }}>{active} active stage pass{active === 1 ? "" : "es"}</div>
 
-        <SettingsSection title="stage passes — extension tokens">
-          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)", padding: 14 }}>
-            <div style={{ display: "flex", gap: 10 }}>
-              <input value={mintName} onChange={(e) => setMintName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && mint()}
-                placeholder="Name this pass — e.g. Chrome on the desk machine"
-                style={{ flex: 1, padding: "9px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--bg)", color: "var(--fg)", fontSize: 13, fontFamily: "var(--font-ui)", outline: "none" }}></input>
-              <button className="m-btn primary" type="button" onClick={mint}>Mint pass</button>
+          <SettingsSection title="stage passes — extension tokens">
+            <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)", padding: 14 }}>
+              <div style={{ display: "flex", gap: 10 }}>
+                <input value={mintName} onChange={(e) => setMintName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") void mint(); }}
+                  placeholder="Name this pass — e.g. Chrome on the desk machine"
+                  maxLength={255} disabled={minting} aria-label="Pass name"
+                  style={{ flex: 1, minWidth: 0, padding: "9px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--bg)", color: "var(--fg)", fontSize: 13, fontFamily: "var(--font-ui)", outline: "none" }}></input>
+                <button className="m-btn primary" type="button" onClick={() => void mint()} disabled={minting || !mintName.trim()}>{minting ? "Minting…" : "Mint pass"}</button>
+              </div>
+              {fresh && (
+                <div className="m-mono" role="status" style={{ marginTop: 10, padding: "8px 11px", borderRadius: 7, background: "var(--accent-soft)", color: "var(--accent)", fontSize: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 700, minWidth: 0, overflowWrap: "anywhere" }}>{fresh.token}</span>
+                  <span style={{ color: "var(--fg-soft)" }}>— copy it now; it's shown exactly once</span>
+                  <button className="m-btn sm" type="button" style={{ marginLeft: "auto" }} onClick={() => void copyFresh()}>⧉ Copy</button>
+                </div>
+              )}
+              {mintError && (
+                <div className="m-mono" style={{ marginTop: 8, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>{mintError}</div>
+              )}
+              <div className="m-mono" style={{ marginTop: 9, fontSize: 10.5, color: "var(--muted)", lineHeight: 1.5 }}>
+                ktx_ passes let the Chrome extension submit jobs as you. Raw value appears once, right after minting.
+              </div>
             </div>
-            {fresh && (
-              <div className="m-mono" style={{ marginTop: 10, padding: "8px 11px", borderRadius: 7, background: "var(--accent-soft)", color: "var(--accent)", fontSize: 12, display: "flex", gap: 10, alignItems: "center" }}>
-                <span style={{ fontWeight: 700 }}>{fresh}</span>
-                <span style={{ color: "var(--fg-soft)" }}>— copy it now; it's shown exactly once</span>
-                <button className="m-btn sm" type="button" style={{ marginLeft: "auto" }} onClick={() => setFresh(null)}>⧉ Copied</button>
+            {listError && (
+              <div className="m-mono" style={{ marginTop: 10, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>
+                Couldn’t load passes: {listError}{" "}
+                <button className="m-btn sm ghost" type="button" onClick={() => void refresh()}>↻ Retry</button>
               </div>
             )}
-            <div className="m-mono" style={{ marginTop: 9, fontSize: 10.5, color: "var(--muted)", lineHeight: 1.5 }}>
-              ktx_ passes let the Chrome extension submit jobs as you. Raw value appears once, right after minting.
-            </div>
+            {actionError && (
+              <div className="m-mono" style={{ marginTop: 10, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>Revoke failed: {actionError}</div>
+            )}
+            {!loaded ? (
+              <PassesSkeleton />
+            ) : tokens.length === 0 && !listError ? (
+              <div className="m-mono" style={{ marginTop: 6, padding: "16px 2px", borderTop: "1px solid var(--border-soft)", fontSize: 11.5, color: "var(--muted)" }}>
+                No passes yet — mint one above and paste it into the extension's options page.
+              </div>
+            ) : (
+              <div style={{ marginTop: 6 }}>
+                {tokens.map((t) => <PassRow key={t.id} token={t} onRevoke={onRevoke}></PassRow>)}
+              </div>
+            )}
+          </SettingsSection>
+
+          <div className="m-mono" style={{ marginTop: "auto", paddingTop: 26, display: "flex", gap: 16, fontSize: 11, color: "var(--muted)", borderTop: "1px dashed var(--border-soft)", alignItems: "center", flexWrap: "wrap" }}>
+            {version && <span>karaoke v{version}</span>}
+            <a href={K_REPO} target="_blank" rel="noopener" style={{ color: "var(--info)", textDecoration: "none" }}>github.com/BeFeast/karaoke ↗</a>
+            <span>open source · MIT</span>
+            <span style={{ marginLeft: "auto" }}>self-hosted · your music never leaves your boxes</span>
           </div>
-          <div style={{ marginTop: 6 }}>
-            {passes.map((p) => <PassRow key={p.n} pass={p} onRevoke={revoke}></PassRow>)}
-          </div>
-        </SettingsSection>
-
-        <SettingsSection title="pipeline defaults">
-          <SettingRow label="Cost cap per job" help="A job that would exceed this is cancelled and the instance destroyed."
-            control={<Select value="$0.80" options={["$0.40", "$0.80", "$1.50", "no cap"]} />} />
-          <SettingRow label="Daily spend cap" help="Hard ceiling across all jobs; submits queue until tomorrow once hit."
-            control={<Select value="$6.00" options={["$3.00", "$6.00", "$12.00"]} />} />
-          <SettingRow label="Separation model" help="htdemucs_ft is slower but noticeably cleaner on vocals."
-            control={<Select value="htdemucs_ft" options={["htdemucs", "htdemucs_ft"]} />} />
-          <SettingRow label="Lyrics model" help="large-v3 for accuracy; medium roughly halves GPU time."
-            control={<Select value="large-v3" options={["medium", "large-v3"]} />} />
-        </SettingsSection>
-
-        <SettingsSection title="sharing">
-          <SettingRow label="Share links" help="Anyone with the link can play and download — no account needed."
-            control={<Select value="unlisted" options={["unlisted", "signed-in only"]} />} />
-          <SettingRow label="Link lifetime" help="Old party links quietly expire."
-            control={<Select value="30 days" options={["7 days", "30 days", "forever"]} />} />
-        </SettingsSection>
-
-        <div className="m-mono" style={{ marginTop: "auto", paddingTop: 26, display: "flex", gap: 16, fontSize: 11, color: "var(--muted)", borderTop: "1px dashed var(--border-soft)", alignItems: "center", flexWrap: "wrap" }}>
-          <span>karaoke {K_VERSION}</span>
-          <a href={K_REPO} target="_blank" rel="noopener" style={{ color: "var(--info)", textDecoration: "none" }}>github.com/BeFeast/karaoke ↗</a>
-          <span>open source · MIT</span>
-          <span style={{ marginLeft: "auto" }}>self-hosted · your music never leaves your boxes</span>
         </div>
+
+        <ConfirmDialog state={confirmState} onClose={() => setConfirmState(null)} />
+        <Toast message={toast} onDone={() => setToast(null)} />
       </div>
     </div>
   );
 }
-
-Object.assign(window, { SettingsScreen, K_VERSION, K_REPO });
