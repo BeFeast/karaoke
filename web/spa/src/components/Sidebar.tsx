@@ -1,5 +1,6 @@
 import type { JobOut } from "../api";
 import { statusMeta } from "../jobStatus";
+import { settingsHash } from "../router";
 
 export type JobFilter = "all" | "active" | "completed" | "failed";
 
@@ -73,6 +74,12 @@ export function Sidebar({
           success<span className="stat-val">{successRate === null ? "—" : `${successRate}%`}</span>
         </div>
       </div>
+
+      <div className="nav-section">Account</div>
+      <a className="nav-item" href={settingsHash()}>
+        <span className="dot" aria-hidden />
+        Settings
+      </a>
     </aside>
   );
 }

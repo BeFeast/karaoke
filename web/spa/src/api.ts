@@ -81,6 +81,25 @@ export interface SharePayload {
   artifacts: ArtifactOut[];
 }
 
+// Mint response (server `ExtensionTokenMinted` in src/karaoke/api/tokens.py) —
+// the only place the raw `ktx_…` value ever appears. Show it once, never store it.
+export interface ExtensionTokenMinted {
+  id: number;
+  token: string;
+  label: string;
+  created_at: string;
+}
+
+// Owner-visible token row (server `ExtensionTokenOut`) — never the raw value.
+export interface ExtensionTokenOut {
+  id: number;
+  label: string | null;
+  disabled: boolean;
+  created_at: string;
+  last_used_at: string | null;
+  owner_subject: string;
+}
+
 export interface CreateJobInput {
   url: string;
   title?: string;
@@ -173,6 +192,37 @@ export function clearFailedJobs(): Promise<{ deleted: number }> {
     method: "POST",
     headers: { Accept: "application/json" },
   });
+}
+
+// Mint a fresh ktx_ extension token. The server 403s for callers that may not
+// mint (trusted-LAN, extension-token actors) — surface that readably upstream.
+export function mintToken(label?: string): Promise<ExtensionTokenMinted> {
+  const trimmed = label?.trim();
+  return request<ExtensionTokenMinted>("/tokens", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(trimmed ? { label: trimmed } : {}),
+  });
+}
+
+// List the caller's extension tokens (admin callers — trusted-LAN / machine
+// bearer — see every row), newest first.
+export function listTokens(): Promise<ExtensionTokenOut[]> {
+  return request<ExtensionTokenOut[]>("/tokens", {
+    headers: { Accept: "application/json" },
+  });
+}
+
+// Soft-revoke an extension token (204, no body).
+export async function revokeToken(id: number): Promise<void> {
+  const resp = await fetch(`/tokens/${id}`, {
+    method: "DELETE",
+    headers: { ...(await authHeaders()) },
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`${resp.status} ${resp.statusText}: ${text}`.trim());
+  }
 }
 
 // Fetch a single job's share payload. Same endpoint as the server-rendered
