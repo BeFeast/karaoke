@@ -97,6 +97,28 @@ for the Dockhand-managed stack.
   `pyproject.toml`, tags, releases, and deploys via the script. Until then,
   releases are cut manually with `scripts/release-deploy.sh`.
 
+## Provisioning Status
+
+- **TrueNAS artifacts path:** live at `/mnt/Odin/lxc-shared/karaoke` on Odin,
+  exported under `/mnt/Odin/lxc-shared` to `10.10.0.0/24`; `devbox`
+  (`10.10.0.13`) reaches it through Docker's local NFS volume driver.
+- **Docker volume:** `karaoke_artifacts` on `devbox`, mounted at
+  `/var/lib/docker/volumes/karaoke_artifacts/_data` with:
+
+  ```yaml
+  driver: local
+  driver_opts:
+    type: nfs
+    o: addr=10.10.0.15,nfsvers=4
+    device: :/mnt/Odin/lxc-shared/karaoke
+  ```
+
+- **Permissions:** the mounted artifacts directory reports `1000:1000` and
+  `0775` from a throwaway container. The current `karaoke:current` app
+  container runs as `uid=0,gid=0`; a throwaway `busybox` probe wrote
+  `/artifacts/.probe` as `0:0` with `0644`, read it back, and removed it.
+  Keep future worker UID/GID changes aligned with this NFS mapping.
+
 ## More context
 
 - Full PRD, architecture diagram, surfaces table, and provisioning status:
