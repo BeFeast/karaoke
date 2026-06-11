@@ -101,5 +101,7 @@ jobs:
         run: bun run typecheck
       - name: Test
         run: bun run test
+      - name: Design guards
+        run: bun run guards
       - name: Build
         run: bun run build

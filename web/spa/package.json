@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src"
+    "test": "bun test src",
+    "guards": "bash scripts/check-design-guards.sh"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.51.0",
