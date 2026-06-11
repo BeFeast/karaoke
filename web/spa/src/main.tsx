@@ -3,9 +3,9 @@ import { createRoot } from "react-dom/client";
 import { ClerkProvider, SignedIn, SignedOut, useAuth, useClerk, useUser } from "@clerk/clerk-react";
 import { App } from "./App";
 import { getConfig, type RuntimeConfig, setTokenGetter } from "./api";
-import { ItemPage } from "./components/ItemPage";
 import { MicMark } from "./components/marks";
 import { SettingsPage } from "./components/SettingsPage";
+import { Stage } from "./components/Stage";
 import { SignInScreen, UserAvatar } from "./components/SignInWall";
 import { navigate, settingsHash, useRoute } from "./router";
 // Self-hosted Marquee webfonts (#152) — latin subsets only, no external
@@ -26,14 +26,15 @@ import "@fontsource/bricolage-grotesque/latin-700.css";
 import "@fontsource/bungee/latin-400.css";
 import "./styles.css";
 
-// Routes between the dashboard (App), the item page (/app/#/job/:token) and
+// Routes between the dashboard (App), the stage room (/app/#/job/:token) and
 // the settings page (/app/#/settings). All are rendered inside the auth
 // context so owner-scoped reads carry the Clerk bearer when signed in; on the
-// LAN they work without auth too.
+// LAN they work without auth too. The stage room takes no auth chrome — its
+// header is the design's share-page bar (#154).
 function Routed({ config, authControl }: { config: RuntimeConfig; authControl?: React.ReactNode }) {
   const route = useRoute();
   if (route.name === "item") {
-    return <ItemPage token={route.token} authControl={authControl} />;
+    return <Stage token={route.token} />;
   }
   if (route.name === "settings") {
     return <SettingsPage authControl={authControl} />;
@@ -90,16 +91,33 @@ function SignInGate() {
   return <SignInScreen onSignIn={() => void clerk.openSignIn()} />;
 }
 
-function ClerkShell({ config }: { config: RuntimeConfig }) {
+// Clerk routing: the stage room (#/job/:token) renders WITHOUT the sign-in
+// wall — possession of the unlisted token authorises the share read
+// server-side, so anonymous visitors must reach it (#154). Owners who are
+// signed in still carry the Clerk bearer via ClerkTokenBridge. Every other
+// route keeps the SignedOut → sign-in wall gate.
+function ClerkRouted({ config }: { config: RuntimeConfig }) {
+  const route = useRoute();
+  if (route.name === "item") {
+    return <Stage token={route.token} />;
+  }
   return (
-    <ClerkProvider publishableKey={config.clerk_publishable_key}>
-      <ClerkTokenBridge />
+    <>
       <SignedOut>
         <SignInGate />
       </SignedOut>
       <SignedIn>
         <Routed config={config} authControl={<ClerkAvatar />} />
       </SignedIn>
+    </>
+  );
+}
+
+function ClerkShell({ config }: { config: RuntimeConfig }) {
+  return (
+    <ClerkProvider publishableKey={config.clerk_publishable_key}>
+      <ClerkTokenBridge />
+      <ClerkRouted config={config} />
     </ClerkProvider>
   );
 }

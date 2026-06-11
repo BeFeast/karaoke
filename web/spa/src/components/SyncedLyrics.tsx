@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { getLyrics } from "../api";
+import { useEffect, useMemo, useRef } from "react";
 
 // ─── LRC parsing ────────────────────────────────────────────────────────────
 //
@@ -88,12 +87,18 @@ export function activeLineIndex(lines: LyricLine[], t: number): number {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export interface SyncedLyricsProps {
-  /** Share token (same-origin artifact base `/share/{token}/...`). */
-  token: string;
-  /** Live playhead in seconds; drives the active-line highlight. */
-  currentTime: number;
+  /** Raw LRC body from the structured lyrics payload, or null when unsynced. */
+  lrc: string | null;
+  /**
+   * Lyrics provenance from the structured payload (`lrclib_synced`,
+   * `whisper_asr_synced`, …) — drives the derived badge so approximate ASR
+   * timing isn't labelled as LRCLIB (#145).
+   */
+  source: string | null;
   /** Plain-text lyrics, used for the fallback scroll box when no LRC exists. */
   plainLyrics: string | null;
+  /** Live playhead in seconds; drives the active-line highlight. */
+  currentTime: number;
   /** Seek the player to `time` seconds (click-to-seek). */
   onSeek: (time: number) => void;
   /** Skip the smooth-scroll work for reduced-motion users. */
@@ -101,44 +106,13 @@ export interface SyncedLyricsProps {
 }
 
 export function SyncedLyrics({
-  token,
-  currentTime,
+  lrc,
+  source,
   plainLyrics,
+  currentTime,
   onSeek,
   reducedMotion = false,
 }: SyncedLyricsProps) {
-  // null = not resolved yet; "" or a body once the fetch settles. We track a
-  // separate `resolved` flag so a miss (→ null) doesn't look like "loading".
-  // `source` is the lyrics provenance from the structured payload — it drives
-  // the badge so approximate ASR timing isn't labelled as LRCLIB (#145).
-  const [lrc, setLrc] = useState<string | null>(null);
-  const [source, setSource] = useState<string | null>(null);
-  const [resolved, setResolved] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    setResolved(false);
-    setLrc(null);
-    setSource(null);
-    getLyrics(token)
-      .then((payload) => {
-        if (cancelled) return;
-        const body = payload?.lrc;
-        setLrc(body && body.trim() ? body : null);
-        setSource(payload?.source ?? null);
-        setResolved(true);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setLrc(null);
-        setSource(null);
-        setResolved(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
-
   // Parse once per LRC body (not per frame).
   const lines = useMemo(() => (lrc ? parseLrc(lrc) : []), [lrc]);
   const hasSynced = lines.length > 0;
@@ -175,10 +149,9 @@ export function SyncedLyrics({
   if (hasSynced) {
     return (
       <div className="synced-lyrics" data-synced="true">
-        <div className="synced-lyrics-prov">
-          <span className="synced-lyrics-badge">synced</span>
-          <span className="synced-lyrics-src">{sourceLabel(source)} · click a line to seek</span>
-        </div>
+        {/* design's stage lyrics header (sections/stage.jsx:114) — the
+            provenance segment stays DERIVED from the payload, never hardcoded */}
+        <div className="synced-lyrics-prov">lyrics · synced · {sourceLabel(source)} · click to seek</div>
         <ol
           className="synced-lyrics-list"
           ref={listRef}
@@ -190,7 +163,7 @@ export function SyncedLyrics({
               ref={(el) => {
                 lineRefs.current[i] = el;
               }}
-              className={`synced-lyrics-line${i === active ? " is-active" : ""}`}
+              className={`synced-lyrics-line${i === active ? " is-active" : i < active ? " is-sung" : ""}`}
               aria-current={i === active ? "true" : undefined}
             >
               <button
@@ -209,16 +182,12 @@ export function SyncedLyrics({
   }
 
   // ── Plain fallback ─────────────────────────────────────────────────────────
-  // Until the LRC fetch resolves, show the plain box if we already have it so
-  // the panel never flashes empty; once resolved with no synced lyrics we keep
-  // the plain box. `resolved` is referenced so the intent is explicit.
-  void resolved;
   if (plainLyrics) {
     return <pre className="lyrics-text">{plainLyrics}</pre>;
   }
   return (
-    <div className="empty">
-      <div>No lyrics available for this job.</div>
+    <div style={{ textAlign: "center", padding: "32px 20px", color: "var(--muted)", fontSize: 12.5 }}>
+      No lyrics available for this job.
     </div>
   );
 }

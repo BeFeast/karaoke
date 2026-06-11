@@ -1,119 +1,295 @@
-// KARAOKE prototype — the Stage: Console player (P1) with Setlist (P3) view toggle.
+// KARAOKE — the Stage: per-song player room on #/job/:token (Marquee port,
+// #154). Literal port of design/claude-export/proto/stage.jsx StageScreen
+// (:91-161) — TransportBar/ConsoleModule/SetlistModule live in
+// player/KaraokePlayer.tsx around the untouched engine API. The DOM tree and
+// inline styles are the design's; the adaptations wire real data only:
+// SharePayload (incl. the new completed_at/source_url), the structured lyrics
+// payload, real artifact downloads, and the room-scoped ◐ day/night theme
+// (booth rooms stay always light). Recorded deviations: cost + receipt are
+// OMITTED on this page (not in SharePayload — anonymous share viewers must
+// not see cost); the ⤢ Performance control ships with the Performance-mode
+// issue (no dead button).
 
-function TransportBar({ pb, onFullscreen }) {
-  const { pos, setPos, playing, setPlaying, loop, cycleLoop } = pb;
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-      <button className="m-btn primary" type="button" onClick={() => setPlaying(!playing)}
-        style={{ width: 40, height: 40, borderRadius: "50%", justifyContent: "center", fontSize: 14 }}>
-        {playing ? "❚❚" : "▶"}
-      </button>
-      <button className="m-btn sm" type="button" onClick={() => setPos(pos - 5)}>−5s</button>
-      <button className="m-btn sm" type="button" onClick={() => setPos(pos + 5)}>+5s</button>
-      <span className="m-mono" style={{ fontSize: 12, color: "var(--fg-soft)", minWidth: 76 }}>{fmtTime(pos)} / {fmtTime(SONG.duration)}</span>
-      <span style={{ flex: 1 }}></span>
-      <button className="m-btn sm" type="button" onClick={cycleLoop}
-        style={loop ? { borderColor: "var(--accent)", color: "var(--accent)" } : null}>
-        ⟲ {!loop ? "A–B" : loop.b == null ? "A set… (B?)" : `${fmtTime(loop.a)}–${fmtTime(loop.b)}`}
-      </button>
-      <button className="m-btn sm primary" type="button" onClick={onFullscreen}
-        style={{ background: "transparent", color: "var(--accent)", borderColor: "var(--accent)" }}>⤢ Performance</button>
-    </div>
-  );
+import { type CSSProperties, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getLyrics, getShare, type LyricsPayload, type SharePayload } from "../api";
+import { artifactHref, artifactView, statusMeta } from "../jobStatus";
+import { fmtDuration, formatRelativeTime } from "../lib/jobListUtils";
+import { goDashboard, itemUrl } from "../router";
+import { type StageTheme, useStageTheme } from "../theme";
+import { MBulbs, MicMark } from "./marks";
+import { timeLines } from "./stage-core";
+import { parseLrc, SyncedLyrics } from "./SyncedLyrics";
+import { Toast } from "./Toast";
+
+// Lazy so wavesurfer.js (+ its WebAudio engine) only loads on the stage route,
+// keeping the booth bundle lean.
+const KaraokePlayer = lazy(() => import("../player/KaraokePlayer"));
+
+const POLL_MS = 3000;
+
+// View toggle console|setlist — persisted; console default (FINAL.defaultView).
+type StageView = "console" | "setlist";
+const VIEW_KEY = "karaoke-stage-view";
+
+function initialView(): StageView {
+  try {
+    if (localStorage.getItem(VIEW_KEY) === "setlist") return "setlist";
+  } catch {
+    /* localStorage unavailable — fall through to the default */
+  }
+  return "console";
 }
 
-// P1 — console module: faders + DUCK
-function ConsoleModule({ mix, setMix, ducked, setDucked }) {
-  React.useEffect(() => {
-    const dn = (e) => { if (e.key.toLowerCase() === "v" && !e.repeat) setDucked(true); };
-    const up = (e) => { if (e.key.toLowerCase() === "v") setDucked(false); };
-    window.addEventListener("keydown", dn);
-    window.addEventListener("keyup", up);
-    return () => { window.removeEventListener("keydown", dn); window.removeEventListener("keyup", up); };
-  }, [setDucked]);
-  return (
-    <div style={{ display: "flex", gap: 14, padding: "12px 16px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", alignItems: "center" }}>
-      <ProtoFader label="VOX" color="var(--vox)" value={mix.vox} ducked={ducked} onChange={(v) => setMix((m) => ({ ...m, vox: v }))} />
-      <ProtoFader label="INST" color="var(--inst)" value={mix.inst} onChange={(v) => setMix((m) => ({ ...m, inst: v }))} />
-      <div style={{ display: "grid", gap: 8 }}>
-        <button className="m-btn sm" type="button"
-          onPointerDown={() => setDucked(true)} onPointerUp={() => setDucked(false)} onPointerLeave={() => setDucked(false)}
-          style={{ borderColor: "var(--vox)", color: ducked ? "var(--accent-fg)" : "var(--vox)", background: ducked ? "var(--vox)" : "transparent", fontWeight: 700, justifyContent: "center" }}>DROP</button>
-        <span className="m-mono" style={{ fontSize: 9, color: "var(--muted)", textAlign: "center", lineHeight: 1.4 }}>hold to drop vocals<br></br>while you sing · or "V"</span>
-      </div>
-    </div>
-  );
-}
+export function Stage({ token }: { token: string }) {
+  const [payload, setPayload] = useState<SharePayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [lyrics, setLyrics] = useState<LyricsPayload | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [view, setViewRaw] = useState<StageView>(initialView);
+  const [theme, toggleTheme] = useStageTheme();
+  const timer = useRef<number | null>(null);
 
-// P3 — setlist module: marquee sign + spotlight dimmer
-function SetlistModule({ pb, mix, setMix, glow }) {
-  const ls = lyricState(SONG.lines, pb.pos);
-  const gapBulbs = ls.inGap && ls.next ? Math.min(8, Math.ceil(ls.gap)) : 0;
-  const dimmerDrag = (e) => {
-    const rail = e.currentTarget;
-    const move = (ev) => {
-      const r = rail.getBoundingClientRect();
-      const pct = 100 - ((ev.clientY - r.top) / r.height) * 100;
-      setMix((m) => ({ ...m, vox: Math.round(Math.max(0, Math.min(100, pct))) }));
+  const setView = useCallback((v: StageView) => {
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* ignore persistence failure */
+    }
+    setViewRaw(v);
+  }, []);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await getShare(token);
+      setPayload(data);
+      setError(null);
+      setNotFound(false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // The endpoint 404s for unknown/unauthorised tokens.
+      if (/^404\b/.test(msg)) setNotFound(true);
+      else setError(msg);
+    } finally {
+      setLoaded(true);
+    }
+  }, [token]);
+
+  // Initial load + poll while the job is still in-flight.
+  useEffect(() => {
+    setLoaded(false);
+    setPayload(null);
+    setNotFound(false);
+    setError(null);
+    setLyrics(null);
+    void load();
+  }, [load]);
+
+  const active = payload ? statusMeta(payload.status).active : false;
+  useEffect(() => {
+    if (!active) {
+      if (timer.current !== null) {
+        window.clearInterval(timer.current);
+        timer.current = null;
+      }
+      return;
+    }
+    timer.current = window.setInterval(() => void load(), POLL_MS);
+    return () => {
+      if (timer.current !== null) {
+        window.clearInterval(timer.current);
+        timer.current = null;
+      }
     };
-    move(e);
-    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
-  return (
-    <div style={{ display: "flex", gap: 16, alignItems: "stretch" }}>
-      <div className="m-sign" style={{ flex: 1, padding: "16px 22px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 9, textAlign: "center", boxShadow: glow ? undefined : "none" }}>
-        <div style={{ fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 500, color: "var(--lyric-prev)", minHeight: 18 }}>{ls.prev ? ls.prev.text : "—"}</div>
-        <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, lineHeight: 1.25, minHeight: 28 }}>
-          {ls.cur
-            ? <MWipe text={ls.cur.text} pct={ls.sung} size={22} family="var(--font-display)" weight={700} fill="var(--accent)" dim="var(--lyric-dim)" />
-            : <span style={{ color: "var(--lyric-dim)" }}>{ls.next ? "get ready…" : "intro"}</span>}
-        </div>
-        <div style={{ fontFamily: "var(--font-display)", fontSize: 15, fontWeight: 540, color: "var(--lyric-next)", minHeight: 19 }}>{ls.next ? ls.next.text : "— end —"}</div>
-        <div style={{ display: "flex", justifyContent: "center", marginTop: 2, minHeight: 8 }}>
-          {gapBulbs > 0 ? <MBulbs n={8} lit={gapBulbs} /> : <span></span>}
+  }, [active, load]);
+
+  // Structured lyrics (LRC + plain + provenance) once the job is complete.
+  useEffect(() => {
+    if (payload?.status === "completed") {
+      getLyrics(token)
+        .then(setLyrics)
+        .catch(() => setLyrics(null));
+    }
+  }, [payload?.status, token]);
+
+  // Same-origin copy path — the public base 401s on the LAN (#131).
+  const onCopyLink = useCallback(async () => {
+    const url = itemUrl(token);
+    try {
+      await navigator.clipboard.writeText(url);
+      setToast("Link copied");
+    } catch {
+      // Clipboard API blocked (insecure context / permissions) — fall back.
+      window.prompt("Copy this link:", url);
+    }
+  }, [token]);
+
+  // ── Player ↔ lyrics transport seam (#59) ─────────────────────────────────
+  // `onTime` pushes the live playhead into state that only feeds the lyrics
+  // highlight (the player owns its own clock, so this doesn't drive playback).
+  // `seekRef` is the player's imperative seek, shared so a lyrics-line click
+  // can drive the transport. Both are stable across renders.
+  const [currentTime, setCurrentTime] = useState(0);
+  const seekRef = useRef<((time: number) => void) | null>(null);
+  const onTime = useCallback((t: number) => {
+    // Quantise to ~10 fps so timeupdate frames don't trigger a re-render storm;
+    // the active-line lookup is far coarser than that anyway.
+    setCurrentTime((prev) => (Math.abs(prev - t) < 0.1 ? prev : t));
+  }, []);
+  const onSeek = useCallback((time: number) => {
+    seekRef.current?.(time);
+  }, []);
+  const reducedMotion = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
+    [],
+  );
+
+  let content: ReactNode;
+  if (!loaded) {
+    content = <StageSkeleton />;
+  } else if (notFound) {
+    content = (
+      <StageEmpty
+        title="Job not found"
+        sub="This share link is invalid, expired, or you don’t have access to it."
+      />
+    );
+  } else if (error) {
+    content = (
+      <div style={{ textAlign: "center", padding: "48px 20px", color: "var(--muted)" }}>
+        <div style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 600, color: "var(--fg)", marginBottom: 5 }}>Couldn’t load this job</div>
+        <div className="m-mono" style={{ fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>{error}</div>
+        <div style={{ marginTop: 12 }}>
+          <button type="button" className="m-btn sm" onClick={() => void load()}>↻ Retry</button>
         </div>
       </div>
-      <div style={{ display: "grid", justifyItems: "center", gridTemplateRows: "auto 1fr auto", padding: "4px 0", gap: 7 }}>
-        <span className="m-mono" style={{ fontSize: 9, color: "var(--vox)" }}>VOX</span>
-        <div onPointerDown={dimmerDrag} style={{ width: 16, display: "flex", justifyContent: "center", cursor: "ns-resize", touchAction: "none" }}>
-          <div style={{ width: 4, borderRadius: 2, background: "linear-gradient(180deg, var(--vox), var(--inst))", position: "relative" }}>
-            <span style={{ position: "absolute", top: (100 - mix.vox) + "%", left: "50%", transform: "translate(-50%,-50%)", width: 18, height: 18, borderRadius: "50%", background: "var(--fg)", border: "3px solid var(--bg)", transition: "top .1s" }}></span>
-          </div>
+    );
+  } else if (payload) {
+    content = (
+      <StageBody
+        payload={payload}
+        token={token}
+        lyrics={lyrics}
+        view={view}
+        setView={setView}
+        theme={theme}
+        currentTime={currentTime}
+        onTime={onTime}
+        seekRef={seekRef}
+        onSeek={onSeek}
+        reducedMotion={reducedMotion}
+      />
+    );
+  }
+
+  // StageScreen (stage.jsx:91-161): the room container flips .m-booth (day) /
+  // .m-stage (night) — the FINAL token sets are baked into those classes, so
+  // the ◐ toggle is a class swap scoped to THIS room only.
+  return (
+    <div style={{ height: "100%", overflow: "auto" }}>
+      <div className={theme === "day" ? "m-booth" : "m-stage"} style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "0 22px", height: 54, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+          <button className="m-btn sm ghost" type="button" onClick={goDashboard}>← booth</button>
+          <MicMark size={20} />
+          <span style={{ flex: 1 }}></span>
+          <span className="m-chip info">unlisted share</span>
+          <button className="m-btn sm" type="button" onClick={() => void onCopyLink()}>⧉ Copy link</button>
+          <button className="m-btn sm ghost" type="button" title="Day / night" onClick={toggleTheme}>◐</button>
         </div>
-        <span className="m-mono" style={{ fontSize: 9, color: "var(--muted)" }}>{mix.vox}%</span>
+
+        <div style={{ flex: 1, maxWidth: 760, width: "100%", margin: "0 auto", padding: "22px 24px 20px", display: "flex", flexDirection: "column", gap: 16, minHeight: 0 }}>
+          {content}
+        </div>
+        <Toast message={toast} onDone={() => setToast(null)} />
       </div>
     </div>
   );
 }
 
-function StageScreen({ pb, mix, setMix, ducked, setDucked, view, setView, onBack, onFullscreen, glow, theme = "night", vars = {}, onToggleTheme }) {
-  const ls = lyricState(SONG.lines, pb.pos);
-  return (
-    <div className={theme === "day" ? "m-booth" : "m-stage"} style={{ minHeight: "100%", display: "flex", flexDirection: "column", ...vars }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "0 22px", height: 54, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-        <button className="m-btn sm ghost" type="button" onClick={onBack}>← booth</button>
-        <MicMark size={20} />
-        <span style={{ flex: 1 }}></span>
-        <span className="m-chip info">unlisted share</span>
-        <button className="m-btn sm" type="button">⧉ Copy link</button>
-        {onToggleTheme && <button className="m-btn sm ghost" type="button" title="Day / night" onClick={onToggleTheme}>◐</button>}
-      </div>
+function StageBody({
+  payload,
+  token,
+  lyrics,
+  view,
+  setView,
+  theme,
+  currentTime,
+  onTime,
+  seekRef,
+  onSeek,
+  reducedMotion,
+}: {
+  payload: SharePayload;
+  token: string;
+  lyrics: LyricsPayload | null;
+  view: StageView;
+  setView: (v: StageView) => void;
+  theme: StageTheme;
+  currentTime: number;
+  onTime: (t: number) => void;
+  seekRef: React.MutableRefObject<((time: number) => void) | null>;
+  onSeek: (time: number) => void;
+  reducedMotion: boolean;
+}) {
+  const meta = statusMeta(payload.status);
+  const isComplete = payload.status === "completed";
+  const title = payload.title?.trim() || `Job ${payload.job_token.slice(0, 8)}`;
+  const pct = Math.max(0, Math.min(100, Math.round(payload.progress)));
 
-      <div style={{ flex: 1, maxWidth: 760, width: "100%", margin: "0 auto", padding: "22px 24px 20px", display: "flex", flexDirection: "column", gap: 16, minHeight: 0 }}>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 14 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div className="m-mono" style={{ fontSize: 11, color: "var(--muted)", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
-              <span>1:36 · split today 21:03 · {SONG.cost} · receipt #{SONG.receipt} ✓</span>
-              <a href={SONG.url} target="_blank" rel="noopener" className="m-mono" style={{ color: "var(--info)", textDecoration: "none" }}>source: {SONG.url.replace("https://", "")} ↗</a>
-            </div>
-            <h1 style={{ margin: "6px 0 0", fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 28, letterSpacing: "-0.02em", lineHeight: 1.1 }}>{SONG.title}</h1>
-            <div style={{ marginTop: 2, fontSize: 13, color: "var(--muted)" }}>{SONG.artist}</div>
+  // Resolve the two stems for the real player. `karaoke` = instrumental (the
+  // master + waveform), `vocals` = the follower. We prefer kind, then fall back
+  // to filename for older jobs whose artifacts lack a precise content_type.
+  const views = payload.artifacts.map((a) => artifactView(token, a));
+  const audio = views.filter((v) => v.isAudio);
+  const instrumental = useMemo(
+    () => audio.find((v) => v.kind === "karaoke") ?? audio.find((v) => v.name.startsWith("karaoke")) ?? null,
+    [audio],
+  );
+  const vocals = useMemo(
+    () => audio.find((v) => v.kind === "vocals") ?? audio.find((v) => v.name.startsWith("vocals")) ?? null,
+    [audio],
+  );
+  const lyricsFile = views.find((v) => v.kind === "lyrics") ?? null;
+
+  // Timed lyric lines for the wipe / setlist modules — LRC start stamps with
+  // derived sing durations (stage-core.timeLines).
+  const lines = useMemo(() => (lyrics?.lrc ? parseLrc(lyrics.lrc) : []), [lyrics?.lrc]);
+  const timed = useMemo(() => timeLines(lines, payload.duration), [lines, payload.duration]);
+
+  // Meta row, real data only: duration · split <relative completed_at>.
+  // Cost + receipt are deliberately absent (recorded deviation — they are not
+  // in SharePayload; anonymous share viewers must not see cost).
+  const completedRel = formatRelativeTime(payload.completed_at);
+  const metaBits = [fmtDuration(payload.duration), completedRel ? `split ${completedRel}` : null]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <>
+      {/* header block: meta row + title + view toggle (stage.jsx:105-124) */}
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="m-mono" style={{ fontSize: 11, color: "var(--muted)", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+            {metaBits && <span>{metaBits}</span>}
+            {payload.owner_display_name && <span>shared by {payload.owner_display_name}</span>}
+            <a href={payload.source_url} target="_blank" rel="noopener" className="m-mono" style={{ color: "var(--info)", textDecoration: "none", overflowWrap: "anywhere" }}>
+              source: {payload.source_url.replace("https://", "")} ↗
+            </a>
           </div>
-          {/* view toggle */}
+          <h1 style={{ margin: "6px 0 0", fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 28, letterSpacing: "-0.02em", lineHeight: 1.1, overflowWrap: "anywhere" }}>{title}</h1>
+          {(payload.artist || payload.album) && (
+            <div style={{ marginTop: 2, fontSize: 13, color: "var(--muted)" }}>
+              {[payload.artist, payload.album].filter(Boolean).join(" — ")}
+            </div>
+          )}
+        </div>
+        {/* view toggle */}
+        {isComplete && (
           <div style={{ display: "flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-            {["console", "setlist"].map((v) => (
+            {(["console", "setlist"] as const).map((v) => (
               <button key={v} type="button" onClick={() => setView(v)} className="m-mono" style={{
                 appearance: "none", border: "none", cursor: "pointer", padding: "6px 13px", fontSize: 11,
                 background: view === v ? "var(--accent)" : "var(--bg-card)",
@@ -121,43 +297,117 @@ function StageScreen({ pb, mix, setMix, ducked, setDucked, view, setView, onBack
               }}>{v}</button>
             ))}
           </div>
-        </div>
-
-        <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "14px 16px" }}>
-          <ProtoWave pos={pb.pos} duration={SONG.duration} onSeek={pb.setPos}
-            voxLevel={ducked ? 8 : mix.vox} instLevel={mix.inst} />
-        </div>
-
-        {view === "console" ? (
-          <div style={{ display: "flex", gap: 16, alignItems: "stretch" }}>
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 11, justifyContent: "center", minWidth: 0 }}>
-              <TransportBar pb={pb} onFullscreen={onFullscreen} />
-              <div className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)" }}>space play · ←/→ seek · V drops vocals · click wave to seek</div>
-              <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 650, minHeight: 22 }}>
-                {ls.cur && <MWipe text={ls.cur.text} pct={ls.sung} size={17} family="var(--font-display)" weight={650} fill="var(--accent)" dim="var(--lyric-dim)" />}
-              </div>
-            </div>
-            <ConsoleModule mix={mix} setMix={setMix} ducked={ducked} setDucked={setDucked} />
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <SetlistModule pb={pb} mix={mix} setMix={setMix} glow={glow} />
-            <TransportBar pb={pb} onFullscreen={onFullscreen} />
-          </div>
         )}
-
-        {/* take home */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: "auto", borderTop: "1px dashed var(--border)", paddingTop: 13 }}>
-          <span className="m-mono" style={{ fontSize: 10.5, letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--muted)", marginRight: 6 }}>take home</span>
-          <button className="m-btn sm" type="button"><span className="m-stem vox"></span>vocals.mp3</button>
-          <button className="m-btn sm" type="button"><span className="m-stem inst"></span>karaoke.mp3</button>
-          <button className="m-btn sm" type="button">≡ lyrics.lrc</button>
-          <span style={{ flex: 1 }}></span>
-          <a className="m-btn sm ghost" href={SONG.url} target="_blank" rel="noopener">▶ original ↗</a>
-        </div>
       </div>
+
+      {/* in-flight: stage chip + worker note + wipebar, refreshed by the poll */}
+      {meta.active && (
+        <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "13px 16px", display: "grid", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span className={`m-chip ${meta.chip === "neutral" ? "" : meta.chip}`}><span className="m-dot"></span>{meta.label}</span>
+            <span className="m-mono" style={{ fontSize: 11.5, color: "var(--muted)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {payload.stage_note || meta.note}
+            </span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div className="m-wipebar" style={{ "--wipe": pct + "%", flex: 1 } as CSSProperties}><i></i></div>
+            <span className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)" }}>{pct}%</span>
+          </div>
+        </div>
+      )}
+
+      {payload.status === "failed" && (
+        <div className="m-mono" style={{ padding: "10px 12px", borderRadius: "var(--radius)", background: "color-mix(in oklab, var(--err) 9%, var(--bg))", border: "1px solid color-mix(in oklab, var(--err) 24%, transparent)", color: "var(--err)", fontSize: 11.5, lineHeight: 1.5 }}>
+          This job failed to process. Try resubmitting the source URL from the booth.
+        </div>
+      )}
+
+      {!isComplete && !meta.active && payload.status !== "failed" && (
+        <StageEmpty title={meta.label} sub="Results will appear here once the job finishes." />
+      )}
+
+      {/* player: waveform card + console/setlist modules (KaraokePlayer.tsx) */}
+      {isComplete && instrumental && (
+        <Suspense
+          fallback={
+            <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "14px 16px" }} aria-hidden>
+              <div className="ksplayer-wave-wrap"><div className="ksplayer-loading" /></div>
+            </div>
+          }
+        >
+          <KaraokePlayer
+            instrumentalUrl={instrumental.href}
+            vocalsUrl={vocals?.href ?? null}
+            onTime={onTime}
+            seekRef={seekRef}
+            view={view}
+            lines={timed}
+            theme={theme}
+          />
+        </Suspense>
+      )}
+      {isComplete && !instrumental && (
+        <StageEmpty title="No audio tracks" sub="No audio tracks were produced for this job." />
+      )}
+
+      {/* full synced-lyrics panel (LRC highlight + click-to-seek, #59/#145) */}
+      {isComplete && (
+        <SyncedLyrics
+          lrc={lyrics?.lrc ?? null}
+          source={lyrics?.source ?? null}
+          plainLyrics={lyrics?.plain ?? null}
+          currentTime={currentTime}
+          onSeek={onSeek}
+          reducedMotion={reducedMotion}
+        />
+      )}
+
+      {/* take home (stage.jsx:150-157) — real downloads via artifactHref */}
+      {isComplete && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: "auto", borderTop: "1px dashed var(--border)", paddingTop: 13, flexWrap: "wrap" }}>
+          <span className="m-mono" style={{ fontSize: 10.5, letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--muted)", marginRight: 6 }}>take home</span>
+          {vocals && <a className="m-btn sm" href={vocals.href} download><span className="m-stem vox"></span>vocals.mp3</a>}
+          {instrumental && <a className="m-btn sm" href={instrumental.href} download><span className="m-stem inst"></span>karaoke.mp3</a>}
+          {lyrics?.synced ? (
+            <a className="m-btn sm" href={artifactHref(token, "lyrics.lrc")} download>≡ lyrics.lrc</a>
+          ) : lyricsFile ? (
+            <a className="m-btn sm" href={lyricsFile.href} download>≡ {lyricsFile.name}</a>
+          ) : null}
+          <span style={{ flex: 1 }}></span>
+          <a className="m-btn sm ghost" href={payload.source_url} target="_blank" rel="noopener">▶ original ↗</a>
+        </div>
+      )}
+    </>
+  );
+}
+
+// Loading: the design's shimmer/skeleton primitives — no spinners.
+function StageSkeleton() {
+  return (
+    <div aria-hidden style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div>
+        <span className="skel skel-line s" />
+        <span className="skel skel-line m" style={{ height: "1.5rem" }} />
+      </div>
+      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "14px 16px" }}>
+        <span className="skel" style={{ display: "block", height: 96 }} />
+      </div>
+      <span className="skel skel-line l" />
     </div>
   );
 }
 
-Object.assign(window, { StageScreen, TransportBar });
+// Empty/terminal states built from marquee primitives (bulbs), no spinners.
+function StageEmpty({ title, sub }: { title: string; sub: string }) {
+  return (
+    <div style={{ textAlign: "center", padding: "48px 20px", color: "var(--muted)" }}>
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
+        <MBulbs n={7} lit={0} size={5} gap={8} />
+      </div>
+      <div style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 600, color: "var(--fg)", marginBottom: 5 }}>{title}</div>
+      <div style={{ fontSize: 12.5 }}>{sub}</div>
+    </div>
+  );
+}
+
+export default Stage;

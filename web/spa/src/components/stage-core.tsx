@@ -1,82 +1,66 @@
-// KARAOKE prototype — core: song data, playback engine, shared widgets.
-// Reuses MWipe/MBulbs/MarqueeMark/MDuetWave from sections/m-brand.jsx (window).
+// KARAOKE — Stage room core widgets (Marquee port, #154).
+// Adapted from design/claude-export/proto/core.jsx (the vendored copy is the
+// byte-for-byte diff baseline). Commit N+1 strips the prototype's simulation
+// layer — SONG, usePlayback, pBars, fmtTime — leaving the visual components
+// and lyric math, typed and wired to real data:
+//   * lyricState (core.jsx:79-88): logic verbatim over real LRC lines; line
+//     durations don't exist in LRC, so timeLines derives them first.
+//   * ProtoFader (core.jsx:133-164): geometry/transitions verbatim; the rgba
+//     thumb shadow routed through var(--shadow-sm) (guard 2 / audit item 4).
+//   * ProtoWave (core.jsx:103-130) is NOT ported as a component — its visual
+//     contract (duet colors from --vox/--inst, click-to-seek) restyles the
+//     wavesurfer container in player/KaraokePlayer.tsx instead; a second
+//     waveform here would violate the visual-only wavesurfer rule.
 
-// Original demo song — written for this prototype (no real-song lyrics).
-const SONG = {
-  id: "late-shift",
-  title: "Nearly Right",
-  artist: "The Late Shift",
-  url: "https://youtu.be/dQw4w9WgXcQ",
-  duration: 96,
-  cost: "$0.31",
-  receipt: "8814042",
-  lines: [
-    { t: 6,  d: 4.5, text: "We took the long way down to Friday night" },
-    { t: 11, d: 4.5, text: "Loaded up a song we barely know" },
-    { t: 16, d: 4.5, text: "The kitchen is a stadium tonight" },
-    { t: 21, d: 4.5, text: "And every neighbor is the front row" },
-    { t: 28, d: 4.5, text: "Turn the singer down, I'll take it from here" },
-    { t: 33, d: 4.5, text: "Two thousand watts of borrowed light" },
-    { t: 38, d: 4.5, text: "If I forget the words, nobody will care" },
-    { t: 43, d: 4.0, text: "We'll get it nearly right" },
-    { t: 56, d: 5.0, text: "Give me one more chorus before the morning comes" },
-    { t: 62, d: 4.5, text: "Keep the amber burning low" },
-    { t: 67, d: 4.5, text: "We are out of tune and out of time" },
-    { t: 72, d: 4.0, text: "But never out of show" },
-    { t: 80, d: 6.0, text: "La la la, la la la — everybody now" },
-    { t: 88, d: 5.0, text: "We'll get it nearly right" },
-  ],
-};
+import { useRef } from "react";
 
-function fmtTime(s) {
-  s = Math.max(0, Math.floor(s));
-  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+export interface TimedLine {
+  /** Line start in seconds (from the LRC timestamp). */
+  t: number;
+  /** Derived sing duration in seconds (LRC carries no durations). */
+  d: number;
+  text: string;
 }
 
-// playback clock — simulated; position survives refresh
-function usePlayback(duration) {
-  const [pos, setPosRaw] = React.useState(() => {
-    const v = parseFloat(localStorage.getItem("kproto-pos"));
-    return isFinite(v) && v >= 0 && v < duration ? v : 0;
+// LRC gives start timestamps only. A line "sings" until the next one starts,
+// except across instrumental breaks: an interval longer than MAX_LINE_S reads
+// as a break, so the line keeps a typical sung length and the remainder
+// becomes the gap the setlist bulbs count down. The last line gets the time
+// to track end when known, capped the same way.
+const MAX_LINE_S = 10;
+const BREAK_LINE_S = 5;
+
+export function timeLines(
+  lines: { t: number; text: string }[],
+  duration: number | null,
+): TimedLine[] {
+  return lines.map((line, i) => {
+    const next = lines[i + 1];
+    const interval = next
+      ? next.t - line.t
+      : duration != null && duration > line.t
+        ? duration - line.t
+        : BREAK_LINE_S;
+    const d = interval > MAX_LINE_S ? BREAK_LINE_S : Math.max(0.5, interval);
+    return { t: line.t, d, text: line.text };
   });
-  const [playing, setPlaying] = React.useState(false);
-  const [loop, setLoop] = React.useState(null); // null | {a} | {a,b}
-
-  const setPos = React.useCallback((p) => {
-    const v = Math.max(0, Math.min(duration, typeof p === "number" ? p : 0));
-    localStorage.setItem("kproto-pos", String(v));
-    setPosRaw(v);
-  }, [duration]);
-
-  React.useEffect(() => {
-    if (!playing) return;
-    const id = setInterval(() => {
-      setPosRaw((p) => {
-        let n = p + 0.1;
-        if (loop && loop.b != null && n > loop.b) n = loop.a;
-        if (n >= duration) { n = 0; setPlaying(false); }
-        localStorage.setItem("kproto-pos", String(n));
-        return n;
-      });
-    }, 100);
-    return () => clearInterval(id);
-  }, [playing, loop, duration]);
-
-  const cycleLoop = React.useCallback(() => {
-    setLoop((l) => {
-      if (!l) return { a: posRef.current };
-      if (l.b == null) return posRef.current > l.a + 1 ? { a: l.a, b: posRef.current } : null;
-      return null;
-    });
-  }, []);
-  const posRef = React.useRef(pos);
-  posRef.current = pos;
-
-  return { pos, setPos, playing, setPlaying, loop, cycleLoop };
 }
 
-// which lyric line is current, and its wipe %
-function lyricState(lines, pos) {
+export interface LyricState {
+  idx: number;
+  cur: TimedLine | null;
+  /** Wipe fill of the current line, 0–100. */
+  sung: number;
+  next: TimedLine | null;
+  prev: TimedLine | null;
+  /** Seconds until the next line starts. */
+  gap: number;
+  /** True between the current line's sung end and the next line. */
+  inGap: boolean;
+}
+
+// which lyric line is current, and its wipe % (core.jsx:79-88, verbatim logic)
+export function lyricState(lines: TimedLine[], pos: number): LyricState {
   let idx = -1;
   for (let i = 0; i < lines.length; i++) if (pos >= lines[i].t) idx = i;
   const cur = idx >= 0 ? lines[idx] : null;
@@ -87,60 +71,36 @@ function lyricState(lines, pos) {
   return { idx, cur, sung: sung * 100, next, prev: lines[idx - 1] || null, gap, inGap };
 }
 
-// seekable duet waveform
-function pBars(seed, n) {
-  const out = [];
-  let x = seed;
-  for (let i = 0; i < n; i++) {
-    x = (x * 9301 + 49297) % 233280;
-    const t = i / n;
-    const env = 0.45 + 0.55 * Math.sin(Math.PI * Math.min(1, t * 1.15));
-    out.push((0.2 + 0.8 * (x / 233280)) * env);
-  }
-  return out;
-}
-
-function ProtoWave({ pos, duration, onSeek, h = 88, voxLevel = 100, instLevel = 100 }) {
-  const ref = React.useRef(null);
-  const w = 600, n = 100;
-  const vox = React.useMemo(() => pBars(5, n), []);
-  const inst = React.useMemo(() => pBars(19, n), []);
-  const played = pos / duration;
-  const bw = w / n, half = h / 2;
-  const seek = (e) => {
-    const r = ref.current.getBoundingClientRect();
-    onSeek(((e.clientX - r.left) / r.width) * duration);
-  };
-  return (
-    <svg ref={ref} width="100%" viewBox={`0 0 ${w} ${h}`} style={{ display: "block", cursor: "pointer" }}
-      onClick={seek} aria-label="Waveform — click to seek">
-      {vox.map((v, i) => (
-        <rect key={"v" + i} x={i * bw + 0.8} y={half - 2 - v * (half - 6) * (0.25 + 0.75 * voxLevel / 100)}
-          width={bw - 1.6} height={Math.max(1, v * (half - 6) * (0.25 + 0.75 * voxLevel / 100))} rx="1"
-          fill="var(--vox)" opacity={i / n <= played ? 0.95 : 0.26}></rect>
-      ))}
-      {inst.map((v, i) => (
-        <rect key={"i" + i} x={i * bw + 0.8} y={half + 2}
-          width={bw - 1.6} height={Math.max(1, v * (half - 6) * (0.25 + 0.75 * instLevel / 100))} rx="1"
-          fill="var(--inst)" opacity={i / n <= played ? 0.85 : 0.2}></rect>
-      ))}
-      <line x1={w * played} x2={w * played} y1="0" y2={h} stroke="var(--fg)" strokeWidth="1.5"></line>
-    </svg>
-  );
-}
-
-// draggable vertical fader
-function ProtoFader({ label, color, value, onChange, ducked }) {
-  const trackRef = React.useRef(null);
-  const drag = (e) => {
+// draggable vertical fader (core.jsx:133-164)
+export function ProtoFader({
+  label,
+  color,
+  value,
+  onChange,
+  ducked,
+}: {
+  label: string;
+  color: string;
+  /** Fader position, 0–100. */
+  value: number;
+  onChange: (value: number) => void;
+  ducked?: boolean;
+}) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const drag = (e: React.PointerEvent) => {
     e.preventDefault();
-    const move = (ev) => {
-      const r = trackRef.current.getBoundingClientRect();
+    const move = (ev: { clientY: number }) => {
+      const track = trackRef.current;
+      if (!track) return;
+      const r = track.getBoundingClientRect();
       const pct = 100 - ((ev.clientY - r.top) / r.height) * 100;
       onChange(Math.round(Math.max(0, Math.min(100, pct))));
     };
     move(e);
-    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
@@ -154,7 +114,7 @@ function ProtoFader({ label, color, value, onChange, ducked }) {
           <div style={{
             position: "absolute", left: "50%", bottom: shown + "%", transform: "translate(-50%, 50%)",
             width: 28, height: 14, borderRadius: 4, background: "var(--fg)",
-            border: "1px solid var(--bg)", boxShadow: "0 2px 5px rgba(0,0,0,0.5)", transition: "bottom .12s",
+            border: "1px solid var(--bg)", boxShadow: "var(--shadow-sm)", transition: "bottom .12s",
           }}></div>
         </div>
       </div>
@@ -162,5 +122,3 @@ function ProtoFader({ label, color, value, onChange, ducked }) {
     </div>
   );
 }
-
-Object.assign(window, { SONG, fmtTime, usePlayback, lyricState, ProtoWave, ProtoFader });

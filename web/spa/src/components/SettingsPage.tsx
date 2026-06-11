@@ -8,7 +8,6 @@ import {
 } from "../api";
 import { formatRelativeTime } from "../lib/jobListUtils";
 import { goDashboard } from "../router";
-import { useTheme } from "../theme";
 import { MarqueeTopBar } from "./Booth";
 import { ConfirmDialog, type ConfirmState } from "./ConfirmDialog";
 import { Toast } from "./Toast";
@@ -22,12 +21,10 @@ const MINT_FORBIDDEN_HINT =
   "Minting requires Clerk sign-in or the machine bearer. " +
   "Trusted-LAN callers can list and revoke tokens but not mint them.";
 
-// Same single-column chrome as the item page: topbar + centered pane with a
-// "Back" affordance, no dashboard sidebar.
+// Single-column chrome: topbar + centered pane with a "Back" affordance, no
+// dashboard sidebar. Booth rooms are always light — theming is scoped to the
+// stage room (#154), so no theme hook is needed here.
 function SettingsShell({ authControl, children }: { authControl?: ReactNode; children: ReactNode }) {
-  // Keeps <html data-theme> applied until the Stage issue scopes theming;
-  // the toggle button left with the old TopBar (booth rooms are always light).
-  useTheme();
   return (
     <div className="app app-item">
       <MarqueeTopBar authControl={authControl} />

@@ -1,34 +1,32 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
-export type Theme = "light" | "dark";
+// Room-scoped theming (#154): booth rooms are ALWAYS light — only the stage
+// room (#/job/:token) flips day/night via the ◐ toggle. The flip swaps the
+// room container's token class (.m-booth ↔ .m-stage, final-app.jsx:45-54 with
+// the FINAL green bake already in styles.css), so nothing touches <html> and
+// the rest of the app never re-themes.
 
-const KEY = "karaoke-theme";
+export type StageTheme = "day" | "night";
 
-function systemTheme(): Theme {
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
+const KEY = "karaoke-stage-theme";
 
-function initialTheme(): Theme {
+function initialTheme(): StageTheme {
   try {
-    const saved = localStorage.getItem(KEY);
-    if (saved === "light" || saved === "dark") return saved;
+    if (localStorage.getItem(KEY) === "night") return "night";
   } catch {
-    /* localStorage unavailable — fall through to system preference */
+    /* localStorage unavailable — fall through to the default */
   }
-  return systemTheme();
+  // FINAL bake: day-default stage (final-app.jsx "kfinal-theme" || "day").
+  return "day";
 }
 
-/** Theme state synced to <html data-theme> + persisted; defaults to OS preference. */
-export function useTheme(): [Theme, () => void] {
-  const [theme, setTheme] = useState<Theme>(initialTheme);
-
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-  }, [theme]);
+/** Stage-room day/night state, persisted; day default. */
+export function useStageTheme(): [StageTheme, () => void] {
+  const [theme, setTheme] = useState<StageTheme>(initialTheme);
 
   const toggle = useCallback(() => {
     setTheme((t) => {
-      const next: Theme = t === "dark" ? "light" : "dark";
+      const next: StageTheme = t === "day" ? "night" : "day";
       try {
         localStorage.setItem(KEY, next);
       } catch {

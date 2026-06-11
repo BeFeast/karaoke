@@ -101,10 +101,10 @@
 }
 
 /* App token aliases — every legacy custom-property name re-pointed at the
-   Marquee palettes. :root = booth (light, day-default); the dark blocks =
-   stage (night). Transitional, sanctioned: global dark mode keeps working
-   mapped to stage-night values until the Stage issue scopes theming to the
-   stage room ("booth rooms are always light"). */
+   Marquee palettes. :root = booth (light) and ONLY booth: theming is scoped
+   to the rooms (#154) — booth rooms are always light, and the stage room
+   flips day/night by swapping its container class (.m-booth ↔ .m-stage).
+   No global dark mode, no <html data-theme>. */
 :root {
   --font-ui: "Geist", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-sans: var(--font-ui);
@@ -160,73 +160,7 @@
   --pane-pad: 24px;
   --fs-base: 13px;
 
-  color-scheme: light dark;
-}
-
-/* Dark — explicit toggle wins; otherwise follow the OS preference. */
-:root[data-theme="dark"],
-:root:not([data-theme="light"]) {
-  /* placeholder so the cascade below can override under a media query */
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #161210;
-    --bg-soft: #211b16;
-    --bg-card: #1c1712;
-    --fg: #f0e9da;
-    --fg-soft: #c9c1ae;
-    --muted: #897f6c;
-    --border: #352c20;
-    --border-soft: #2a2319;
-    --accent: #9fd07a;
-    --accent-fg: #1c1207;
-    --accent-soft: #9fd07a26;
-    --bulb: #9fd07a;
-    --bulb-off: #3a3023;
-    --rose: #e06a5a;
-    --vox: #9fd07a;
-    --vox-ui: #9fd07a;
-    --inst-ui: #7fa3c4;
-    --lyric-dim: #54493a;
-    --lyric-prev: #6e6354;
-    --lyric-next: #8d8170;
-    --glow: 0 0 18px #9fd07a59;
-    --ok: #97b36e;
-    --warn: #d9a44a;
-    --err: #d2705c;
-    --info: #7fa3c4;
-    --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.4);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.45);
-  }
-}
-:root[data-theme="dark"] {
-  --bg: #161210;
-  --bg-soft: #211b16;
-  --bg-card: #1c1712;
-  --fg: #f0e9da;
-  --fg-soft: #c9c1ae;
-  --muted: #897f6c;
-  --border: #352c20;
-  --border-soft: #2a2319;
-  --accent: #9fd07a;
-  --accent-fg: #1c1207;
-  --accent-soft: #9fd07a26;
-  --bulb: #9fd07a;
-  --bulb-off: #3a3023;
-  --rose: #e06a5a;
-  --vox: #9fd07a;
-  --vox-ui: #9fd07a;
-  --inst-ui: #7fa3c4;
-  --lyric-dim: #54493a;
-  --lyric-prev: #6e6354;
-  --lyric-next: #8d8170;
-  --glow: 0 0 18px #9fd07a59;
-  --ok: #97b36e;
-  --warn: #d9a44a;
-  --err: #d2705c;
-  --info: #7fa3c4;
-  --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.4);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.45);
+  color-scheme: light;
 }
 /* ── END MARQUEE TOKENS ── */
 
@@ -642,73 +576,6 @@ a.nav-item { text-decoration: none; }
   gap: 8px 14px;
   margin-top: 12px;
 }
-.stage-note {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--muted);
-  font-feature-settings: "tnum";
-}
-
-/* progress bar — ported from Scribe .stage .progressbar */
-.progressbar {
-  height: 4px;
-  background: var(--border-soft);
-  border-radius: 999px;
-  overflow: hidden;
-  margin-top: 10px;
-  position: relative;
-}
-.progressbar > div {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 999px;
-  transition: width 0.4s ease;
-}
-/* unknown progress on an in-flight job: a sliding block instead of a width */
-.progressbar.indeterminate > div {
-  width: 35%;
-  animation: indet 1.25s ease-in-out infinite;
-}
-@keyframes indet {
-  0% { transform: translateX(-120%); }
-  100% { transform: translateX(330%); }
-}
-/* moving sheen so an active job feels alive between 3s polls */
-.progressbar.active::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--sheen) 45%, transparent), transparent);
-  background-size: 40% 100%;
-  background-repeat: no-repeat;
-  animation: sheen 1.3s ease-in-out infinite;
-}
-@keyframes sheen {
-  0% { background-position: -40% 0; }
-  100% { background-position: 140% 0; }
-}
-
-.job-error {
-  margin-top: 12px;
-  padding: 10px 12px;
-  border-radius: var(--radius);
-  background: color-mix(in oklab, var(--err) 9%, var(--bg));
-  border: 1px solid color-mix(in oklab, var(--err) 24%, transparent);
-  color: var(--err);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-.job-error .err-label {
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-size: 10px;
-  font-weight: 650;
-  opacity: 0.85;
-  margin-bottom: 3px;
-}
-
 /* Job actions + links (job-foot) */
 .spacer { flex: 1 1 auto; }
 
@@ -872,8 +739,9 @@ a.nav-item { text-decoration: none; }
   filter: brightness(0.95);
 }
 
-/* ─── Item page (/app/#/job/:token) ─────────────────────────────────────── */
-/* Single-column layout: topbar + centered pane, no dashboard sidebar. */
+/* ─── Settings shell (single-column legacy chrome) ──────────────────────── */
+/* Topbar + centered pane, no dashboard sidebar. (The item route now renders
+   the Stage room — see the stage player section below.) */
 .app.app-item {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 56px 1fr;
@@ -885,35 +753,8 @@ a.nav-item { text-decoration: none; }
   font-family: var(--font-mono);
   font-size: 12.5px;
 }
-.item-header {
-  margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: var(--rule);
-}
-.item-meta-top {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.item-owner {
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-.item-title {
-  margin: 0 0 4px;
-  overflow-wrap: anywhere;
-}
-.item-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 24px;
-}
 
-/* Player + lyrics sections. Section label mirrors the server share page. */
+/* Section label (settings panes). */
 .sec-label {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -922,40 +763,19 @@ a.nav-item { text-decoration: none; }
   color: var(--muted);
   margin-bottom: 10px;
 }
-.players { margin-bottom: 28px; }
-.player-card {
-  background: var(--bg-card);
-  border: var(--rule);
-  border-radius: var(--radius);
-  padding: 12px 14px;
-  margin-bottom: 10px;
-  box-shadow: var(--shadow-sm);
-}
-.player-label {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--fg-soft);
-  margin-bottom: 8px;
-}
-.player-card audio {
-  width: 100%;
-  display: block;
-}
-/* ─── Karaoke player (wavesurfer + dual-stem transport) ─────────────────── */
+
+/* ─── Stage player (#/job/:token) — wavesurfer canvas chrome ────────────── */
+/* The cards/modules carry the design's inline styles (stage.jsx); only the
+   canvas plumbing lives here. The root is a keyboard transport surface
+   (Space / ← / →), focusable on purpose. */
 .ksplayer {
-  background: var(--bg-card);
-  border: var(--rule);
-  border-radius: var(--radius-lg);
-  padding: 16px;
-  margin-bottom: 10px;
-  box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 .ksplayer:focus-visible {
   outline: none;
-  border-color: var(--accent);
+  border-radius: var(--radius-lg);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .ksplayer-wave-wrap {
@@ -979,100 +799,13 @@ a.nav-item { text-decoration: none; }
   margin-top: 8px;
   font-family: var(--font-mono);
   font-size: 12px;
-}
-.ksplayer-fallback {
-  min-height: 140px;
-}
-
-.ksplayer-transport,
-.ksplayer-mix,
-.ksplayer-loop {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.ksplayer-play {
-  min-width: 42px;
-  justify-content: center;
-  font-size: 14px;
-}
-.ksplayer-time {
-  font-size: 12.5px;
-  color: var(--fg-soft);
-  font-variant-numeric: tabular-nums;
-}
-.ksplayer-spacer { flex: 1 1 auto; }
-.ksplayer-ctl-label {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  white-space: nowrap;
-}
-.ksplayer-rate { display: inline-flex; align-items: center; gap: 8px; }
-.ksplayer-select {
-  appearance: none;
-  padding: 4px 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
-  color: var(--fg);
-  font-size: 12px;
-  cursor: pointer;
-}
-.ksplayer-select:focus-visible {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-.ksplayer-mix {
-  border-top: 1px solid var(--border-soft);
-  padding-top: 14px;
-  justify-content: space-between;
-}
-.ksplayer-ab { display: inline-flex; align-items: center; gap: 8px; }
-.ksplayer-blend {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  flex: 1 1 220px;
-  min-width: 200px;
-  justify-content: flex-end;
-}
-.ksplayer-blend input[type="range"] {
-  flex: 1 1 auto;
-  max-width: 220px;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-.ksplayer-blend input[type="range"]:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-  border-radius: 2px;
-}
-
-.ksplayer-loop {
-  border-top: 1px solid var(--border-soft);
-  padding-top: 14px;
-}
-
-@media (max-width: 880px) {
-  .ksplayer { padding: 14px; gap: 12px; }
-  .ksplayer-wave-wrap, .ksplayer-wave { min-height: 72px; }
-  .ksplayer-mix { flex-direction: column; align-items: stretch; gap: 12px; }
-  .ksplayer-blend { justify-content: flex-start; }
-  .ksplayer-blend input[type="range"] { max-width: none; }
-  .ksplayer-spacer { flex-basis: 100%; }
+  color: var(--err);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .ksplayer-loading { animation: none; }
 }
 
-.lyrics-panel { margin-bottom: 28px; }
 .lyrics-text {
   background: var(--bg-card);
   border: var(--rule);
@@ -1088,37 +821,28 @@ a.nav-item { text-decoration: none; }
   overflow-wrap: anywhere;
 }
 
-/* ─── Synced lyrics (LRC highlight + click-to-seek) ─────────────────────── */
+/* ─── Synced lyrics (LRC highlight + click-to-seek) — stage restyle ─────── */
+/* Lyric ladder colors come from the room's lyric tokens (sections/stage.jsx
+   lyrics list): upcoming = --lyric-dim, already sung = --lyric-prev, active =
+   accent, larger, in the display face. */
 .synced-lyrics {
   background: var(--bg-card);
-  border: var(--rule);
-  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 .synced-lyrics-prov {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 16px;
-  border-bottom: 1px solid var(--border-soft);
+  padding: 12px 16px 0;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
   color: var(--muted);
 }
-.synced-lyrics-badge {
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-radius: var(--radius-sm);
-  padding: 1px 6px;
-  font-weight: 600;
-}
-.synced-lyrics-src { letter-spacing: 0.02em; }
 .synced-lyrics-list {
   list-style: none;
   margin: 0;
-  padding: 10px 0;
+  padding: 10px 0 14px;
   max-height: 420px;
   overflow: auto;
   scroll-behavior: smooth;
@@ -1135,19 +859,24 @@ a.nav-item { text-decoration: none; }
   background: none;
   border: none;
   cursor: pointer;
-  padding: 5px 16px;
-  font: inherit;
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--muted);
-  transition: color 0.15s ease, opacity 0.15s ease;
+  padding: 4px 16px;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--lyric-dim);
+  transition: color 0.15s ease, font-size 0.15s ease;
 }
-.synced-lyrics-seek:hover {
-  color: var(--fg-soft);
+.synced-lyrics-line.is-sung .synced-lyrics-seek {
+  color: var(--lyric-prev);
 }
 .synced-lyrics-line.is-active .synced-lyrics-seek {
   color: var(--accent);
-  font-weight: 600;
+  font-size: 21px;
+  font-weight: 650;
+}
+.synced-lyrics-seek:hover {
+  color: var(--fg-soft);
 }
 .synced-lyrics-seek:focus-visible {
   outline: none;
@@ -1158,9 +887,6 @@ a.nav-item { text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
   .synced-lyrics-list { scroll-behavior: auto; }
   .synced-lyrics-seek { transition: none; }
-}
-.item-skeleton {
-  padding: 24px 0;
 }
 
 /* ─── Settings page (/app/#/settings) — ktx_ extension tokens ───────────── */
