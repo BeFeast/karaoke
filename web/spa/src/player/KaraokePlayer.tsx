@@ -65,10 +65,18 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef }: K
     reducedMotion,
   });
 
-  // Expose the transport to siblings (#59).
-  useEffect(() => {
-    onTime?.(player.currentTime, player.duration);
-  }, [player.currentTime, player.duration, onTime]);
+  // Expose the transport to siblings (#59). The playhead rides the engine's
+  // raw tick feed (subscribeTime) instead of React state, so per-tick updates
+  // bypass this component's render entirely; refs keep the subscription stable
+  // while still calling the latest onTime with the latest duration.
+  const onTimeRef = useRef(onTime);
+  onTimeRef.current = onTime;
+  const durationRef = useRef(player.duration);
+  durationRef.current = player.duration;
+  useEffect(
+    () => player.subscribeTime((t) => onTimeRef.current?.(t, durationRef.current)),
+    [player.subscribeTime],
+  );
   useEffect(() => {
     if (seekRef) seekRef.current = player.seek;
     return () => {

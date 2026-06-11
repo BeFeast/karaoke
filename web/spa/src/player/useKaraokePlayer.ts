@@ -1,44 +1,35 @@
-// Dual-stem karaoke playback engine.
+// Dual-stem karaoke playback hook.
 //
-// Two stems (instrumental `karaoke.mp3` + `vocals.mp3`), one transport. The
-// design:
+// The audio engine is DualStemEngine (stemEngine.ts): both stems decoded into
+// AudioBuffers and played by co-started AudioBufferSourceNodes on ONE
+// AudioContext clock, mixed by per-stem GainNodes — sample-locked by
+// construction, no follower element, no drift correction (#113).
 //
-//   * wavesurfer.js wraps the INSTRUMENTAL <audio> element (its `media` option)
-//     and is the single source of truth for transport — play/pause, seek, and
-//     playback-rate all act on that master element, and wavesurfer renders the
-//     instrumental waveform + cursor from it.
-//   * the VOCALS <audio> element is a follower: we mirror the master's
-//     play/pause/seek/rate onto it and continuously correct drift so the two
-//     stems stay sample-synced.
-//   * both elements are routed through the WebAudio graph
-//       MediaElementSource → GainNode → destination
-//     so the gains form a 2-channel mixer. The blend slider and the A/B toggle
-//     are just gain presets. (Once an element is wrapped in a
-//     MediaElementSource its sound only reaches the speakers via the graph, so
-//     the GainNodes — not element.volume — are the mixer.)
+// Wavesurfer is a visual-only waveform + seek surface here: created from
+// pre-computed peaks + duration (a supported 7.x path), with NO url and NO
+// media — it never plays anything. Exactly two edges connect it to the engine:
 //
-// Browser note: MediaElementSource is well supported, but the AudioContext
-// must be resumed from a user gesture (we resume on the first play()). Perfect
-// sample-accuracy across two independent <audio> elements is not guaranteed by
-// the platform; we keep them tight by re-syncing on every transport event and
-// nudging the follower whenever it drifts past a small threshold.
+//   * ws → engine: the `interaction` event (absolute seconds) drives seek().
+//     Wavesurfer also pokes its own src-less internal element on click; that
+//     is inert, and the engine's setTime on the next tick is authoritative.
+//   * engine → ws: setTime(pos) from the engine tick renders the cursor.
+//
+// The engine tick also feeds `subscribeTime` (raw position, for the lyrics
+// highlight seam) and React state (quantized to 0.1 s so the transport row
+// re-renders at ~10 Hz, not at the rAF rate).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
+import { computePeaks, gainsForLevel } from "./engineMath";
+import { type ABRegion, DualStemEngine } from "./stemEngine";
 
-/** Largest follower/​master gap we tolerate before a hard re-seek (seconds). */
-const HARD_DRIFT_S = 0.25;
-/** Dead zone below which the follower counts as in sync (seconds). */
-const SYNC_DEADZONE_S = 0.03;
-/** Max relative playbackRate skew used to reel the follower in. */
-const MAX_RATE_SKEW = 0.04;
 /** Available playback speeds for the rate control. */
 export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5] as const;
 
 export interface KaraokePlayerOptions {
-  /** Same-origin URL of the instrumental stem (the master + waveform). */
+  /** Same-origin URL of the instrumental stem (audio + waveform). */
   instrumentalUrl: string;
-  /** Same-origin URL of the vocals stem (the follower), if present. */
+  /** Same-origin URL of the vocals stem, if present. */
   vocalsUrl: string | null;
   /** Waveform container element. */
   container: HTMLElement | null;
@@ -48,18 +39,16 @@ export interface KaraokePlayerOptions {
   reducedMotion: boolean;
 }
 
-export interface ABRegion {
-  a: number | null;
-  b: number | null;
-}
+export type { ABRegion };
 
 export interface KaraokePlayerState {
   ready: boolean;
   playing: boolean;
   duration: number;
+  /** Playhead quantized to ~0.1 s — display-grade; subscribeTime is the raw feed. */
   currentTime: number;
   rate: number;
-  /** 0 = instrumental only … 1 = full vocals over the instrumental. */
+  /** 0 = instrumental only … 1 = vocals only (equal-power crossfade). */
   vocalLevel: number;
   loop: boolean;
   region: ABRegion;
@@ -74,23 +63,20 @@ export interface KaraokePlayerApi extends KaraokePlayerState {
   /** Relative skip in seconds (e.g. -5 / +5). */
   skip: (delta: number) => void;
   setRate: (rate: number) => void;
-  /** 0 = instrumental only, 1 = full vocals. Drives both gains. */
+  /** 0 = instrumental only, 1 = vocals only. Drives both gains. */
   setVocalLevel: (level: number) => void;
-  /** A/B toggle preset: instrumental-only vs vocals-only. */
+  /** A/B toggle preset: instrumental-only vs vocals-only (true solos). */
   setMix: (mix: "instrumental" | "vocals") => void;
   toggleLoop: () => void;
   /** Set the A or B repeat marker at the current playhead (toggles off if set). */
   markA: () => void;
   markB: () => void;
   clearRegion: () => void;
-}
-
-// Equal-power-ish blend: at level 0 only the instrumental is heard; at level 1
-// the vocals are full and the instrumental ducks slightly so the voice sits on
-// top without clipping. Linear is fine for a practice tool.
-function gainsForLevel(level: number): { inst: number; voc: number } {
-  const l = Math.max(0, Math.min(1, level));
-  return { inst: 1 - 0.25 * l, voc: l };
+  /**
+   * Raw engine-clock position feed (every tick, no quantization), outside the
+   * React render path. Returns an unsubscribe.
+   */
+  subscribeTime: (cb: (t: number) => void) => () => void;
 }
 
 export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
@@ -111,203 +97,124 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
 
   const wsRef = useRef<WaveSurfer | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
-  const instGainRef = useRef<GainNode | null>(null);
-  const vocGainRef = useRef<GainNode | null>(null);
-  const vocalElRef = useRef<HTMLAudioElement | null>(null);
-  // Mutable mirrors so event callbacks read fresh values without re-subscribing.
+  const engineRef = useRef<DualStemEngine | null>(null);
+  // Mutable mirrors so the async setup reads fresh values without re-running.
   const levelRef = useRef(0.5);
   const loopRef = useRef(false);
   const regionRef = useRef<ABRegion>({ a: null, b: null });
+  const colorsRef = useRef(colors);
+  const timeSubsRef = useRef(new Set<(t: number) => void>());
 
-  // ── Set up wavesurfer + the WebAudio mixer once per URL set ──────────────
+  // ── Build the engine + the visual waveform once per URL set ──────────────
   useEffect(() => {
     if (!container) return;
     let disposed = false;
+    const abort = new AbortController();
+    let engine: DualStemEngine | null = null;
+    let ws: WaveSurfer | null = null;
+    const unsubs: Array<() => void> = [];
 
-    // Stems are always same-origin (`/share/{token}/{name}`), so no crossOrigin
-    // is needed — setting it would force a CORS preflight that the LAN host
-    // doesn't answer. WebAudio's MediaElementSource is happy with same-origin
-    // media as-is.
-    const instEl = new Audio();
-    instEl.preload = "auto";
-    instEl.src = instrumentalUrl;
-
-    const ws = WaveSurfer.create({
-      container,
-      media: instEl,
-      backend: "MediaElement",
-      height: 96,
-      waveColor: colors.wave,
-      progressColor: colors.progress,
-      cursorColor: colors.cursor,
-      cursorWidth: 2,
-      barWidth: 2,
-      barGap: 1,
-      barRadius: 2,
-      normalize: true,
-      interact: true,
-      autoplay: false,
-      hideScrollbar: true,
-    });
-    wsRef.current = ws;
-
-    // WebAudio mixer. createMediaElementSource can only be called once per
-    // element, so we build the graph here and tear it down on cleanup.
     let ctx: AudioContext | null = null;
-    let instGain: GainNode | null = null;
-    let vocGain: GainNode | null = null;
-    let vocalEl: HTMLAudioElement | null = null;
     try {
       const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       ctx = new Ctor();
-      instGain = ctx.createGain();
-      ctx.createMediaElementSource(instEl).connect(instGain).connect(ctx.destination);
-      if (vocalsUrl) {
-        vocalEl = new Audio();
-        vocalEl.preload = "auto";
-        vocalEl.src = vocalsUrl;
-        vocGain = ctx.createGain();
-        ctx.createMediaElementSource(vocalEl).connect(vocGain).connect(ctx.destination);
-      }
-      const g = gainsForLevel(levelRef.current);
-      instGain.gain.value = vocalsUrl ? g.inst : 1;
-      if (vocGain) vocGain.gain.value = g.voc;
     } catch (err) {
-      // If WebAudio is unavailable we still let wavesurfer play the
-      // instrumental on its own; the blend/AB controls just won't apply.
       // eslint-disable-next-line no-console
-      console.warn("karaoke: WebAudio mixer unavailable", err);
+      console.warn("karaoke: Web Audio unavailable", err);
+      setState((s) => ({ ...s, error: "This browser doesn’t support Web Audio playback." }));
+      return;
     }
     ctxRef.current = ctx;
-    instGainRef.current = instGain;
-    vocGainRef.current = vocGain;
-    vocalElRef.current = vocalEl;
 
-    // ── Keep the vocal follower synced to the instrumental master ──────────
-    const syncVocal = (hard: boolean) => {
-      if (!vocalEl) return;
-      // Don't fight the element mid-seek or before it has decodable data —
-      // corrections issued in that state queue up and land late, causing skips.
-      if (vocalEl.seeking || vocalEl.readyState < 2 /* HAVE_CURRENT_DATA */) return;
-      const t = instEl.currentTime;
-      const drift = vocalEl.currentTime - t;
-      if (hard || Math.abs(drift) > HARD_DRIFT_S) {
-        // Transport events (play/pause/seek) or a real desync: snap once.
-        vocalEl.currentTime = t;
-        vocalEl.playbackRate = instEl.playbackRate;
-        return;
-      }
-      // Steady playback: NEVER write currentTime — each write is an audible
-      // click/skip when the vocals are layered over the instrumental (#113
-      // "garbled" audio). Instead reel the follower in by skewing its rate
-      // a few percent toward the master until the drift is inside the dead
-      // zone. Pitch preservation makes a ≤4% skew inaudible.
-      if (Math.abs(drift) <= SYNC_DEADZONE_S) {
-        vocalEl.playbackRate = instEl.playbackRate;
-      } else {
-        const skew = Math.max(-MAX_RATE_SKEW, Math.min(MAX_RATE_SKEW, -drift * 0.5));
-        vocalEl.playbackRate = instEl.playbackRate * (1 + skew);
-      }
-    };
-
-    const onInstError = () => {
-      if (disposed) return;
-      setState((s) => ({ ...s, error: "Couldn’t load the instrumental track." }));
-    };
-    instEl.addEventListener("error", onInstError);
-
-    const subs: Array<() => void> = [];
-    subs.push(
-      ws.on("ready", (duration) => {
-        if (disposed) return;
-        setState((s) => ({ ...s, ready: true, duration, error: null }));
-      }),
-    );
-    subs.push(
-      ws.on("error", () => {
-        if (disposed) return;
-        setState((s) => ({ ...s, error: "Couldn’t decode the audio for the waveform." }));
-      }),
-    );
-    subs.push(
-      ws.on("play", () => {
-        if (disposed) return;
-        void ctx?.resume();
-        syncVocal(true);
-        void vocalEl?.play().catch(() => undefined);
-        setState((s) => ({ ...s, playing: true }));
-      }),
-    );
-    subs.push(
-      ws.on("pause", () => {
-        if (disposed) return;
-        vocalEl?.pause();
-        syncVocal(true);
-        setState((s) => ({ ...s, playing: false }));
-      }),
-    );
-    subs.push(
-      ws.on("finish", () => {
-        if (disposed) return;
-        vocalEl?.pause();
-        setState((s) => ({ ...s, playing: false }));
-      }),
-    );
-    subs.push(
-      ws.on("seeking", () => {
-        if (disposed) return;
-        syncVocal(true);
-      }),
-    );
-    subs.push(
-      ws.on("timeupdate", (currentTime) => {
-        if (disposed) return;
-        // A–B enforcement on the master clock (plain loop is handled on finish).
-        const { a, b } = regionRef.current;
-        if (b != null && currentTime >= b) {
-          ws.setTime(a ?? 0);
-          syncVocal(true);
+    DualStemEngine.load({ instrumentalUrl, vocalsUrl, ctx, signal: abort.signal })
+      .then((loaded) => {
+        if (disposed) {
+          loaded.dispose();
+          return;
         }
-        // Drift-correct the follower without yanking it every frame.
-        syncVocal(false);
-        setState((s) => (s.currentTime === currentTime ? s : { ...s, currentTime }));
-      }),
-    );
-    subs.push(
-      ws.on("finish", () => {
-        if (disposed) return;
-        if (loopRef.current) {
-          const { a } = regionRef.current;
-          ws.setTime(a ?? 0);
-          void ws.play();
-        }
-      }),
-    );
+        engine = loaded;
+        engineRef.current = loaded;
+
+        // Hand the engine the current control state (it may have changed
+        // between mount and decode completing).
+        const g = gainsForLevel(levelRef.current);
+        loaded.setGains(g.inst, g.voc);
+        loaded.setLoop(loopRef.current);
+        loaded.setRegion(regionRef.current);
+
+        // Visual-only wavesurfer: peaks + duration, no url, no media.
+        const c = colorsRef.current;
+        ws = WaveSurfer.create({
+          container,
+          peaks: [computePeaks(loaded.instrumentalBuffer.getChannelData(0), 4096)],
+          duration: loaded.duration,
+          height: 96,
+          waveColor: c.wave,
+          progressColor: c.progress,
+          cursorColor: c.cursor,
+          cursorWidth: 2,
+          barWidth: 2,
+          barGap: 1,
+          barRadius: 2,
+          normalize: true,
+          interact: true,
+          hideScrollbar: true,
+        });
+        wsRef.current = ws;
+
+        // ws → engine: waveform click/drag seeks (absolute seconds).
+        unsubs.push(ws.on("interaction", (newTime: number) => loaded.seek(newTime)));
+
+        // engine → ws + React: cursor, raw time feed, quantized state.
+        unsubs.push(
+          loaded.onTick((pos, force) => {
+            if (disposed) return;
+            ws?.setTime(pos);
+            for (const cb of timeSubsRef.current) cb(pos);
+            // ~10 Hz for the mm:ss display; transport events (pause/seek)
+            // always land exactly so the display never shows a stale 0.1 s.
+            setState((s) => (!force && Math.abs(s.currentTime - pos) < 0.1 ? s : { ...s, currentTime: pos }));
+          }),
+        );
+        unsubs.push(
+          loaded.onEnded(() => {
+            if (disposed) return;
+            setState((s) => ({ ...s, playing: false }));
+          }),
+        );
+
+        setState((s) => ({ ...s, ready: true, duration: loaded.duration, error: null }));
+      })
+      .catch((err: unknown) => {
+        if (disposed || (err instanceof DOMException && err.name === "AbortError")) return;
+        // eslint-disable-next-line no-console
+        console.warn("karaoke: failed to load stems", err);
+        setState((s) => ({ ...s, error: "Couldn’t load the karaoke audio." }));
+      });
 
     return () => {
       disposed = true;
-      instEl.removeEventListener("error", onInstError);
-      for (const off of subs) off();
+      abort.abort();
+      for (const off of unsubs) off();
+      engineRef.current = null;
+      engine?.dispose();
       wsRef.current = null;
       try {
-        ws.destroy();
+        ws?.destroy();
       } catch {
         /* already torn down */
       }
-      vocalEl?.pause();
-      void ctx?.close().catch(() => undefined);
       ctxRef.current = null;
-      instGainRef.current = null;
-      vocGainRef.current = null;
-      vocalElRef.current = null;
+      void ctx.close().catch(() => undefined);
     };
     // Re-create only when the source URLs change. Color/motion changes are
-    // applied via setOptions in a separate effect to avoid rebuilding the graph.
+    // applied via setOptions in a separate effect to avoid rebuilding.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [container, instrumentalUrl, vocalsUrl]);
 
   // ── Live-apply color changes (theme toggle) without rebuilding ───────────
   useEffect(() => {
+    colorsRef.current = colors;
     wsRef.current?.setOptions({
       waveColor: colors.wave,
       progressColor: colors.progress,
@@ -322,30 +229,35 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
 
   // ── Imperative controls ──────────────────────────────────────────────────
   const playPause = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    // The one and only gesture-context resume: AudioBufferSourceNode.start()
+    // itself is not autoplay-gated, only the context is. Synchronous, FIRST.
     void ctxRef.current?.resume();
-    void wsRef.current?.playPause();
+    if (engine.playing) {
+      engine.pause();
+      setState((s) => ({ ...s, playing: false }));
+    } else {
+      engine.play();
+      setState((s) => ({ ...s, playing: true }));
+    }
   }, []);
 
   const seek = useCallback((time: number) => {
-    const ws = wsRef.current;
-    if (!ws) return;
-    const dur = ws.getDuration() || 0;
-    ws.setTime(Math.max(0, Math.min(dur, time)));
+    engineRef.current?.seek(time);
   }, []);
 
   const skip = useCallback(
     (delta: number) => {
-      const ws = wsRef.current;
-      if (!ws) return;
-      seek(ws.getCurrentTime() + delta);
+      const engine = engineRef.current;
+      if (!engine) return;
+      seek(engine.getPosition() + delta);
     },
     [seek],
   );
 
   const setRate = useCallback((rate: number) => {
-    wsRef.current?.setPlaybackRate(rate, true);
-    const vocalEl = vocalElRef.current;
-    if (vocalEl) vocalEl.playbackRate = rate;
+    engineRef.current?.setRate(rate);
     setState((s) => ({ ...s, rate }));
   }, []);
 
@@ -353,11 +265,7 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
     const l = Math.max(0, Math.min(1, level));
     levelRef.current = l;
     const g = gainsForLevel(l);
-    const inst = instGainRef.current;
-    const voc = vocGainRef.current;
-    const t = ctxRef.current?.currentTime ?? 0;
-    if (inst) inst.gain.setTargetAtTime(voc ? g.inst : 1, t, 0.01);
-    if (voc) voc.gain.setTargetAtTime(g.voc, t, 0.01);
+    engineRef.current?.setGains(g.inst, g.voc);
     setState((s) => ({ ...s, vocalLevel: l }));
   }, []);
 
@@ -372,26 +280,27 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
     setState((s) => {
       const loop = !s.loop;
       loopRef.current = loop;
+      engineRef.current?.setLoop(loop);
       return { ...s, loop };
     });
   }, []);
 
   const markA = useCallback(() => {
     setState((s) => {
-      const t = wsRef.current?.getCurrentTime() ?? 0;
-      const a = s.region.a != null ? null : t;
-      const region: ABRegion = { a, b: a == null ? s.region.b : s.region.b };
+      const t = engineRef.current?.getPosition() ?? 0;
+      const region: ABRegion = { a: s.region.a != null ? null : t, b: s.region.b };
       regionRef.current = region;
+      engineRef.current?.setRegion(region);
       return { ...s, region };
     });
   }, []);
 
   const markB = useCallback(() => {
     setState((s) => {
-      const t = wsRef.current?.getCurrentTime() ?? 0;
-      const b = s.region.b != null ? null : t;
-      const region: ABRegion = { a: s.region.a, b };
+      const t = engineRef.current?.getPosition() ?? 0;
+      const region: ABRegion = { a: s.region.a, b: s.region.b != null ? null : t };
       regionRef.current = region;
+      engineRef.current?.setRegion(region);
       return { ...s, region };
     });
   }, []);
@@ -399,7 +308,15 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
   const clearRegion = useCallback(() => {
     const region: ABRegion = { a: null, b: null };
     regionRef.current = region;
+    engineRef.current?.setRegion(region);
     setState((s) => ({ ...s, region }));
+  }, []);
+
+  const subscribeTime = useCallback((cb: (t: number) => void) => {
+    timeSubsRef.current.add(cb);
+    return () => {
+      timeSubsRef.current.delete(cb);
+    };
   }, []);
 
   return useMemo(
@@ -415,7 +332,8 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
       markA,
       markB,
       clearRegion,
+      subscribeTime,
     }),
-    [state, playPause, seek, skip, setRate, setVocalLevel, setMix, toggleLoop, markA, markB, clearRegion],
+    [state, playPause, seek, skip, setRate, setVocalLevel, setMix, toggleLoop, markA, markB, clearRegion, subscribeTime],
   );
 }
