@@ -39,6 +39,7 @@ from karaoke.api.cookies_store import (
     CookieValidationError,
     validate_netscape_cookies,
 )
+from karaoke.api.preflight import match_url
 from karaoke.api.ws import forget_job, publish_stage
 from karaoke.config import Settings, get_settings
 from karaoke.db.models import Job, JobStatus
@@ -228,6 +229,15 @@ class LyricsPayload(BaseModel):
     lines: list[LyricsLine] | None
     plain: str | None
     source: str
+
+
+class PreflightOut(BaseModel):
+    """Offline yt-dlp URL-support verdict (issue #180) — see
+    :class:`karaoke.api.preflight.PreflightResult` for field semantics."""
+
+    supported: bool
+    extractor: str | None
+    generic_only: bool
 
 
 class ConfigOut(BaseModel):
@@ -530,6 +540,26 @@ async def list_jobs(
     return [
         JobOut.from_orm_job(j, public_base_url=settings.public_base_url) for j in jobs
     ]
+
+
+@router.get("/preflight", response_model=PreflightOut, tags=["meta"])
+async def preflight(
+    url: str = "",
+    owner: Owner = Depends(require_owner),
+) -> PreflightOut:
+    """Would the deployed yt-dlp recognise ``url``? Offline, read-only.
+
+    A pure query — no job row, no DB write, no network. Unsupported or
+    malformed input is a normal 200 verdict, not an error: the caller (the
+    extension's one-click submit, SPA inline validation) is asking a
+    question, not issuing a command. Same auth gate as ``/jobs``.
+    """
+    result = match_url(url)
+    return PreflightOut(
+        supported=result.supported,
+        extractor=result.extractor,
+        generic_only=result.generic_only,
+    )
 
 
 @router.get("/me", response_model=MeOut, tags=["meta"])
