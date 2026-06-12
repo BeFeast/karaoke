@@ -290,7 +290,9 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   to { opacity: 1; }
 }
 .modal {
-  width: 420px;
+  /* Keep side margins on phone widths (#187) — never wider than the
+     viewport minus the overlay's 16px padding on each side. */
+  width: min(420px, calc(100vw - 32px));
   max-width: 100%;
   background: var(--bg-card);
   border: var(--rule);
@@ -479,6 +481,15 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 @keyframes toast-in {
   from { opacity: 0; transform: translate(-50%, 8px); }
   to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* ─── Booth account menu (SignInWall) ───────────────────────────────────── */
+/* Menu-item hover as a class behind the hover-capability guard (#187) —
+   the old inline onMouseEnter/onMouseLeave background mutation left the
+   highlight stuck after a tap on iOS (sticky hover). */
+.signin-item { background: transparent; }
+@media (hover: hover) {
+  .signin-item:hover { background: var(--bg-soft); }
 }
 
 /* ── MARQUEE RECIPES (byte-exact port + sanctioned mobile overrides, Refs #184 — do not edit otherwise) ── */
