@@ -7,11 +7,16 @@
 // come from App.tsx, pipeline stage rows derive from status/progress/
 // stage_note, costs derive from gpu_cost_micros, and the export's fictional
 // copy (STAGE_DETAIL, cost caps, est-costs, teardown "destroyed ✓") is gone.
+// Phone widths (#186) restack this shipped structure behind usePhoneLayout()
+// — no m-* mobile booth exists in the export (m-booth.jsx is a desktop
+// board), so these are responsive adaptations with existing tokens/recipes
+// only; the desktop branches are the untouched port.
 
 import { type CSSProperties, type ReactNode, useRef, useState } from "react";
 import type { JobOut, JobStatus } from "../api";
 import { canRetryJob, type JobFilter, statusMeta } from "../jobStatus";
 import { costDollars, fmtDuration, formatRelativeTime, type JobSort } from "../lib/jobListUtils";
+import { usePhoneLayout } from "../lib/layout";
 import { sourceDisplay } from "../lib/source";
 import { itemHash } from "../router";
 import { MBulbs, MDuetWave, MicMark, MWipe } from "./marks";
@@ -26,8 +31,15 @@ export interface JobActions {
 // (booth.jsx:91-97): mark + wordmark · spacer · authControl. The auth control
 // is the LAN chip or the Clerk avatar menu, injected by the boot shell.
 export function MarqueeTopBar({ authControl }: { authControl?: ReactNode }) {
+  // Phone (#186): the row wraps instead of overflowing — same elements, same
+  // order, tighter side padding; the fixed height becomes a minHeight so a
+  // wrapped auth control stays visible. Shared with Settings (wave 4/4 gives
+  // that page its own pass). Desktop branch byte-identical.
+  const phone = usePhoneLayout();
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "0 24px", height: 56, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+    <div style={phone
+      ? { display: "flex", alignItems: "center", gap: 12, padding: "8px 14px", minHeight: 56, borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap" }
+      : { display: "flex", alignItems: "center", gap: 12, padding: "0 24px", height: 56, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
       <MicMark size={24} />
       <span style={{ fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 17, letterSpacing: "-0.01em" }}>Karaoke</span>
       <span style={{ flex: 1 }}></span>
@@ -67,8 +79,11 @@ function jobChip(job: JobOut): { kind: string; label: string } {
 }
 
 function PStageRow({ name, detail, state, pct }: { name: string; detail: string; state: StageState; pct: number }) {
+  // minmax(0, 1fr) instead of the ported 1fr (#186): a long stage_note must
+  // shrink-and-ellipsize, never widen the grid past the viewport — the
+  // #51-era horizontal-overflow regression class.
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "58px 1fr auto", gap: 12, alignItems: "baseline", padding: "6px 0", borderTop: "1px solid var(--border-soft)" }}>
+    <div style={{ display: "grid", gridTemplateColumns: "58px minmax(0, 1fr) auto", gap: 12, alignItems: "baseline", padding: "6px 0", borderTop: "1px solid var(--border-soft)" }}>
       <span className="m-mono" style={{ fontSize: 11.5, fontWeight: 700, color: state === "todo" ? "var(--muted)" : "var(--fg)" }}>{name}</span>
       <span className="m-mono" style={{ fontSize: 11.5, color: "var(--muted)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {state === "run" ? <MWipe text={detail} pct={pct} size={11.5} /> : detail}
@@ -116,6 +131,11 @@ function PRunningCard({ job, wsOpen, actions }: { job: JobOut; wsOpen: boolean; 
 
 // Terminal rows: ready / failed / cancelled (booth.jsx:122-137).
 function CompactRow({ job, actions }: { job: JobOut; actions: JobActions }) {
+  // Phone (#186): the single ported row packed chip + title + meta + up to
+  // four trailing controls + a fixed-width sparkline — at 390px the title's
+  // minWidth: 0 ellipsis squeezed to ~nothing. Two lines instead: chip +
+  // title, then meta + right-aligned actions. Desktop branch byte-identical.
+  const phone = usePhoneLayout();
   const chip = jobChip(job);
   const source = sourceDisplay(job.source_url);
   const title = job.title?.trim() || source.label;
@@ -125,6 +145,45 @@ function CompactRow({ job, actions }: { job: JobOut; actions: JobActions }) {
         .filter(Boolean)
         .join(" · ")
     : (formatRelativeTime(job.created_at) ?? "");
+  // Shared between the two layouts so the controls can't drift apart.
+  // Uploads have no external source to open, and no URL to resubmit —
+  // the ↗ anchor and the Retry control are URL-job affordances (#173).
+  const openOriginal = source.kind === "url" && (
+    <a href={job.source_url} target="_blank" rel="noopener" title="Original video" className="m-btn sm ghost" style={{ textDecoration: "none" }}>↗</a>
+  );
+  const singAction = ready && <a className="m-btn sm primary" href={itemHash(job.job_token)} style={{ textDecoration: "none" }}>▸ Sing</a>;
+  const retryAction = canRetryJob(job) && <button className="m-btn sm" type="button" onClick={() => actions.onRetry(job)}>↻ Retry</button>;
+  const removeAction = <button className="m-btn sm ghost" type="button" title="Remove job + artifacts" onClick={() => actions.onDelete(job)}>✕</button>;
+  const failedBox = job.status === "failed" && job.error && (
+    <div className="m-mono" style={{ marginTop: 8, padding: "8px 10px", borderRadius: "var(--radius)", background: "color-mix(in oklab, var(--err) 9%, var(--bg))", border: "1px solid color-mix(in oklab, var(--err) 24%, transparent)", color: "var(--err)", fontSize: 11, lineHeight: 1.5, overflowWrap: "anywhere" }}>
+      {job.error}
+    </div>
+  );
+  if (phone) {
+    // MDuetWave deliberately not rendered here — the m-booth.jsx CompactJob
+    // sparkline is decorative and starves the title at 390px (recorded
+    // adaptation decision, #186); the failed-error box spans the card.
+    return (
+      <div style={{ padding: "11px 16px", background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span className={`m-chip ${chip.kind}`}><span className="m-dot"></span>{chip.label}</span>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+          <span className="m-mono" style={{ minWidth: 0, fontSize: 10.5, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {metaText}
+            {job.gpu_instance_id && <span> · receipt: #{job.gpu_instance_id}</span>}
+          </span>
+          <span style={{ flex: 1 }}></span>
+          {openOriginal}
+          {singAction}
+          {retryAction}
+          {removeAction}
+        </div>
+        {failedBox}
+      </div>
+    );
+  }
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 16px", background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)" }}>
       <span className={`m-chip ${chip.kind}`}><span className="m-dot"></span>{chip.label}</span>
@@ -134,21 +193,13 @@ function CompactRow({ job, actions }: { job: JobOut; actions: JobActions }) {
           {metaText}
           {job.gpu_instance_id && <span> · receipt: #{job.gpu_instance_id}</span>}
         </div>
-        {job.status === "failed" && job.error && (
-          <div className="m-mono" style={{ marginTop: 8, padding: "8px 10px", borderRadius: "var(--radius)", background: "color-mix(in oklab, var(--err) 9%, var(--bg))", border: "1px solid color-mix(in oklab, var(--err) 24%, transparent)", color: "var(--err)", fontSize: 11, lineHeight: 1.5, overflowWrap: "anywhere" }}>
-            {job.error}
-          </div>
-        )}
+        {failedBox}
       </div>
-      {/* uploads have no external source to open, and no URL to resubmit —
-          the ↗ anchor and the Retry control are URL-job affordances (#173) */}
-      {source.kind === "url" && (
-        <a href={job.source_url} target="_blank" rel="noopener" title="Original video" className="m-btn sm ghost" style={{ textDecoration: "none" }}>↗</a>
-      )}
+      {openOriginal}
       {ready && <MDuetWave seed={job.id} w={100} h={22} />}
-      {ready && <a className="m-btn sm primary" href={itemHash(job.job_token)} style={{ textDecoration: "none" }}>▸ Sing</a>}
-      {canRetryJob(job) && <button className="m-btn sm" type="button" onClick={() => actions.onRetry(job)}>↻ Retry</button>}
-      <button className="m-btn sm ghost" type="button" title="Remove job + artifacts" onClick={() => actions.onDelete(job)}>✕</button>
+      {singAction}
+      {retryAction}
+      {removeAction}
     </div>
   );
 }
@@ -250,6 +301,10 @@ export function BoothScreen({
   /** Overlays (ConfirmDialog) rendered inside the booth's token scope. */
   children?: ReactNode;
 }) {
+  // Phone (#186): the submit console stacks — input on its own full-width
+  // row, then the two actions side by side. Live matchMedia so rotation
+  // re-lays-out. Desktop branch byte-identical.
+  const phone = usePhoneLayout();
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -280,29 +335,57 @@ export function BoothScreen({
       });
   };
 
+  // Submit-console controls, shared by both layouts so they can't drift.
+  // The input keeps the ported var(--font-mono) / 10px 13px / 14px verbatim;
+  // on phone it drops flex: 1 (a column child stretches full width instead)
+  // and the primary action grows to fill its row.
+  const urlInput = (
+    <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste a YouTube link…"
+      onKeyDown={(e) => e.key === "Enter" && doSubmit()}
+      disabled={busy || uploading} autoComplete="off" spellCheck={false} aria-label="Source URL"
+      style={{ flex: phone ? undefined : 1, minWidth: 0, padding: "10px 13px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg)", color: "var(--fg)", fontSize: 14, fontFamily: "var(--font-mono)", outline: "none" }}></input>
+  );
+  const submitAction = (
+    <button className="m-btn primary" type="button" onClick={doSubmit} disabled={busy || uploading || !url.trim()} style={{ fontSize: 14, padding: "8px 18px", flex: phone ? 1 : undefined }}>
+      {busy ? "Staging…" : "Put it on stage"}
+    </button>
+  );
+  const uploadAction = (
+    <button className="m-btn ghost" type="button" onClick={() => fileRef.current?.click()} disabled={busy || uploading} style={{ fontSize: 14, padding: "8px 14px", whiteSpace: "nowrap" }}>
+      {uploading ? "Uploading…" : "Upload audio"}
+    </button>
+  );
+  const filePicker = (
+    <input ref={fileRef} type="file" accept={UPLOAD_ACCEPT} style={{ display: "none" }}
+      onChange={(e) => {
+        const file = e.currentTarget.files?.[0];
+        if (file) doUpload(file);
+      }} />
+  );
+
   return (
     <div className="m-booth" style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}>
       <MarqueeTopBar authControl={authControl} />
 
       <div style={{ flex: 1, padding: "24px 24px 16px", maxWidth: 780, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", minHeight: 0 }}>
         <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)", padding: 16 }}>
-          <div style={{ display: "flex", gap: 10 }}>
-            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste a YouTube link…"
-              onKeyDown={(e) => e.key === "Enter" && doSubmit()}
-              disabled={busy || uploading} autoComplete="off" spellCheck={false} aria-label="Source URL"
-              style={{ flex: 1, minWidth: 0, padding: "10px 13px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg)", color: "var(--fg)", fontSize: 14, fontFamily: "var(--font-mono)", outline: "none" }}></input>
-            <button className="m-btn primary" type="button" onClick={doSubmit} disabled={busy || uploading || !url.trim()} style={{ fontSize: 14, padding: "8px 18px" }}>
-              {busy ? "Staging…" : "Put it on stage"}
-            </button>
-            <button className="m-btn ghost" type="button" onClick={() => fileRef.current?.click()} disabled={busy || uploading} style={{ fontSize: 14, padding: "8px 14px", whiteSpace: "nowrap" }}>
-              {uploading ? "Uploading…" : "Upload audio"}
-            </button>
-            <input ref={fileRef} type="file" accept={UPLOAD_ACCEPT} style={{ display: "none" }}
-              onChange={(e) => {
-                const file = e.currentTarget.files?.[0];
-                if (file) doUpload(file);
-              }} />
-          </div>
+          {phone ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {urlInput}
+              <div style={{ display: "flex", gap: 10 }}>
+                {submitAction}
+                {uploadAction}
+              </div>
+              {filePicker}
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 10 }}>
+              {urlInput}
+              {submitAction}
+              {uploadAction}
+              {filePicker}
+            </div>
+          )}
           <div className="m-mono" style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11, color: "var(--muted)", alignItems: "center", flexWrap: "wrap" }}>
             <span>one link →</span>
             <span className="m-stem vox">vocals.mp3</span>
