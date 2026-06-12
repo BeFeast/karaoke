@@ -13,6 +13,7 @@
 //     waveform here would violate the visual-only wavesurfer rule.
 
 import { useRef } from "react";
+import { railPct } from "../player/engineMath";
 
 export interface TimedLine {
   /** Line start in seconds (from the LRC timestamp). */
@@ -119,6 +120,55 @@ export function ProtoFader({
         </div>
       </div>
       <span className="m-mono" style={{ fontSize: 10, color: ducked ? color : "var(--muted)" }}>{ducked ? "duck" : shown + "%"}</span>
+    </div>
+  );
+}
+
+// perf.jsx:75 / m-perf.jsx:42 — the karaoke ↔ full-voice rail. The export's
+// raw mid-stop literals resolve as oklab mixes of the duet pair (audit item 4).
+export const BLEND_GRADIENT =
+  "linear-gradient(90deg, var(--inst), color-mix(in oklab, var(--inst) 72%, var(--vox)) 45%, color-mix(in oklab, var(--inst) 28%, var(--vox)) 55%, var(--vox))";
+
+// phone blend rail (m-perf.jsx:36-49) — the design's stated mobile fader
+// alternative (the phone perf screen has no vertical faders). Extracted
+// verbatim from Perf's phone branch (#156) so the phone console (#185)
+// reuses the SAME token-resolved recipe; Perf's rendering is unchanged.
+export function BlendRail({
+  vox,
+  onVox,
+  reducedMotion,
+}: {
+  /** Vocal level, 0–100. */
+  vox: number;
+  onVox: (pct: number) => void;
+  reducedMotion: boolean;
+}) {
+  // perf.jsx:24-35 drag mechanics; position→percent is the pure railPct.
+  const drag = (e: React.PointerEvent) => {
+    const rail = e.currentTarget;
+    const move = (ev: { clientX: number }) => {
+      const r = rail.getBoundingClientRect();
+      onVox(railPct(ev.clientX, r.left, r.width));
+    };
+    move(e);
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  return (
+    <div>
+      <div className="m-mono" style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--muted)", marginBottom: 8 }}>
+        <span className="m-stem inst">karaoke</span>
+        <span style={{ color: "var(--fg-soft)" }}>vox {vox}%</span>
+        <span className="m-stem vox">full voice</span>
+      </div>
+      <div onPointerDown={drag} style={{ position: "relative", height: 28, display: "flex", alignItems: "center", cursor: "ew-resize", touchAction: "none" }}>
+        <div style={{ position: "absolute", left: 0, right: 0, height: 6, borderRadius: 3, background: BLEND_GRADIENT }}></div>
+        <span style={{ position: "absolute", left: vox + "%", top: "50%", transform: "translate(-50%,-50%)", width: 26, height: 26, borderRadius: "50%", background: "var(--fg)", border: "4px solid var(--bg)", boxShadow: "var(--shadow-sm)", transition: reducedMotion ? undefined : "left .1s" }}></span>
+      </div>
     </div>
   );
 }

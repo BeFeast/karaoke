@@ -13,6 +13,7 @@ export function MWipe({
   weight = 500,
   fill,
   dim,
+  style,
 }: {
   text: string;
   pct: number;
@@ -21,9 +22,16 @@ export function MWipe({
   weight?: number;
   fill?: string;
   dim?: string;
+  /**
+   * Extra styles on the .m-wipe root. The #176 overflow cap (maxWidth +
+   * ellipsis) must live on the element that owns the nowrap text or the
+   * clipped line gets no ellipsis (#185 phone setlist); render-identical
+   * when omitted.
+   */
+  style?: React.CSSProperties;
 }) {
   return (
-    <span className="m-wipe" style={{ fontSize: size, fontFamily: family, fontWeight: weight }}>
+    <span className="m-wipe" style={{ fontSize: size, fontFamily: family, fontWeight: weight, ...style }}>
       <span className="w-dim" style={dim ? { color: dim } : undefined}>{text}</span>
       <span className="w-fill" style={{ width: pct + "%", ...(fill ? { color: fill } : null) }} aria-hidden="true">{text}</span>
     </span>

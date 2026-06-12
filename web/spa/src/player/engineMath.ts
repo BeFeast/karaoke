@@ -58,6 +58,17 @@ export function loopSeekTarget(
 }
 
 /**
+ * Horizontal rail drag → percent: where `clientX` falls along a track that
+ * starts at `rectLeft` and spans `rectWidth`, clamped to [0, 100] and
+ * rounded. Shared by the blend rails (Perf's drag + the BlendRail recipe).
+ * A zero/negative width (rail not laid out yet) maps to 0, never NaN.
+ */
+export function railPct(clientX: number, rectLeft: number, rectWidth: number): number {
+  if (rectWidth <= 0) return 0;
+  return Math.round(Math.max(0, Math.min(100, ((clientX - rectLeft) / rectWidth) * 100)));
+}
+
+/**
  * Waveform peaks from one decoded channel: max(|sample|) per bucket,
  * normalized so the loudest bucket is 1 (all-zero input stays all-zero).
  * 4096 buckets is plenty for a full-width waveform canvas.

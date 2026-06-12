@@ -37,6 +37,12 @@ export interface KaraokePlayerOptions {
   colors: { wave: string; progress: string; cursor: string };
   /** Skip the moving-cursor animation work for reduced-motion users. */
   reducedMotion: boolean;
+  /**
+   * Waveform canvas height in px (default 96). Read when the engine/canvas
+   * is (re)built — a mid-session change does not re-create the canvas
+   * (#185: the phone height is a mount-time choice, rotation keeps it).
+   */
+  waveHeight?: number;
 }
 
 export type { ABRegion };
@@ -80,7 +86,7 @@ export interface KaraokePlayerApi extends KaraokePlayerState {
 }
 
 export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
-  const { instrumentalUrl, vocalsUrl, container, colors, reducedMotion } = opts;
+  const { instrumentalUrl, vocalsUrl, container, colors, reducedMotion, waveHeight = 96 } = opts;
 
   const [state, setState] = useState<KaraokePlayerState>({
     ready: false,
@@ -148,7 +154,7 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
           container,
           peaks: [computePeaks(loaded.instrumentalBuffer.getChannelData(0), 4096)],
           duration: loaded.duration,
-          height: 96,
+          height: waveHeight,
           waveColor: c.wave,
           progressColor: c.progress,
           cursorColor: c.cursor,

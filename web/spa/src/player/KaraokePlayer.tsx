@@ -16,12 +16,18 @@
 // overlay (components/Perf.tsx), rendered INSIDE this component as plain
 // component state — no route change, no re-mount — so the engine instance
 // (and playback) persists across enter/exit.
+//
+// Phone layout (#185, declared adaptation — no m-* source designs a mobile
+// console): the console row stacks vertically, the fader pod is replaced by
+// the m-perf BlendRail recipe + a full-width DROP, the play circle grows to
+// 48px, the setlist dimmer rail gets a 44px hit zone, and the waveform
+// canvas drops to 72px. Desktop rendering is unchanged.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { lyricState, ProtoFader, type TimedLine } from "../components/stage-core";
+import { BlendRail, lyricState, ProtoFader, type TimedLine } from "../components/stage-core";
 import { MBulbs, MWipe } from "../components/marks";
 import { Perf } from "../components/Perf";
-import { useCoarsePointer } from "../lib/layout";
+import { PHONE_QUERY, useCoarsePointer, usePhoneLayout } from "../lib/layout";
 import type { StageTheme } from "../theme";
 import { type KaraokePlayerApi, PLAYBACK_RATES, useKaraokePlayer } from "./useKaraokePlayer";
 
@@ -60,6 +66,9 @@ function prefersReducedMotion(): boolean {
 // none) maps onto markA/markB/clearRegion: the engine wraps at B whenever a
 // region is set, and a B within 1 s of A cancels (the design's guard).
 function TransportBar({ player, onPerf }: { player: KaraokePlayerApi; onPerf: () => void }) {
+  // Phone: only the play circle grows (40 → 48, thumb-first); every other
+  // control stays in the same wrap row — none removed (#185).
+  const phone = usePhoneLayout();
   const { a, b } = player.region;
   const cycleLoop = () => {
     if (a == null) player.markA();
@@ -72,7 +81,7 @@ function TransportBar({ player, onPerf }: { player: KaraokePlayerApi; onPerf: ()
     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
       <button className="m-btn primary" type="button" onClick={player.playPause} disabled={!player.ready}
         aria-label={player.playing ? "Pause" : "Play"} title="Play / pause (Space)"
-        style={{ width: 40, height: 40, borderRadius: "50%", justifyContent: "center", fontSize: 14 }}>
+        style={{ width: phone ? 48 : 40, height: phone ? 48 : 40, borderRadius: "50%", justifyContent: "center", fontSize: 14 }}>
         {player.playing ? "❚❚" : "▶"}
       </button>
       <button className="m-btn sm" type="button" onClick={() => player.skip(-5)} disabled={!player.ready} title="Back 5 seconds (←)">−5s</button>
@@ -98,6 +107,38 @@ function TransportBar({ player, onPerf }: { player: KaraokePlayerApi; onPerf: ()
   );
 }
 
+// Hold "V" to duck, design behavior (window-level so it works mid-song
+// without hunting for focus) — but never while typing in a field. Shared by
+// the desktop console module and its phone replacement (#185).
+function useHoldVDuck(duckStart: () => void, duckEnd: () => void) {
+  useEffect(() => {
+    const isField = (t: EventTarget | null) =>
+      t instanceof HTMLElement &&
+      (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+    const dn = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === "v" && !e.repeat && !isField(e.target)) duckStart();
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === "v") duckEnd();
+    };
+    window.addEventListener("keydown", dn);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", dn);
+      window.removeEventListener("keyup", up);
+    };
+  }, [duckStart, duckEnd]);
+}
+
+// iOS long-press guards for the hold-to-DROP gesture (#185): no text
+// selection, no callout sheet, no context menu mid-hold. Applied on both
+// widths — all four are inert on desktop.
+const DROP_HOLD_GUARDS = {
+  touchAction: "none",
+  userSelect: "none",
+  WebkitTouchCallout: "none",
+} as const;
+
 // ── ConsoleModule (stage.jsx:26-46): faders + DROP ──────────────────────────
 function ConsoleModule({
   voxPct,
@@ -119,25 +160,7 @@ function ConsoleModule({
   // Touch shows no keyboard copy (#184): the "V" suffix is dropped on coarse
   // pointers — the hold-to-drop pointer gesture itself works everywhere.
   const coarse = useCoarsePointer();
-  // Hold "V" to duck, design behavior (window-level so it works mid-song
-  // without hunting for focus) — but never while typing in a field.
-  useEffect(() => {
-    const isField = (t: EventTarget | null) =>
-      t instanceof HTMLElement &&
-      (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
-    const dn = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() === "v" && !e.repeat && !isField(e.target)) duckStart();
-    };
-    const up = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() === "v") duckEnd();
-    };
-    window.addEventListener("keydown", dn);
-    window.addEventListener("keyup", up);
-    return () => {
-      window.removeEventListener("keydown", dn);
-      window.removeEventListener("keyup", up);
-    };
-  }, [duckStart, duckEnd]);
+  useHoldVDuck(duckStart, duckEnd);
   return (
     <div style={{ display: "flex", gap: 14, padding: "12px 16px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", alignItems: "center" }}>
       <ProtoFader label="VOX" color="var(--vox)" value={voxPct} ducked={ducked} onChange={onVox} />
@@ -145,9 +168,49 @@ function ConsoleModule({
       <div style={{ display: "grid", gap: 8 }}>
         <button className="m-btn sm" type="button"
           onPointerDown={duckStart} onPointerUp={duckEnd} onPointerLeave={duckEnd}
-          style={{ borderColor: "var(--vox)", color: ducked ? "var(--accent-fg)" : "var(--vox)", background: ducked ? "var(--vox)" : "transparent", fontWeight: 700, justifyContent: "center" }}>DROP</button>
+          onContextMenu={(e) => e.preventDefault()}
+          style={{ borderColor: "var(--vox)", color: ducked ? "var(--accent-fg)" : "var(--vox)", background: ducked ? "var(--vox)" : "transparent", fontWeight: 700, justifyContent: "center", ...DROP_HOLD_GUARDS }}>DROP</button>
         <span className="m-mono" style={{ fontSize: 9, color: "var(--muted)", textAlign: "center", lineHeight: 1.4 }}>hold to drop vocals<br></br>{coarse ? "while you sing" : 'while you sing · or "V"'}</span>
       </div>
+    </div>
+  );
+}
+
+// ── Phone console (#185) — declared adaptation, no m-* console source ───────
+// The two 34×132 ProtoFaders never fit a 390px column, and the only
+// phone-designed control surface in the export (m-perf PhonePerf) has no
+// vertical faders at all — its blend rail is the design's mobile fader
+// alternative, so the phone console renders BlendRail bound to VOX (INST is
+// not rendered; it keeps its current engine value — both faders skin the ONE
+// crossfade parameter anyway). DROP stays on purpose: m-perf's phone screen
+// is performance mode, not the console, and DROP is core console
+// functionality — full width and ≥44px tall for the thumb, same hold
+// semantics and recipe styling as the desktop column.
+function PhoneConsoleModule({
+  voxPct,
+  onVox,
+  ducked,
+  duckStart,
+  duckEnd,
+  reducedMotion,
+}: {
+  voxPct: number;
+  onVox: (pct: number) => void;
+  ducked: boolean;
+  duckStart: () => void;
+  duckEnd: () => void;
+  reducedMotion: boolean;
+}) {
+  const coarse = useCoarsePointer();
+  useHoldVDuck(duckStart, duckEnd);
+  return (
+    <div style={{ display: "grid", gap: 12, padding: "12px 16px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)" }}>
+      <BlendRail vox={voxPct} onVox={onVox} reducedMotion={reducedMotion} />
+      <button className="m-btn" type="button"
+        onPointerDown={duckStart} onPointerUp={duckEnd} onPointerLeave={duckEnd}
+        onContextMenu={(e) => e.preventDefault()}
+        style={{ minHeight: 44, borderColor: "var(--vox)", color: ducked ? "var(--accent-fg)" : "var(--vox)", background: ducked ? "var(--vox)" : "transparent", fontWeight: 700, justifyContent: "center", ...DROP_HOLD_GUARDS }}>DROP</button>
+      <span className="m-mono" style={{ fontSize: 9, color: "var(--muted)", textAlign: "center", lineHeight: 1.4 }}>hold to drop vocals<br></br>{coarse ? "while you sing" : 'while you sing · or "V"'}</span>
     </div>
   );
 }
@@ -155,6 +218,9 @@ function ConsoleModule({
 // ── SetlistModule (stage.jsx:49-89): marquee sign + spotlight dimmer ────────
 // The vertical rail drives the SAME single crossfade parameter as the faders.
 function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: TimedLine[] }) {
+  // Phone: the dimmer rail keeps its 4px bar but the drag hit zone widens to
+  // 44px and the thumb grows to the m-perf 26px/4px-border resolution (#185).
+  const phone = usePhoneLayout();
   const ls = lyricState(lines, player.currentTime);
   const gapBulbs = ls.inGap && ls.next ? Math.min(8, Math.ceil(ls.gap)) : 0;
   const vox = Math.round(player.vocalLevel * 100);
@@ -175,11 +241,18 @@ function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: Tim
   };
   return (
     <div style={{ display: "flex", gap: 16, alignItems: "stretch" }}>
-      <div className="m-sign" style={{ flex: 1, padding: "16px 22px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 9, textAlign: "center" }}>
+      {/* Phone (#185): the sign must be allowed to shrink (minWidth: 0) and
+          the current-line wipe gets the #176 console cap (maxWidth +
+          ellipsis on the .m-wipe root) — the nowrap .m-wipe recipe never
+          shrinks, so a real lyric line blew the row past the viewport and
+          pushed the dimmer rail off-screen (pre-existing at 390px), which
+          would have left the widened hit zone unreachable. */}
+      <div className="m-sign" style={{ flex: 1, minWidth: phone ? 0 : undefined, padding: "16px 22px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 9, textAlign: "center" }}>
         <div style={{ fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 500, color: "var(--lyric-prev)", minHeight: 18 }}>{ls.prev ? ls.prev.text : "—"}</div>
         <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, lineHeight: 1.25, minHeight: 28 }}>
           {ls.cur
-            ? <MWipe text={ls.cur.text} pct={ls.sung} size={22} family="var(--font-display)" weight={700} fill="var(--accent)" dim="var(--lyric-dim)" />
+            ? <MWipe text={ls.cur.text} pct={ls.sung} size={22} family="var(--font-display)" weight={700} fill="var(--accent)" dim="var(--lyric-dim)"
+                style={phone ? { maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" } : undefined} />
             : <span style={{ color: "var(--lyric-dim)" }}>{ls.next ? "get ready…" : "intro"}</span>}
         </div>
         <div style={{ fontFamily: "var(--font-display)", fontSize: 15, fontWeight: 540, color: "var(--lyric-next)", minHeight: 19 }}>{ls.next ? ls.next.text : "— end —"}</div>
@@ -189,9 +262,9 @@ function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: Tim
       </div>
       <div style={{ display: "grid", justifyItems: "center", gridTemplateRows: "auto 1fr auto", padding: "4px 0", gap: 7 }}>
         <span className="m-mono" style={{ fontSize: 9, color: "var(--vox)" }}>VOX</span>
-        <div onPointerDown={dimmerDrag} style={{ width: 16, display: "flex", justifyContent: "center", cursor: "ns-resize", touchAction: "none" }}>
+        <div onPointerDown={dimmerDrag} style={{ width: phone ? 44 : 16, display: "flex", justifyContent: "center", cursor: "ns-resize", touchAction: "none" }}>
           <div style={{ width: 4, borderRadius: 2, background: "linear-gradient(180deg, var(--vox), var(--inst))", position: "relative" }}>
-            <span style={{ position: "absolute", top: (100 - vox) + "%", left: "50%", transform: "translate(-50%,-50%)", width: 18, height: 18, borderRadius: "50%", background: "var(--fg)", border: "3px solid var(--bg)", transition: "top .1s" }}></span>
+            <span style={{ position: "absolute", top: (100 - vox) + "%", left: "50%", transform: "translate(-50%,-50%)", width: phone ? 26 : 18, height: phone ? 26 : 18, borderRadius: "50%", background: "var(--fg)", border: phone ? "4px solid var(--bg)" : "3px solid var(--bg)", transition: "top .1s" }}></span>
           </div>
         </div>
         <span className="m-mono" style={{ fontSize: 9, color: "var(--muted)" }}>{vox}%</span>
@@ -280,6 +353,15 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
   const reducedMotion = useMemo(prefersReducedMotion, []);
   // Touch shows no keyboard copy (#184): the hint row swaps to a tap hint.
   const coarse = useCoarsePointer();
+  // Phone console restructure (#185) — live, so rotation re-lays-out.
+  const phone = usePhoneLayout();
+  // Waveform canvas height: 72px on phone (pre-Marquee precedent, #64 /
+  // 08fee3c), 96px otherwise. Mount-time choice on purpose — mid-session
+  // rotation does NOT need to re-create the canvas, so this is a useState
+  // initializer, not live matchMedia.
+  const [waveHeight] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia?.(PHONE_QUERY).matches ? 72 : 96,
+  );
 
   // Re-read canvas colors off the room container whenever ◐ flips the room
   // class — runs after the DOM commit, so the computed tokens are the new set.
@@ -298,6 +380,7 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
     container,
     colors,
     reducedMotion,
+    waveHeight,
   });
 
   // Expose the transport to siblings (#59). The playhead rides the engine's
@@ -411,7 +494,9 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
     >
       {/* waveform card (stage.jsx:126-129; ProtoWave contract → wavesurfer) */}
       <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "14px 16px" }}>
-        <div className="ksplayer-wave-wrap">
+        {/* min-height mirrors the mount-time canvas height inline — the
+            .ksplayer-wave-wrap 96px rule stays untouched (#185) */}
+        <div className="ksplayer-wave-wrap" style={{ minHeight: waveHeight }}>
           {!player.ready && !player.error && <div className="ksplayer-loading" aria-hidden />}
           <div ref={containerRef} className="ksplayer-wave" aria-label="Waveform — click to seek" />
           {player.error && <div className="ksplayer-error">{player.error}</div>}
@@ -419,15 +504,31 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
       </div>
 
       {view === "console" ? (
-        <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap" }}>
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 11, justifyContent: "center", minWidth: 0 }}>
+        // Phone (#185): the row stacks — the left column never forced a wrap
+        // (minWidth: 0), so side-by-side it starved TransportBar down to one
+        // control per row. Desktop branch byte-identical.
+        <div style={phone
+          ? { display: "flex", flexDirection: "column", gap: 16, alignItems: "stretch" }
+          : { display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap" }}>
+          <div style={phone
+            ? { display: "flex", flexDirection: "column", gap: 11, minWidth: 0 }
+            : { flex: 1, display: "flex", flexDirection: "column", gap: 11, justifyContent: "center", minWidth: 0 }}>
             <TransportBar player={player} onPerf={openPerf} />
             <div className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)" }}>{coarse ? "tap the wave to seek" : "space play · ←/→ seek · V drops vocals · click wave to seek"}</div>
             <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 650, minHeight: 22 }}>
               {lines.length > 0 && <LiveLyricWipe lines={lines} subscribeTime={player.subscribeTime} />}
             </div>
           </div>
-          {player.hasVocals && (
+          {player.hasVocals && (phone ? (
+            <PhoneConsoleModule
+              voxPct={voxPct}
+              onVox={onVox}
+              ducked={ducked}
+              duckStart={duckStart}
+              duckEnd={duckEnd}
+              reducedMotion={reducedMotion}
+            />
+          ) : (
             <ConsoleModule
               voxPct={voxPct}
               instPct={instPct}
@@ -437,7 +538,7 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
               duckStart={duckStart}
               duckEnd={duckEnd}
             />
-          )}
+          ))}
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
