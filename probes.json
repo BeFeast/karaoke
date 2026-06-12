@@ -1,0 +1,209 @@
+{
+  "settings-media-390": {
+    "innerWidth": 390,
+    "scrollWidth": 390,
+    "noHorizontalOverflow": true,
+    "phoneQuery": true,
+    "coarse": true,
+    "hover": false,
+    "reduced": true
+  },
+  "settings-390": {
+    "input": {
+      "x": 31,
+      "y": 259,
+      "w": 328,
+      "h": 37
+    },
+    "mintBtn": {
+      "x": 31,
+      "y": 306,
+      "w": 328,
+      "h": 44
+    },
+    "revokeBtn": {
+      "x": 304.53,
+      "y": 424.5,
+      "w": 67.47,
+      "h": 44
+    },
+    "mintStacked": true,
+    "containerPad": "24px 16px 20px",
+    "ownerEllipsized": true,
+    "ownerRect": {
+      "x": 54,
+      "y": 488.5,
+      "w": 201.61,
+      "h": 15.75
+    },
+    "tokenRows": 1
+  },
+  "toast-css": {
+    "bottom": "24px",
+    "position": "fixed",
+    "zIndex": "80"
+  },
+  "settings-mint-390": {
+    "innerWidth": 390,
+    "scrollWidth": 390,
+    "noHorizontalOverflow": true,
+    "phoneQuery": true,
+    "coarse": true,
+    "hover": false,
+    "reduced": true
+  },
+  "settings-403-390": {
+    "text": "Minting requires Clerk sign-in or the machine bearer. Trusted-LAN callers can list and revoke passes but not mint them.",
+    "x": 31,
+    "w": 328,
+    "insideViewport": true,
+    "innerWidth": 390,
+    "scrollWidth": 390,
+    "noHorizontalOverflow": true,
+    "phoneQuery": true,
+    "coarse": true,
+    "hover": false,
+    "reduced": true
+  },
+  "confirm-390": {
+    "modal": {
+      "x": 16,
+      "y": 331.25,
+      "w": 358,
+      "h": 181.5
+    },
+    "cancel": {
+      "x": 205.77,
+      "y": 447.75,
+      "w": 68.31,
+      "h": 44
+    },
+    "confirm": {
+      "x": 282.08,
+      "y": 447.75,
+      "w": 70.92,
+      "h": 44
+    },
+    "sideMargins": {
+      "left": 16,
+      "right": 16
+    }
+  },
+  "confirm-media-390": {
+    "innerWidth": 390,
+    "scrollWidth": 390,
+    "noHorizontalOverflow": true,
+    "phoneQuery": true,
+    "coarse": true,
+    "hover": false,
+    "reduced": true
+  },
+  "booth-media-390": {
+    "innerWidth": 390,
+    "scrollWidth": 390,
+    "noHorizontalOverflow": true,
+    "phoneQuery": true,
+    "coarse": true,
+    "hover": false,
+    "reduced": true
+  },
+  "stage-console-media-390": {
+    "innerWidth": 390,
+    "scrollWidth": 390,
+    "noHorizontalOverflow": true,
+    "phoneQuery": true,
+    "coarse": true,
+    "hover": false,
+    "reduced": true
+  },
+  "stage-setlist-media-390": {
+    "innerWidth": 390,
+    "scrollWidth": 390,
+    "noHorizontalOverflow": true,
+    "phoneQuery": true,
+    "coarse": true,
+    "hover": false,
+    "reduced": true
+  },
+  "perf-media-390": {
+    "innerWidth": 390,
+    "scrollWidth": 390,
+    "noHorizontalOverflow": true,
+    "phoneQuery": true,
+    "coarse": true,
+    "hover": false,
+    "reduced": true
+  },
+  "settings-media-768": {
+    "innerWidth": 768,
+    "scrollWidth": 768,
+    "noHorizontalOverflow": true,
+    "phoneQuery": false,
+    "coarse": false,
+    "hover": false,
+    "reduced": true
+  },
+  "settings-768": {
+    "input": {
+      "x": 63,
+      "y": 241,
+      "w": 543.84,
+      "h": 37
+    },
+    "mintBtn": {
+      "x": 616.84,
+      "y": 241,
+      "w": 88.16,
+      "h": 37
+    },
+    "revokeBtn": {
+      "x": 656.53,
+      "y": 336.75,
+      "w": 61.47,
+      "h": 26
+    },
+    "mintStacked": false,
+    "containerPad": "24px 24px 20px",
+    "ownerEllipsized": true,
+    "ownerRect": {
+      "x": 315.63,
+      "y": 362,
+      "w": 201.61,
+      "h": 15.75
+    },
+    "tokenRows": 1
+  },
+  "confirm-768": {
+    "modal": {
+      "x": 174,
+      "y": 427.75,
+      "w": 420,
+      "h": 168.5
+    },
+    "cancel": {
+      "x": 425.77,
+      "y": 544.25,
+      "w": 68.31,
+      "h": 31
+    },
+    "confirm": {
+      "x": 502.08,
+      "y": 544.25,
+      "w": 70.92,
+      "h": 31
+    },
+    "sideMargins": {
+      "left": 174,
+      "right": 174
+    }
+  },
+  "perf-media-768": {
+    "innerWidth": 768,
+    "scrollWidth": 768,
+    "noHorizontalOverflow": true,
+    "phoneQuery": false,
+    "coarse": false,
+    "hover": false,
+    "reduced": true
+  }
+}

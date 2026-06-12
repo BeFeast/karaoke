@@ -1,0 +1,43 @@
+{
+  "hit-390": {
+    "button": {
+      "x": 339,
+      "y": 5.5,
+      "w": 44,
+      "h": 44
+    },
+    "circle": {
+      "x": 346,
+      "y": 12.5,
+      "w": 30,
+      "h": 30
+    },
+    "media": {
+      "coarse": true,
+      "hover": false
+    }
+  },
+  "menu-open-390": {
+    "open": true,
+    "signinItemCount": 3,
+    "signOutBg": "rgba(0, 0, 0, 0)",
+    "signOutColor": "rgb(168, 68, 47)"
+  },
+  "inside-tap-keeps-open": true,
+  "outside-tap-dismissed": true,
+  "hit-768": {
+    "button": {
+      "x": 714,
+      "y": 12.5,
+      "w": 30,
+      "h": 30
+    },
+    "circle": {
+      "x": 714,
+      "y": 12.5,
+      "w": 30,
+      "h": 30
+    }
+  },
+  "menu-open-768": true
+}
