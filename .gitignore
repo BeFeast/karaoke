@@ -57,3 +57,5 @@ jobs/
 *.wav
 *.mp4
 *.webm
+# ...except committed test fixtures (tiny generated tone, #172)
+!tests/fixtures/*.mp3

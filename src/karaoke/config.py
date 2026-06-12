@@ -174,6 +174,13 @@ class Settings(BaseSettings):
     r2_secret_access_key: str = ""  # KARAOKE_R2_SECRET_ACCESS_KEY
     r2_presign_ttl_s: int = 1800  # presigned-URL TTL — must outlive the wall_ceiling backstop (1200s) so the URL is valid when the worker finally runs.
 
+    # ---- Audio-file upload (POST /jobs/upload, #172) ----
+    # Hard cap on an accepted upload body: a Content-Length fast reject plus
+    # authoritative byte counting while streaming to disk. NOTE: the public
+    # host sits behind a Cloudflare tunnel whose free plan hard-caps request
+    # bodies at 100 MB at the edge — larger uploads are LAN-only.
+    max_upload_bytes: int = 200 * 1024 * 1024  # KARAOKE_MAX_UPLOAD_BYTES
+
     # NFS-mounted artifact root inside the coordinator container.
     artifact_root: str = "/srv/artifacts"
 
