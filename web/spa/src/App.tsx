@@ -8,10 +8,11 @@ import {
   type JobOut,
   listJobs,
   type RuntimeConfig,
+  uploadJob,
 } from "./api";
 import { BoothScreen, type JobActions } from "./components/Booth";
 import { ConfirmDialog, type ConfirmState } from "./components/ConfirmDialog";
-import { jobCounts, type JobFilter, jobMatchesFilter } from "./jobStatus";
+import { canRetryJob, jobCounts, type JobFilter, jobMatchesFilter } from "./jobStatus";
 import { filterJobs, type JobSort, sortJobs, todaySpendMicros } from "./lib/jobListUtils";
 import { connectJobSocket, isTerminal, type JobEvent } from "./ws";
 
@@ -157,6 +158,17 @@ export function App(props: {
     [refresh],
   );
 
+  // Audio-file upload (#173) — same receipt path as onCreate: the queued row
+  // arrives via refresh and then updates over the WS flow, no new plumbing.
+  const onUpload = useCallback(
+    async (file: File) => {
+      await uploadJob(file);
+      setFilter("all");
+      await refresh();
+    },
+    [refresh],
+  );
+
   const actions: JobActions = useMemo(
     () => ({
       onDelete: (job) => {
@@ -172,11 +184,16 @@ export function App(props: {
         });
       },
       onCancel: (job) => void runAction(() => cancelJob(job.id)),
-      onRetry: (job) =>
-        runAction(async () => {
+      onRetry: (job) => {
+        // The Booth hides Retry for upload:// jobs (no resubmittable URL —
+        // POST /jobs 422s the sentinel by design); guard here too so no
+        // caller can ever resubmit the sentinel (#173).
+        if (!canRetryJob(job)) return;
+        void runAction(async () => {
           await createJob({ url: job.source_url, title: job.title ?? undefined });
           setFilter("all");
-        }),
+        });
+      },
     }),
     [runAction],
   );
@@ -228,6 +245,7 @@ export function App(props: {
         version={version}
         todaySpend={todaySpend}
         onCreate={onCreate}
+        onUpload={onUpload}
         actions={actions}
         onClearFailed={onClearFailed}
         authControl={authControl}

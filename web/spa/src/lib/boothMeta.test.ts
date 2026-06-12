@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { JobOut } from "../api";
-import { jobCounts, jobMatchesFilter } from "../jobStatus";
+import { canRetryJob, jobCounts, jobMatchesFilter } from "../jobStatus";
 import { costDollars, fmtDuration, todaySpendMicros } from "./jobListUtils";
 
 function job(overrides: Partial<JobOut>): JobOut {
@@ -102,5 +102,22 @@ describe("jobMatchesFilter / jobCounts (relocated ex-Sidebar logic)", () => {
 
   test("counts mirror the filters (cancelled counts only toward all)", () => {
     expect(jobCounts(jobs)).toEqual({ all: 5, active: 2, completed: 1, failed: 1 });
+  });
+});
+
+describe("canRetryJob (#173)", () => {
+  test("failed/cancelled URL jobs can be retried", () => {
+    expect(canRetryJob(job({ status: "failed" }))).toBe(true);
+    expect(canRetryJob(job({ status: "cancelled" }))).toBe(true);
+  });
+
+  test("upload:// jobs never can — there is no resubmittable URL", () => {
+    expect(canRetryJob(job({ status: "failed", source_url: "upload://take.mp3" }))).toBe(false);
+    expect(canRetryJob(job({ status: "cancelled", source_url: "upload://take.mp3" }))).toBe(false);
+  });
+
+  test("non-terminal / completed statuses can't be retried regardless of source", () => {
+    expect(canRetryJob(job({ status: "completed" }))).toBe(false);
+    expect(canRetryJob(job({ status: "separating" }))).toBe(false);
   });
 });

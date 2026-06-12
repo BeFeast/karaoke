@@ -1,4 +1,5 @@
 import type { JobOut, JobStatus } from "./api";
+import { sourceDisplay } from "./lib/source";
 
 export type ChipKind = "ok" | "err" | "run" | "info" | "neutral";
 
@@ -125,4 +126,14 @@ export function artifactView(
 /** A failed/cancelled job can be retried by resubmitting its source URL. */
 export function canRetry(status: JobStatus): boolean {
   return status === "failed" || status === "cancelled";
+}
+
+/**
+ * Whether the Retry control applies to a job: terminal-retryable status AND
+ * a real URL source. Upload jobs (#173) can never be retried this way — the
+ * uploaded bytes don't round-trip back to the browser, and POST /jobs 422s
+ * the `upload://` sentinel by design; re-uploading the file is the retry.
+ */
+export function canRetryJob(job: JobOut): boolean {
+  return canRetry(job.status) && sourceDisplay(job.source_url).kind === "url";
 }

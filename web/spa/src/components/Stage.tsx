@@ -14,6 +14,7 @@ import { type CSSProperties, lazy, type ReactNode, Suspense, useCallback, useEff
 import { getLyrics, getShare, type LyricsPayload, type SharePayload } from "../api";
 import { artifactHref, artifactView, statusMeta } from "../jobStatus";
 import { fmtDuration, formatRelativeTime } from "../lib/jobListUtils";
+import { sourceDisplay } from "../lib/source";
 import { goDashboard, itemUrl } from "../router";
 import { type StageTheme, useStageTheme } from "../theme";
 import { MBulbs, MicMark } from "./marks";
@@ -240,6 +241,7 @@ function StageBody({
 }) {
   const meta = statusMeta(payload.status);
   const isComplete = payload.status === "completed";
+  const source = sourceDisplay(payload.source_url);
   const title = payload.title?.trim() || `Job ${payload.job_token.slice(0, 8)}`;
   const pct = Math.max(0, Math.min(100, Math.round(payload.progress)));
 
@@ -279,9 +281,14 @@ function StageBody({
           <div className="m-mono" style={{ fontSize: 11, color: "var(--muted)", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
             {metaBits && <span>{metaBits}</span>}
             {payload.owner_display_name && <span>shared by {payload.owner_display_name}</span>}
-            <a href={payload.source_url} target="_blank" rel="noopener" className="m-mono" style={{ color: "var(--info)", textDecoration: "none", overflowWrap: "anywhere" }}>
-              source: {payload.source_url.replace("https://", "")} ↗
-            </a>
+            {/* uploads (#173) have no external source — show the filename, no link */}
+            {source.kind === "url" ? (
+              <a href={payload.source_url} target="_blank" rel="noopener" className="m-mono" style={{ color: "var(--info)", textDecoration: "none", overflowWrap: "anywhere" }}>
+                source: {source.label.replace("https://", "")} ↗
+              </a>
+            ) : (
+              <span style={{ overflowWrap: "anywhere" }}>source: {source.label}</span>
+            )}
           </div>
           <h1 style={{ margin: "6px 0 0", fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 28, letterSpacing: "-0.02em", lineHeight: 1.1, overflowWrap: "anywhere" }}>{title}</h1>
           {(payload.artist || payload.album) && (
@@ -382,7 +389,9 @@ function StageBody({
             <a className="m-btn sm" href={lyricsFile.href} download>≡ {lyricsFile.name}</a>
           ) : null}
           <span style={{ flex: 1 }}></span>
-          <a className="m-btn sm ghost" href={payload.source_url} target="_blank" rel="noopener">▶ original ↗</a>
+          {source.kind === "url" && (
+            <a className="m-btn sm ghost" href={payload.source_url} target="_blank" rel="noopener">▶ original ↗</a>
+          )}
         </div>
       )}
     </>
