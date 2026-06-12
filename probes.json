@@ -1,0 +1,42 @@
+{
+  "branch_390_phone_touch": {
+    "innerWidth": 390,
+    "scrollWidth": 390,
+    "noHorizontalOverflow": true,
+    "phoneQuery_max640": true,
+    "pointerCoarse": true,
+    "hoverHover": false,
+    "urlInputRect": { "x": 41, "w": 308 },
+    "submitBtnRect": { "x": 41, "y": 147, "w": 182.23, "h": 44 },
+    "singBtnRect": { "w": 61.25, "h": 44 },
+    "retryBtnRect": { "w": 69.59, "h": 44 },
+    "duetWaveSvgs": 0
+  },
+  "branch_390_card_inventory": [
+    { "chip": "split", "actions": ["Cancel"], "duetWaves": 0, "cardW": 342 },
+    { "chip": "failed", "actions": ["↗", "↻ Retry", "✕"], "duetWaves": 0, "cardW": 342 },
+    { "chip": "cancelled", "actions": ["↗", "↻ Retry", "✕"], "duetWaves": 0, "cardW": 342 },
+    { "chip": "ready", "actions": ["↗", "▸ Sing", "✕"], "duetWaves": 0, "cardW": 342 }
+  ],
+  "desktop_768_byte_identity": {
+    "branch_sha256": "18e1188d15ca6d9af2e5dedb14e09aa231adb0530df2ac05c2b31f82ce23802f",
+    "main_sha256": "18e1188d15ca6d9af2e5dedb14e09aa231adb0530df2ac05c2b31f82ce23802f",
+    "main_commit": "f60b996 (v0.28.0)",
+    "identical": true,
+    "shared_probes": {
+      "scrollWidth": 768,
+      "innerWidth": 768,
+      "urlInputRect": { "x": 41, "w": 413.2 },
+      "submitBtnRect": { "x": 464.2, "y": 97, "w": 137.03, "h": 40 },
+      "duetWaveSvgs": 1
+    }
+  },
+  "main_390_before": {
+    "innerWidth": 390,
+    "scrollWidth": 390,
+    "noHorizontalOverflow": true,
+    "duetWaveSvgs": 1,
+    "note": "no page-level overflow on main either, but the URL input crushes to ~1 character and the failed row collapses to a one-word-per-line column (see booth-390-before-main.png)"
+  },
+  "harness": "Bun mock coordinator (/config trusted, /jobs ×4 states, /health, no-op /ws upgrade) + vite preview prod builds + raw-CDP headless Chrome; pointer:coarse via Emulation.setTouchEmulationEnabled{maxTouchPoints:5}, prefers-reduced-motion emulated, document.fonts.ready awaited, fresh profile per capture"
+}
