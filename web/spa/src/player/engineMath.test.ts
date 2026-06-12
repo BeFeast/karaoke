@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { computePeaks, gainsForLevel, loopSeekTarget, positionAt, type PlaySegment } from "./engineMath";
+import { computePeaks, gainsForLevel, loopSeekTarget, positionAt, railPct, type PlaySegment } from "./engineMath";
 
 describe("gainsForLevel", () => {
   test("level 1 is a TRUE vocals solo: instrumental gain exactly 0", () => {
@@ -86,6 +86,30 @@ describe("loopSeekTarget", () => {
   test("inside the region (or mid-track) keeps going", () => {
     expect(loopSeekTarget(10, { a: 5, b: 20 }, false, 600)).toBeNull();
     expect(loopSeekTarget(10, { a: null, b: null }, true, 600)).toBeNull();
+  });
+});
+
+describe("railPct", () => {
+  test("left edge → 0", () => {
+    expect(railPct(40, 40, 200)).toBe(0);
+  });
+
+  test("right edge → 100", () => {
+    expect(railPct(240, 40, 200)).toBe(100);
+  });
+
+  test("midpoint → 50", () => {
+    expect(railPct(140, 40, 200)).toBe(50);
+  });
+
+  test("out-of-range clamps on both sides", () => {
+    expect(railPct(-500, 40, 200)).toBe(0);
+    expect(railPct(5000, 40, 200)).toBe(100);
+  });
+
+  test("zero-width rail guards to 0 (no NaN)", () => {
+    expect(railPct(120, 40, 0)).toBe(0);
+    expect(railPct(120, 40, -10)).toBe(0);
   });
 });
 

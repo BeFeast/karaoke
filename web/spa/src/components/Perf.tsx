@@ -39,19 +39,17 @@
 
 import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePhoneLayout } from "../lib/layout";
+import { railPct } from "../player/engineMath";
 import type { KaraokePlayerApi } from "../player/useKaraokePlayer";
 import type { StageTheme } from "../theme";
 import { FIT_FLOOR, balancedSplit, fitLineScale, splitFill } from "./lineFit";
 import { MBulbs, MicMark } from "./marks";
-import { lyricState, type TimedLine } from "./stage-core";
+// BLEND_GRADIENT + the phone rail recipe moved to stage-core (#185) so the
+// phone console reuses them; the desktop rail below still paints the gradient.
+import { BLEND_GRADIENT, BlendRail, lyricState, type TimedLine } from "./stage-core";
 
 // FINAL.lyricScale (final-app.jsx:9) — baked, no scale picker.
 const LYRIC_SCALE = 150;
-
-// perf.jsx:75 / m-perf.jsx:42 — the karaoke ↔ full-voice rail. The export's
-// raw mid-stop literals resolve as oklab mixes of the duet pair (audit item 4).
-const BLEND_GRADIENT =
-  "linear-gradient(90deg, var(--inst), color-mix(in oklab, var(--inst) 72%, var(--vox)) 45%, color-mix(in oklab, var(--inst) 28%, var(--vox)) 55%, var(--vox))";
 
 /** mm:ss for a (possibly NaN/Infinity) seconds value (the design's fmtTime). */
 function fmtTime(sec: number): string {
@@ -308,8 +306,7 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
     const rail = e.currentTarget;
     const move = (ev: { clientX: number }) => {
       const r = rail.getBoundingClientRect();
-      const pct = ((ev.clientX - r.left) / r.width) * 100;
-      player.setVocalLevel(Math.round(Math.max(0, Math.min(100, pct))) / 100);
+      player.setVocalLevel(railPct(ev.clientX, r.left, r.width) / 100);
     };
     move(e);
     const up = () => {
@@ -416,17 +413,7 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
       {/* bottom controls — phone thumb zone (m-perf.jsx:35-56) / desktop row (perf.jsx:63-81) */}
       {phone ? (
         <div style={{ padding: "0 22px calc(env(safe-area-inset-bottom, 0px) + 28px)", display: "grid", gap: 18, ...fade }}>
-          <div>
-            <div className="m-mono" style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--muted)", marginBottom: 8 }}>
-              <span className="m-stem inst">karaoke</span>
-              <span style={{ color: "var(--fg-soft)" }}>vox {vox}%</span>
-              <span className="m-stem vox">full voice</span>
-            </div>
-            <div onPointerDown={dragBlend} style={{ position: "relative", height: 28, display: "flex", alignItems: "center", cursor: "ew-resize", touchAction: "none" }}>
-              <div style={{ position: "absolute", left: 0, right: 0, height: 6, borderRadius: 3, background: BLEND_GRADIENT }}></div>
-              <span style={{ position: "absolute", left: vox + "%", top: "50%", transform: "translate(-50%,-50%)", width: 26, height: 26, borderRadius: "50%", background: "var(--fg)", border: "4px solid var(--bg)", boxShadow: "var(--shadow-sm)", transition: reducedMotion ? undefined : "left .1s" }}></span>
-            </div>
-          </div>
+          <BlendRail vox={vox} onVox={(pct) => player.setVocalLevel(pct / 100)} reducedMotion={reducedMotion} />
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 26 }}>
             <button className="m-btn" type="button" onClick={() => player.skip(-5)} disabled={!player.ready} style={{ width: 52, height: 52, borderRadius: "50%", justifyContent: "center", fontSize: 13 }}>−5s</button>
             <button
