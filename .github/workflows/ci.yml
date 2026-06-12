@@ -85,6 +85,24 @@ jobs:
           echo 'Policy: any change under extension/chrome/ (except README.md) must bump the manifest "version". See extension/chrome/README.md.'
           exit 1
 
+  # Pure-module unit tests for the Chrome extension (cookies serializer,
+  # submit guard, receipt formatter) — makes the #177 acceptance criteria
+  # CI-provable. No build step: the extension ships as unpacked sources.
+  extension:
+    name: extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension/chrome
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install deps
+        run: bun install --frozen-lockfile
+      - name: Test
+        run: bun test
+
   spa:
     name: spa
     runs-on: ubuntu-latest

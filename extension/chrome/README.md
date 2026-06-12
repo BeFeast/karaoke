@@ -13,7 +13,15 @@ export sources; the live pages adapt their DOM/classes/styles):
   the active tab through the service worker and renders the real `POST /jobs`
   response as the receipt card, plus the real `GET /jobs` "tonight" mini-feed.
   Reopening the popup on the same tab+URL shows the existing receipt instead
-  of minting a second job (`chrome.storage.session` dedup).
+  of minting a second job (`chrome.storage.session` dedup). A failed receipt
+  shows one compact error line (`stage_note` / first line of the dump) with
+  the full text behind a hover tooltip. The receipt's ✕ dismisses it locally
+  (the job then rides the feed); each feed row's ✕ deletes the job via
+  `DELETE /jobs/{id}` after an inline "sure?" confirm (#177).
+- **Submit guard** — every submit path (toolbar popup, context menu) refuses
+  non-http(s) URLs and the configured booth's own pages (self-submit minted a
+  doomed `yt-dlp` job) with a friendly note instead of a job (`guard.js`,
+  #177).
 - **Toolbar badge** — idle (none) / working (job progress %) / ready (✓) /
   error (!), following the submitted job via a poll alarm.
 - **`marquee.css`** — the extension's single styling source: the Marquee token
@@ -97,10 +105,11 @@ scribe (do not regress to a single shared bearer).
    Confirm the popup receipt renders the job, the "tonight" feed lists real
    jobs, and "open the booth →" opens the SPA. Close and reopen the popup on
    the same tab; confirm no second job is created.
-5. Right-click a video page and choose Submit this video page to Karaoke;
-   confirm a success notification and that clicking it opens the job page.
-6. Right-click a video link and choose Submit video link to Karaoke; confirm
-   a success notification.
+5. Right-click a video page and choose Submit video to Karaoke; confirm the
+   menu shows exactly one Karaoke entry, a success notification appears, and
+   clicking it opens the job page.
+6. Right-click a video link and choose Submit video to Karaoke (the same
+   single entry serves pages and links); confirm a success notification.
 7. For a protected Karaoke URL, leave the bearer token blank and submit again;
    confirm the receipt (toolbar) or notification (context menu) explains that
    auth is required.
@@ -110,6 +119,16 @@ scribe (do not regress to a single shared bearer).
    includes a useful connectivity message.
 10. Open the popup on a non-http(s) page (e.g. `chrome://extensions`); confirm
     the receipt says nothing was submitted and asks for an http(s) video page.
+11. Open the popup on the Karaoke app itself (the configured base URL);
+    confirm the friendly "that's the karaoke booth itself" note and that no
+    job is created. Right-click the same page and submit; confirm the same
+    refusal as a notification.
+12. On a failed receipt, confirm the status word appears once (chip only),
+    the error is a single compact line, and hovering it shows the full dump.
+    Click the receipt ✕; confirm the card hides, the job appears in
+    "tonight", and reopening the popup keeps it dismissed. Click a feed
+    row's ✕ twice ("sure?" confirm); confirm the job disappears and is gone
+    from the booth too.
 
 ## Versioning
 
@@ -129,15 +148,21 @@ bun test
 ```
 
 Covers the Netscape serializer and the `POST /jobs` body builder (`youtube_cookies`
-present when cookies exist, omitted cleanly when none).
+present when cookies exist, omitted cleanly when none), the submit guard
+(`guard.js`: context-menu registry invariants + URL refusals), and the receipt
+failure formatter (`receipt.js`: error string compaction).
 
 ## Icons
 
 `icons/karaoke-{16,32,48,128}.png` and the SPA favicon (`web/spa/public/favicon.png`)
 are rasterized from `icons/mark.svg` — the sign-in mic card (#163): the
 SignInWall rounded card holding the MicMark glyph with its geometry kept
-verbatim (see the SVG header) and the day-card green-bake literals. The mark
-is pure geometry, so no font tooling is involved. To regenerate:
+verbatim (see the SVG header) and the day-card green-bake literals. The
+extension icons drop the card plate (#177): transparent background, mic glyph
+only (scribe-style), extracted verbatim from the SVG nested in `mark.svg` —
+the geometry stays single-sourced and untouched. The favicon keeps the full
+card. The mark is pure geometry, so no font tooling is involved. To
+regenerate:
 
 ```bash
 cd extension/chrome
