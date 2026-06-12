@@ -199,7 +199,13 @@ function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: Tim
 // ── Inline current-lyric wipe (console view, stage.jsx:136-138) ─────────────
 // Rides the engine's raw tick feed (subscribeTime) and writes the DOM
 // directly, bypassing the React render path entirely — the same .m-wipe
-// markup MWipe renders, updated imperatively.
+// markup MWipe renders, updated imperatively. Recorded deviation (#176): the
+// .m-wipe recipe is a nowrap inline-block, which never shrinks — a long line
+// painted past its column under the console card. The design slot is a single
+// line (stage.jsx:136 minHeight:22), so the span is capped at the column width
+// and ellipsized; inline-block stays so the fill % keeps mapping to the text
+// width on short lines (vertical-align compensates the hidden-overflow
+// baseline shift).
 function LiveLyricWipe({
   lines,
   subscribeTime,
@@ -226,7 +232,7 @@ function LiveLyricWipe({
     [lines, subscribeTime],
   );
   return (
-    <span className="m-wipe" style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 650 }}>
+    <span className="m-wipe" style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 650, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" }}>
       <span className="w-dim" style={{ color: "var(--lyric-dim)" }} ref={dimRef}></span>
       <span className="w-fill" style={{ color: "var(--accent)" }} ref={fillRef} aria-hidden="true"></span>
     </span>
