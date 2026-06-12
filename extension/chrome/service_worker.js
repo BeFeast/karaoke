@@ -1,5 +1,12 @@
 import { buildJobBody, countYoutubeCookies } from "./cookies.js";
-import { MENU_SPEC, submitRefusal } from "./guard.js";
+import { MENU_SPEC, OPEN_BOOTH_MENU_ID, submitRefusal } from "./guard.js";
+import {
+  CONFIRM_GENERIC_MESSAGE,
+  CONFIRM_UNAVAILABLE_MESSAGE,
+  REFUSE_UNSUPPORTED_MESSAGE,
+  classifySubmit,
+  fetchPreflight,
+} from "./preflight.js";
 
 const DEFAULT_BASE_URL = "https://karaoke.oklabs.uk";
 const SOURCE = "chrome-extension";
@@ -63,7 +70,9 @@ chrome.runtime.onStartup.addListener(() => {
 // receipt (issue #155). chrome.action.onClicked does not fire with a popup.
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "submit-active-tab") {
-    submitActiveTab().then(sendResponse, (error) =>
+    // `force` is the popup's Submit-anyway button (#181): the user already saw
+    // the preflight confirm state, so skip the check and submit.
+    submitActiveTab({ force: Boolean(message.force) }).then(sendResponse, (error) =>
       sendResponse({ ok: false, error: String(error?.message || error) }),
     );
     return true;
@@ -72,6 +81,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === OPEN_BOOTH_MENU_ID) {
+    // Right-click on the toolbar icon (#181): straight to the dashboard.
+    let baseUrl;
+    try {
+      ({ baseUrl } = await getConfig());
+    } catch (error) {
+      await notifyFailure(error.message || String(error));
+      return;
+    }
+    await chrome.tabs.create({ url: `${baseUrl}/app/` });
+    return;
+  }
+
   const url = info.linkUrl || info.pageUrl || tab?.url || "";
 
   // Same guard as the toolbar path (#177): non-http(s) schemes and the booth's
@@ -131,14 +153,15 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 // ── popup submit flow ────────────────────────────────────────────────────────
 
-async function submitActiveTab() {
+async function submitActiveTab({ force = false } = {}) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const url = tab?.url || "";
   const tabTitle = tab?.title || "";
+  const config = await getConfig();
   // Guard before any job is minted (#177): non-http(s) schemes and the booth's
   // own pages (self-submit minted doomed job #79) get a friendly refusal the
-  // popup renders as a note, not an error.
-  const refusal = submitRefusal(url, (await getConfig()).baseUrl);
+  // popup renders as a note, not an error. Local and instant — no server call.
+  const refusal = submitRefusal(url, config.baseUrl);
   if (refusal) {
     return { ok: false, reason: refusal.reason, message: refusal.message };
   }
@@ -151,6 +174,7 @@ async function submitActiveTab() {
       ok: true,
       jobId: previous.jobId,
       cookiesAttached: previous.cookiesAttached,
+      extractor: previous.extractor ?? null,
       dismissed: Boolean(previous.dismissed),
       cached: true,
       tabTitle,
@@ -158,11 +182,39 @@ async function submitActiveTab() {
     };
   }
 
+  // Surface a missing host grant before the preflight: its fetch would only
+  // fail silently into the confirm state, hiding the actionable settings fix.
+  await ensureHostPermission(config.baseUrl);
+
+  // Preflight-driven decision (#181): ask the booth whether the deployed
+  // yt-dlp recognises this URL with a dedicated extractor before minting a
+  // job. `force` (the popup's Submit-anyway button) skips straight to submit.
+  let extractor = null;
+  if (!force) {
+    const preflightResult = await fetchPreflight(config.baseUrl, url, {
+      headers: authHeaders(config),
+    });
+    const verdict = classifySubmit(url, baseHostOf(config.baseUrl), preflightResult);
+    if (verdict === "confirm") {
+      return {
+        ok: false,
+        confirm: true,
+        reason: preflightResult ? "generic-only" : "preflight-unavailable",
+        message: preflightResult ? CONFIRM_GENERIC_MESSAGE : CONFIRM_UNAVAILABLE_MESSAGE,
+      };
+    }
+    if (verdict === "refuse") {
+      // Not even the Generic extractor wants it — message only, no button.
+      return { ok: false, reason: "unsupported", message: REFUSE_UNSUPPORTED_MESSAGE };
+    }
+    extractor = preflightResult?.extractor ?? null;
+  }
+
   const { job, cookiesAttached } = await submitToKaraoke(url);
   await chrome.storage.session.set({
-    [dedupKey]: { jobId: job.id, cookiesAttached },
+    [dedupKey]: { jobId: job.id, cookiesAttached, extractor },
   });
-  return { ok: true, job, jobId: job.id, cookiesAttached, tabTitle, dedupKey };
+  return { ok: true, job, jobId: job.id, cookiesAttached, extractor, tabTitle, dedupKey };
 }
 
 async function rememberTabSubmit(tabId, url, jobId, cookiesAttached) {
@@ -225,6 +277,14 @@ function normalizeBaseUrl(value) {
     throw new Error("Karaoke base URL must start with http:// or https://.");
   }
   return parsed.origin + parsed.pathname.replace(/\/+$/, "");
+}
+
+function baseHostOf(baseUrl) {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return "";
+  }
 }
 
 async function ensureHostPermission(baseUrl) {

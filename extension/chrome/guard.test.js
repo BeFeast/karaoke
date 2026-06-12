@@ -3,7 +3,7 @@
 // fronts every submit path. Run with: bun test  (from extension/chrome)
 
 import { describe, expect, test } from "bun:test";
-import { MENU_SPEC, submitRefusal } from "./guard.js";
+import { MENU_SPEC, OPEN_BOOTH_MENU_ID, submitRefusal } from "./guard.js";
 
 const BASE = "https://karaoke.oklabs.uk";
 
@@ -39,6 +39,14 @@ describe("MENU_SPEC", () => {
     expect(covering).toHaveLength(1);
     expect(covering[0].contexts).toContain("page");
     expect(covering[0].contexts).toContain("link");
+  });
+
+  test("exactly one toolbar-icon entry — Open Karaoke booth on contexts:[action] (#181)", () => {
+    const actions = MENU_SPEC.filter((item) => item.contexts.includes("action"));
+    expect(actions).toHaveLength(1);
+    expect(actions[0].id).toBe(OPEN_BOOTH_MENU_ID);
+    expect(actions[0].contexts).toEqual(["action"]);
+    expect(actions[0].title).toBe("Open Karaoke booth");
   });
 });
 

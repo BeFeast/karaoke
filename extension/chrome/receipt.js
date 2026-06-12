@@ -35,4 +35,16 @@ function failedReceiptLine(job) {
   return compactErrorLine(job?.error);
 }
 
-export { compactErrorLine, failedReceiptLine };
+// "Youtube ✓" — the matched yt-dlp extractor on the receipt meta line (#181).
+// IE_NAMEs come lowercase ("youtube", "soundcloud"); the sign capitalizes the
+// first letter. Empty when no extractor is known — a Submit-anyway receipt
+// after a generic-only or unavailable preflight shows no extractor tick.
+function extractorReceiptLabel(extractor) {
+  const name = String(extractor || "").trim();
+  if (!name) {
+    return "";
+  }
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)} ✓`;
+}
+
+export { compactErrorLine, extractorReceiptLabel, failedReceiptLine };

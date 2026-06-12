@@ -22,6 +22,17 @@ export sources; the live pages adapt their DOM/classes/styles):
   non-http(s) URLs and the configured booth's own pages (self-submit minted a
   doomed `yt-dlp` job) with a friendly note instead of a job (`guard.js`,
   #177).
+- **Preflight-driven toolbar submit** (`preflight.js`, #181) — past the local
+  guard, the service worker asks `GET /preflight?url=…` (offline `yt-dlp`
+  extractor matching, #180) before minting a job. A dedicated extractor match
+  submits immediately and the receipt shows the extractor name ("Youtube ✓");
+  a generic-only match renders a confirm state with a **Submit anyway**
+  button instead of auto-submitting; no match at all is a message-only
+  refusal. A preflight error or timeout (>2 s, AbortController) falls back to
+  the confirm state — infrastructure never hard-blocks a submit. No title
+  prefetch anywhere.
+- **Right-click on the toolbar icon** — an "Open Karaoke booth" entry
+  (`contexts: ["action"]`) opens `<base>/app/` in a new tab (#181).
 - **Toolbar badge** — idle (none) / working (job progress %) / ready (✓) /
   error (!), following the submitted job via a poll alarm.
 - **`marquee.css`** — the extension's single styling source: the Marquee token
@@ -129,6 +140,13 @@ scribe (do not regress to a single shared bearer).
     "tonight", and reopening the popup keeps it dismissed. Click a feed
     row's ✕ twice ("sure?" confirm); confirm the job disappears and is gone
     from the booth too.
+13. Open the popup on a YouTube video page; confirm the one-click submit and
+    the "Youtube ✓" extractor label on the receipt meta line. Open it on a
+    random blog page; confirm the generic-extractor note with the Submit
+    anyway button (nothing submitted yet), and that the button submits and
+    renders the normal receipt (#181).
+14. Right-click the toolbar icon and choose Open Karaoke booth; confirm the
+    booth dashboard (`<base>/app/`) opens in a new tab (#181).
 
 ## Versioning
 
@@ -149,8 +167,10 @@ bun test
 
 Covers the Netscape serializer and the `POST /jobs` body builder (`youtube_cookies`
 present when cookies exist, omitted cleanly when none), the submit guard
-(`guard.js`: context-menu registry invariants + URL refusals), and the receipt
-failure formatter (`receipt.js`: error string compaction).
+(`guard.js`: context-menu registry invariants + URL refusals), the receipt
+formatters (`receipt.js`: error string compaction + extractor label), and the
+preflight decision (`preflight.js`: `classifySubmit` branches + the
+timeout-bounded fetch helper).
 
 ## Icons
 

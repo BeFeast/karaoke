@@ -5,6 +5,11 @@
 // context menu and `submitRefusal` to gate every submit path (toolbar popup
 // and context menu) before a job is minted.
 
+// Right-click on the toolbar icon (#181): a shortcut straight to the booth
+// dashboard at `<base>/app/`. The popup footer keeps its "open the booth →"
+// link; this is the one entry on the action icon's own context menu.
+const OPEN_BOOTH_MENU_ID = "open-booth";
+
 // Context-menu registry — exactly one registration per distinct action. The
 // old page+link pair both rendered on a YouTube video link, so the menu showed
 // two entries for the same submit (#177). One item with merged contexts covers
@@ -15,6 +20,11 @@ const MENU_SPEC = [
     id: "submit-video",
     title: "Submit video to Karaoke",
     contexts: ["page", "link"],
+  },
+  {
+    id: OPEN_BOOTH_MENU_ID,
+    title: "Open Karaoke booth",
+    contexts: ["action"],
   },
 ];
 
@@ -57,4 +67,4 @@ function submitRefusal(url, baseUrl) {
   return null;
 }
 
-export { MENU_SPEC, submitRefusal };
+export { MENU_SPEC, OPEN_BOOTH_MENU_ID, submitRefusal };
