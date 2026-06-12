@@ -54,6 +54,27 @@ the deployment split WS onto its own listener. `/jobs/{id}/status` polling
 stays supported as the fallback channel. Full event schema:
 [`src/karaoke/api/ws.py`](src/karaoke/api/ws.py).
 
+## Audio-file upload
+
+Besides a URL, a job can start from a local audio file (own recording,
+purchased track): `POST /jobs/upload`, multipart fields `file` (required:
+`.mp3` / `.m4a` / `.wav` / `.flac` / `.ogg`) + `title` (optional). Same auth
+layers and 201 `JobOut` contract as `POST /jobs`:
+
+```bash
+curl -F 'file=@song.mp3' -H 'Authorization: Bearer <token>' \
+  http://10.10.0.13:13140/jobs/upload
+```
+
+The job's `source_url` carries an `upload://<filename>` sentinel and the
+pipeline skips yt-dlp entirely; metadata (artist/track/album/duration) comes
+from the file's tags via `ffprobe`, feeding the same LRCLIB lyrics lookup.
+Upload size is capped by `KARAOKE_MAX_UPLOAD_BYTES` (default 200 MiB; 413 when
+exceeded). **The public host sits behind a Cloudflare tunnel whose free plan
+hard-caps request bodies at 100 MB at the edge** — Cloudflare rejects bigger
+uploads with its own 413 before they reach the app, so larger files are
+LAN-only.
+
 ## Verification gate
 
 A job is done only when `vocals.mp3`, `karaoke.mp3`, and `lyrics.txt` exist on the NFS store,

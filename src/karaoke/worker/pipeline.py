@@ -42,6 +42,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from karaoke.api import ws as ws_events
 from karaoke.db.models import Artifact, Job, JobStatus
 from karaoke.titles import derive_metadata
+from karaoke.uploads import UPLOAD_PREFIX, upload_display_name
 from karaoke.worker import job_cookies
 from karaoke.worker.lyrics import (
     LRC_TIMESTAMP_RE,
@@ -260,6 +261,51 @@ def _sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
+# Terminal stage note (and error) for an upload job whose pre-staged
+# ``work/source.audio`` is absent or undecodable. No retry: re-uploading is
+# the fix, and yt-dlp has nothing to offer an upload:// source.
+UPLOAD_BAD_SOURCE_NOTE = "uploaded audio is missing or not decodable"
+
+
+def _probe_upload_meta(path: Path, fallback_name: str) -> dict:
+    """ffprobe an uploaded source file into a yt-dlp-info-shaped dict (#172).
+
+    Returns ``{"title", "track", "artist", "album", "duration"}`` ready for
+    :func:`derive_metadata`: container tags are read case-insensitively from
+    ``format.tags``, the title falls back to the upload's filename stem, and a
+    missing/malformed ``format.duration`` becomes ``None`` rather than failing
+    the job. Raises :class:`PipelineError` when ffprobe cannot decode the file
+    at all — the caller fails the job with :data:`UPLOAD_BAD_SOURCE_NOTE`.
+    """
+    proc = _run(
+        ["ffprobe", "-v", "error", "-print_format", "json", "-show_format", str(path)],
+        timeout=120,
+    )
+    try:
+        fmt = json.loads(proc.stdout or "{}").get("format") or {}
+    except ValueError as exc:
+        raise PipelineError(f"ffprobe returned invalid JSON for {path}") from exc
+    raw_tags = fmt.get("tags") if isinstance(fmt, dict) else None
+    tags = {
+        str(k).lower(): str(v).strip()
+        for k, v in (raw_tags or {}).items()
+        if v is not None
+    }
+    duration: float | None
+    try:
+        duration = float(fmt.get("duration"))
+    except (TypeError, ValueError):
+        duration = None
+    tag_title = tags.get("title") or None
+    return {
+        "title": tag_title or Path(fallback_name).stem or None,
+        "track": tag_title,
+        "artist": tags.get("artist") or None,
+        "album": tags.get("album") or None,
+        "duration": duration,
+    }
+
+
 async def _asleep(seconds: float) -> None:
     """Async indirection over ``asyncio.sleep`` so tests can patch the backoff."""
     await asyncio.sleep(seconds)
@@ -365,7 +411,11 @@ async def _prior_24h_cost_micros(session_factory: async_sessionmaker) -> int:
 
 
 async def _mark_failed(
-    session_factory: async_sessionmaker, job_id: int, error: str
+    session_factory: async_sessionmaker,
+    job_id: int,
+    error: str,
+    *,
+    stage_note: str | None = None,
 ) -> None:
     async with session_factory() as session:
         job = await session.get(Job, job_id)
@@ -374,7 +424,9 @@ async def _mark_failed(
         if job is None or job.status in {JobStatus.cancelled, JobStatus.failed}:
             return
         job.status = JobStatus.failed
-        job.stage_note = None
+        # Cleared by default; an explicit note survives as the short operator/
+        # UI hint next to the full ``error`` (upload jobs use this, #172).
+        job.stage_note = stage_note
         job.error = error[:4000]
         progress = job.progress
         await session.commit()
@@ -628,13 +680,50 @@ async def run_real_job(
     work_dir = job_root / "work"
     exports_dir = job_root / "exports"
 
+    is_upload = source_url.startswith(UPLOAD_PREFIX)
+
     try:
         # --- downloading ----------------------------------------------------
-        if not await _set_stage(session_factory, job_id, JobStatus.downloading, 15):
+        if not await _set_stage(
+            session_factory,
+            job_id,
+            JobStatus.downloading,
+            15,
+            stage_note="reading uploaded audio" if is_upload else None,
+        ):
             return
-        meta = await asyncio.to_thread(
-            _ytdlp_metadata, source_url, settings, cookies_blob=cookies_blob
-        )
+        raw_audio = work_dir / "source.audio"
+        if is_upload:
+            # Upload job (#172): POST /jobs/upload already staged the audio at
+            # work/source.audio, so yt-dlp (metadata + download) and the
+            # per-job cookies are no-ops on this branch. Metadata comes from
+            # the file's container tags via ffprobe; a missing or undecodable
+            # file fails the job immediately — nothing a retry could fix.
+            cookies_blob = None
+            if not raw_audio.is_file() or raw_audio.stat().st_size == 0:
+                await _mark_failed(
+                    session_factory,
+                    job_id,
+                    UPLOAD_BAD_SOURCE_NOTE,
+                    stage_note=UPLOAD_BAD_SOURCE_NOTE,
+                )
+                return
+            try:
+                meta = await asyncio.to_thread(
+                    _probe_upload_meta, raw_audio, upload_display_name(source_url)
+                )
+            except Exception as exc:  # noqa: BLE001 — any probe failure is terminal here
+                await _mark_failed(
+                    session_factory,
+                    job_id,
+                    f"{UPLOAD_BAD_SOURCE_NOTE} ({type(exc).__name__}: {exc})",
+                    stage_note=UPLOAD_BAD_SOURCE_NOTE,
+                )
+                return
+        else:
+            meta = await asyncio.to_thread(
+                _ytdlp_metadata, source_url, settings, cookies_blob=cookies_blob
+            )
         title = (meta.get("title") or "").strip() or None
         source_meta = derive_metadata(meta)
         if title or any(source_meta.values()):
@@ -647,10 +736,10 @@ async def run_real_job(
                 metadata=source_meta,
             )
 
-        raw_audio = work_dir / "source.audio"
-        await asyncio.to_thread(
-            _download_audio, source_url, raw_audio, settings, cookies_blob=cookies_blob
-        )
+        if not is_upload:
+            await asyncio.to_thread(
+                _download_audio, source_url, raw_audio, settings, cookies_blob=cookies_blob
+            )
         mix_wav = work_dir / "mix.wav"
         await asyncio.to_thread(_to_wav, raw_audio, mix_wav)
         # Download stage done — drop the per-job cookies from memory. The

@@ -1,12 +1,16 @@
 """HTTP and WebSocket routes for the karaoke API."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import datetime as dt
 import json
 import logging
+import os
 import re
 import secrets
 import shutil
+import uuid
 from pathlib import Path as _PathLib
 
 from fastapi import (
@@ -21,6 +25,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from starlette.datastructures import UploadFile
 
 from karaoke import __version__
 from karaoke.api.auth import (
@@ -38,6 +43,12 @@ from karaoke.api.ws import forget_job, publish_stage
 from karaoke.config import Settings, get_settings
 from karaoke.db.models import Job, JobStatus
 from karaoke.db.session import get_session, get_session_factory
+from karaoke.uploads import (
+    ALLOWED_UPLOAD_EXTENSIONS,
+    UPLOAD_PREFIX,
+    sanitize_upload_filename,
+    upload_display_name,
+)
 from karaoke.worker import job_cookies
 from karaoke.worker.scheduler import schedule_job
 
@@ -284,6 +295,14 @@ async def create_job(
     settings: Settings = Depends(get_settings),
 ) -> JobOut:
     """Create a karaoke job and kick off the (mocked) worker."""
+    # Defensive (#172): the ``upload://`` sentinel is reserved for jobs staged
+    # by POST /jobs/upload — accepting it here would create a job whose source
+    # file was never uploaded.
+    if payload.url.startswith(UPLOAD_PREFIX):
+        raise HTTPException(
+            status_code=422,
+            detail="upload:// is not a submittable URL; use POST /jobs/upload",
+        )
     # Per-job ephemeral YouTube cookies (issue #77): validate up front so a
     # malformed jar fails fast WITHOUT creating a junk job. The value is never
     # persisted (no DB column) and never logged — it is handed to the
@@ -318,6 +337,142 @@ async def create_job(
     schedule_job(get_session_factory(), job.id, settings)
 
     return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
+
+
+# Chunk size for the upload copy loop: big enough to amortize the per-chunk
+# thread hop to NFS, small enough to keep memory flat for a 200 MiB body.
+_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+
+async def _stream_upload_to(upload: UploadFile, dest: _PathLib, max_bytes: int) -> None:
+    """Copy a multipart upload to ``dest`` in chunks, enforcing ``max_bytes``.
+
+    Async reads + ``to_thread`` writes keep the single uvicorn worker's event
+    loop free while a large body crosses to NFS — WS and status traffic must
+    not stall behind an upload. Raises a value-free 413 on overrun; the caller
+    owns cleanup of the partial file.
+    """
+    total = 0
+    out = await asyncio.to_thread(dest.open, "wb")
+    try:
+        while chunk := await upload.read(_UPLOAD_CHUNK_BYTES):
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    detail="upload too large",
+                )
+            await asyncio.to_thread(out.write, chunk)
+    finally:
+        await asyncio.to_thread(out.close)
+
+
+@router.post(
+    "/jobs/upload",
+    response_model=JobOut,
+    status_code=status.HTTP_201_CREATED,
+    tags=["jobs"],
+)
+async def create_upload_job(
+    request: Request,
+    owner: Owner = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> JobOut:
+    """Create a karaoke job from an uploaded audio file instead of a URL (#172).
+
+    Multipart fields: ``file`` (required; .mp3/.m4a/.wav/.flac/.ogg) and
+    ``title`` (optional). Same auth and 201 ``JobOut`` contract as ``POST
+    /jobs``; the job runs the normal pipeline with the yt-dlp download stage
+    bypassed (``source_url`` carries the ``upload://<filename>`` sentinel).
+
+    Declares NO body params on purpose: a declared ``File(...)`` makes FastAPI
+    spool the whole multipart body before the endpoint runs, defeating the
+    Content-Length fast reject below. Raw ``request.form()`` keeps the order:
+    cheap header reject (413) → parse (spools to container /tmp — accepted,
+    LAN-first) → field/extension validation (422/415) → size-enforced chunked
+    copy to NFS (authoritative 413).
+
+    NOTE: the public host sits behind a Cloudflare tunnel whose free plan
+    rejects bodies over 100 MB at the edge regardless of
+    ``max_upload_bytes`` — bigger uploads are LAN-only (see README).
+    """
+    declared = (request.headers.get("content-length") or "").strip()
+    if declared.isdigit() and int(declared) > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="upload too large",
+        )
+
+    form = await request.form()
+    try:
+        upload = form.get("file")
+        if not isinstance(upload, UploadFile):
+            raise HTTPException(
+                status_code=422, detail="multipart field 'file' is required"
+            )
+        raw_title = form.get("title")
+        title = (raw_title.strip() if isinstance(raw_title, str) else "") or None
+
+        # Extension allowlist on the sanitized client filename. Content is NOT
+        # sniffed here — the worker's ffprobe is authoritative; a garbage file
+        # fails the job in seconds with a clear stage note.
+        safe_name = sanitize_upload_filename(upload.filename)
+        if _PathLib(safe_name).suffix.lower() not in ALLOWED_UPLOAD_EXTENSIONS:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="unsupported audio file extension",
+            )
+
+        # Stream to a .part on the SAME filesystem as the job dir, then move
+        # into place BEFORE creating the Job row: a failure on either side
+        # leaves no orphan row and no stray file. ``work/source.audio`` is the
+        # exact path the URL flow's ``_download_audio`` produces, so the
+        # pipeline picks it up unchanged.
+        artifact_root = _PathLib(settings.artifact_root)
+        job_token = secrets.token_urlsafe(24)
+        job_dir = artifact_root / job_token
+        part_path = artifact_root / ".uploads" / f"{uuid.uuid4().hex}.part"
+        try:
+            await asyncio.to_thread(part_path.parent.mkdir, parents=True, exist_ok=True)
+            await _stream_upload_to(upload, part_path, settings.max_upload_bytes)
+            work_dir = job_dir / "work"
+            await asyncio.to_thread(work_dir.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread(os.replace, part_path, work_dir / "source.audio")
+        except Exception:
+            await asyncio.to_thread(shutil.rmtree, job_dir, ignore_errors=True)
+            raise
+        finally:
+            with contextlib.suppress(OSError):
+                await asyncio.to_thread(lambda: part_path.unlink(missing_ok=True))
+
+        try:
+            job = Job(
+                job_token=job_token,
+                owner_subject=owner.subject,
+                owner_email=owner.email,
+                owner_display_name=owner.display_name,
+                source_url=UPLOAD_PREFIX + safe_name,
+                title=title,
+                status=JobStatus.queued,
+                progress=0,
+            )
+            session.add(job)
+            await session.commit()
+            await session.refresh(job, attribute_names=["artifacts"])
+        except Exception:
+            # The audio is already in place — drop the staged tree so a failed
+            # insert leaves nothing under the artifact root.
+            await asyncio.to_thread(shutil.rmtree, job_dir, ignore_errors=True)
+            raise
+
+        publish_stage(job.id, JobStatus.queued, 0)
+        schedule_job(get_session_factory(), job.id, settings)
+        return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
+    finally:
+        # Raw ``request.form()`` means nobody else closes the spooled parts.
+        with contextlib.suppress(Exception):
+            await form.close()
 
 
 @router.get("/jobs/{job_id}/status", response_model=JobOut, tags=["jobs"])
@@ -614,7 +769,9 @@ def _html_escape(s: str | None) -> str:
 
 
 def _render_share_html(job: Job, lyrics_text: str | None) -> str:
-    title = job.title or job.source_url or "karaoke job"
+    # Upload jobs (#172) fall back to the uploaded filename, never the raw
+    # ``upload://`` sentinel; URL jobs keep falling back to the URL.
+    title = job.title or upload_display_name(job.source_url) or "karaoke job"
     owner = (job.owner_display_name or "").strip()
     owner_block = f"<span>· {_html_escape(owner)}</span>" if owner else ""
     base = f"/share/{job.job_token}"
