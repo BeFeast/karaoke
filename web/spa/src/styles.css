@@ -213,13 +213,19 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   white-space: nowrap;
   text-decoration: none;
 }
-.btn:hover { border-color: var(--fg-soft); background: var(--bg-soft); }
+/* Sticky-hover guards (#184): hover styling only on devices that really
+   hover — on iOS a tap leaves :hover stuck until the next tap elsewhere. */
+@media (hover: hover) {
+  .btn:hover { border-color: var(--fg-soft); background: var(--bg-soft); }
+}
 .btn.primary {
   background: var(--accent);
   color: var(--accent-fg);
   border-color: var(--accent);
 }
-.btn.primary:hover { filter: brightness(0.95); }
+@media (hover: hover) {
+  .btn.primary:hover { filter: brightness(0.95); }
+}
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn.sm { padding: 4px 9px; font-size: 12px; }
 
@@ -320,8 +326,10 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   color: var(--err-fg);
   border-color: var(--err);
 }
-.btn.danger:hover {
-  filter: brightness(0.95);
+@media (hover: hover) {
+  .btn.danger:hover {
+    filter: brightness(0.95);
+  }
 }
 
 /* ─── Stage player (#/job/:token) — wavesurfer canvas chrome ────────────── */
@@ -435,8 +443,10 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   font-size: 21px;
   font-weight: 650;
 }
-.synced-lyrics-seek:hover {
-  color: var(--fg-soft);
+@media (hover: hover) {
+  .synced-lyrics-seek:hover {
+    color: var(--fg-soft);
+  }
 }
 .synced-lyrics-seek:focus-visible {
   outline: none;
@@ -452,7 +462,8 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 /* Transient "Link copied" toast. */
 .toast {
   position: fixed;
-  bottom: 24px;
+  /* Clear the iOS home-indicator inset (#184); 0px elsewhere. */
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 80;
@@ -470,7 +481,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   to { opacity: 1; transform: translate(-50%, 0); }
 }
 
-/* ── MARQUEE RECIPES (byte-exact — do not edit) ── */
+/* ── MARQUEE RECIPES (byte-exact port + sanctioned mobile overrides, Refs #184 — do not edit otherwise) ── */
 /* ── atoms ───────────────────────────────────────────────────────────── */
 .m-mono { font-family: var(--font-mono); font-feature-settings: "tnum"; }
 
@@ -491,7 +502,11 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   white-space: nowrap;
   text-decoration: none;
 }
-.m-btn:hover { border-color: var(--fg-soft); }
+/* sanctioned mobile override (#184): sticky-hover guard — kept in source
+   order (before .m-btn.ghost) so the equal-specificity cascade is unchanged */
+@media (hover: hover) {
+  .m-btn:hover { border-color: var(--fg-soft); }
+}
 .m-btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 650; }
 .m-btn.sm { padding: 4px 9px; font-size: 12px; }
 .m-btn.ghost { border-color: transparent; background: transparent; color: var(--fg-soft); }
@@ -580,4 +595,11 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 }
 .m-stem.vox { color: var(--vox-ui); }
 .m-stem.inst { color: var(--inst-ui); }
+
+/* ── sanctioned mobile overrides (#184) — layout-only touch-target sizing
+   on coarse pointers (44px Apple HIG minimum); no color declarations ── */
+@media (pointer: coarse) {
+  .m-btn { min-height: 44px; }
+  .m-btn.sm { min-height: 44px; padding: 8px 12px; }
+}
 /* ── END MARQUEE RECIPES ── */

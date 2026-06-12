@@ -38,6 +38,7 @@
 //     lives in lineFit.ts); play/skip disable until the engine is ready.
 
 import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { usePhoneLayout } from "../lib/layout";
 import type { KaraokePlayerApi } from "../player/useKaraokePlayer";
 import type { StageTheme } from "../theme";
 import { FIT_FLOOR, balancedSplit, fitLineScale, splitFill } from "./lineFit";
@@ -58,24 +59,6 @@ function fmtTime(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-// Phone (thumb-zone) vs desktop/TV layout — m-perf.jsx PhonePerf vs
-// LaptopPerfBoard. Live matchMedia so rotation/resize re-lays-out.
-const PHONE_QUERY = "(max-width: 640px)";
-
-function usePhoneLayout(): boolean {
-  const [phone, setPhone] = useState(
-    () => typeof window !== "undefined" && !!window.matchMedia?.(PHONE_QUERY).matches,
-  );
-  useEffect(() => {
-    const mq = window.matchMedia?.(PHONE_QUERY);
-    if (!mq) return;
-    const onChange = () => setPhone(mq.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-  return phone;
 }
 
 // Available width for a lyric row — the #166 cap: min(92vw, container

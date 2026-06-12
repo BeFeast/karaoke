@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { lyricState, ProtoFader, type TimedLine } from "../components/stage-core";
 import { MBulbs, MWipe } from "../components/marks";
 import { Perf } from "../components/Perf";
+import { useCoarsePointer } from "../lib/layout";
 import type { StageTheme } from "../theme";
 import { type KaraokePlayerApi, PLAYBACK_RATES, useKaraokePlayer } from "./useKaraokePlayer";
 
@@ -115,6 +116,9 @@ function ConsoleModule({
   duckStart: () => void;
   duckEnd: () => void;
 }) {
+  // Touch shows no keyboard copy (#184): the "V" suffix is dropped on coarse
+  // pointers — the hold-to-drop pointer gesture itself works everywhere.
+  const coarse = useCoarsePointer();
   // Hold "V" to duck, design behavior (window-level so it works mid-song
   // without hunting for focus) — but never while typing in a field.
   useEffect(() => {
@@ -142,7 +146,7 @@ function ConsoleModule({
         <button className="m-btn sm" type="button"
           onPointerDown={duckStart} onPointerUp={duckEnd} onPointerLeave={duckEnd}
           style={{ borderColor: "var(--vox)", color: ducked ? "var(--accent-fg)" : "var(--vox)", background: ducked ? "var(--vox)" : "transparent", fontWeight: 700, justifyContent: "center" }}>DROP</button>
-        <span className="m-mono" style={{ fontSize: 9, color: "var(--muted)", textAlign: "center", lineHeight: 1.4 }}>hold to drop vocals<br></br>while you sing · or "V"</span>
+        <span className="m-mono" style={{ fontSize: 9, color: "var(--muted)", textAlign: "center", lineHeight: 1.4 }}>hold to drop vocals<br></br>{coarse ? "while you sing" : 'while you sing · or "V"'}</span>
       </div>
     </div>
   );
@@ -274,6 +278,8 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
   // below immediately re-reads off the room container.
   const [colors, setColors] = useState(() => readWaveColors(document.documentElement));
   const reducedMotion = useMemo(prefersReducedMotion, []);
+  // Touch shows no keyboard copy (#184): the hint row swaps to a tap hint.
+  const coarse = useCoarsePointer();
 
   // Re-read canvas colors off the room container whenever ◐ flips the room
   // class — runs after the DOM commit, so the computed tokens are the new set.
@@ -416,7 +422,7 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
         <div style={{ display: "flex", gap: 16, alignItems: "stretch", flexWrap: "wrap" }}>
           <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 11, justifyContent: "center", minWidth: 0 }}>
             <TransportBar player={player} onPerf={openPerf} />
-            <div className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)" }}>space play · ←/→ seek · V drops vocals · click wave to seek</div>
+            <div className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)" }}>{coarse ? "tap the wave to seek" : "space play · ←/→ seek · V drops vocals · click wave to seek"}</div>
             <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 650, minHeight: 22 }}>
               {lines.length > 0 && <LiveLyricWipe lines={lines} subscribeTime={player.subscribeTime} />}
             </div>
