@@ -201,6 +201,22 @@ export function createJob(input: CreateJobInput): Promise<JobOut> {
   });
 }
 
+// Submit a local audio file as a new job (POST /jobs/upload, multipart, #173).
+// The body is FormData on purpose and no Content-Type is set anywhere on the
+// request — the browser must generate the multipart boundary itself
+// (request() only merges auth + the headers given here).
+export function uploadJob(file: File, title?: string): Promise<JobOut> {
+  const form = new FormData();
+  form.append("file", file);
+  const trimmed = title?.trim();
+  if (trimmed) form.append("title", trimmed);
+  return request<JobOut>("/jobs/upload", {
+    method: "POST",
+    headers: { Accept: "application/json" },
+    body: form,
+  });
+}
+
 // Delete a job + its artifacts (204, no body).
 export async function deleteJob(id: number): Promise<void> {
   const resp = await fetch(`/jobs/${id}`, {
