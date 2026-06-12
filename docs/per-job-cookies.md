@@ -10,8 +10,9 @@ There is no server-side jar, no rotation endpoint, and no cookie file setting
 ## Contract
 
 The submitting client (the Chrome extension on desktop — see
-`extension/chrome/README.md`) attaches the user's logged-in YouTube/Google
-cookies to the job itself:
+`extension/chrome/README.md` — or the Android submitter app on mobile — see
+[`mobile-android.md`](mobile-android.md)) attaches the user's logged-in
+YouTube/Google cookies to the job itself:
 
 - **Field:** `POST /jobs` body, optional `youtube_cookies` — a Netscape
   `cookies.txt` blob as a JSON string. Omitted / `null` / whitespace-only means

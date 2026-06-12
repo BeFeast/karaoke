@@ -105,3 +105,71 @@ jobs:
         run: bun run guards
       - name: Build
         run: bun run build
+
+  # Android submitter app (mobile/android/, issue #169). The job always runs
+  # and self-reports success when mobile/android/ is untouched: a change-filter
+  # first step + step-level `if:` guards, NOT a workflow/job-level `paths:`
+  # filter (a skipped job never reports and would wedge if this check is ever
+  # made required).
+  android:
+    name: android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect mobile/android changes
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            range_base="$BASE_SHA"
+          else
+            range_base="$BEFORE_SHA"
+          fi
+          if [ -z "$range_base" ] \
+            || [ "$range_base" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "$range_base^{commit}" 2>/dev/null; then
+            echo "No usable base commit for the diff — building to be safe."
+            echo "android=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only "$range_base"...HEAD -- mobile/android/ || true)"
+          if [ -n "$changed" ]; then
+            echo "mobile/android/ changed:"
+            printf '%s\n' "$changed"
+            echo "android=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No mobile/android/ changes — skipping Android build steps."
+            echo "android=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Set up JDK 17
+        if: steps.filter.outputs.android == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Validate Gradle wrapper
+        if: steps.filter.outputs.android == 'true'
+        uses: gradle/actions/wrapper-validation@v4
+      - name: Setup Gradle (cache)
+        if: steps.filter.outputs.android == 'true'
+        uses: gradle/actions/setup-gradle@v4
+      - name: Unit tests + lint
+        if: steps.filter.outputs.android == 'true'
+        working-directory: mobile/android
+        run: ./gradlew --no-daemon testDebugUnitTest lintDebug
+      - name: Assemble debug APK
+        if: steps.filter.outputs.android == 'true'
+        working-directory: mobile/android
+        run: ./gradlew --no-daemon assembleDebug
+      - name: Upload APK artifact
+        if: steps.filter.outputs.android == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: karaoke-submitter-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
