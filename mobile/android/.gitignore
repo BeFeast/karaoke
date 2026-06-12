@@ -1,0 +1,10 @@
+.gradle/
+.kotlin/
+build/
+local.properties
+.idea/
+*.iml
+
+# The wrapper jar MUST be committed (CI validates it against Gradle's
+# official checksums) — override any broader *.jar ignore rules.
+!gradle/wrapper/gradle-wrapper.jar

@@ -1,0 +1,43 @@
+<resources>
+    <string name="app_name">Karaoke Submitter</string>
+
+    <string name="url_hint">YouTube / video URL</string>
+    <string name="submit">Submit</string>
+    <string name="submitting">Submitting…</string>
+    <string name="receipt_format">Job #%1$d — %2$s (%3$s)</string>
+    <string name="error_bad_url">Enter a valid http(s) URL.</string>
+    <string name="error_no_token">No access pass set — open Settings and paste a ktx_ pass.</string>
+    <string name="share_no_url">No http(s) URL found in the shared text.</string>
+
+    <string name="status_signed_in">YouTube: signed in (%1$d cookies)</string>
+    <string name="status_not_signed_in">YouTube: not signed in — gated videos will fail</string>
+    <string name="status_pasted_jar">Cookies: pasted jar in use (%1$d YouTube cookies)</string>
+
+    <string name="sign_in_title">Sign in to YouTube</string>
+    <string name="sign_in_button">Sign in to YouTube</string>
+    <string name="done_extract">Done</string>
+
+    <string name="settings_title">Settings</string>
+    <string name="settings_button">Settings</string>
+    <string name="base_url_label">Base URL</string>
+    <string name="token_label">Access pass (ktx_…)</string>
+    <string name="settings_help">Mint a pass in the web app: %1$s/app/#/settings → “Mint pass”, then paste it here. The pass and cookies stay on this device (encrypted) and are never logged.</string>
+    <string name="settings_saved">Saved.</string>
+    <string name="save">Save</string>
+
+    <string name="paste_button">Paste cookies.txt</string>
+    <string name="paste_title">Paste a Netscape cookies.txt</string>
+    <string name="paste_hint"># Netscape HTTP Cookie File…</string>
+    <string name="paste_save">Use this jar</string>
+    <string name="paste_accepted">Jar accepted (%1$d YouTube cookies). It rides with the next submits.</string>
+    <string name="paste_rejected">Jar rejected: %1$s</string>
+    <string name="paste_cleared">Pasted jar cleared — WebView sign-in cookies are used again.</string>
+    <string name="clear_paste">Clear pasted jar</string>
+
+    <string name="feed_title">Recent jobs</string>
+    <string name="feed_row_format">%1$s — %2$s</string>
+    <string name="feed_empty">No jobs yet.</string>
+    <string name="feed_no_token">Set an access pass in Settings to see your jobs.</string>
+    <string name="feed_error">Could not load jobs.</string>
+    <string name="feed_open_failed">No browser available to open the share link.</string>
+</resources>

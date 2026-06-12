@@ -29,6 +29,8 @@ Status: **scaffolding** — just the empty seed; implementation tracked in issue
 - Python with `uv`. Lint `ruff`, tests `pytest`.
 - FastAPI + WebSocket; Postgres (Alembic) for owners/jobs/tokens; Valkey/Redis for the queue.
 - Chrome extension (MV3) under `extension/chrome/` *(to add)*.
+- Android submitter app (share target + per-job YouTube cookies, CI-built debug APK)
+  under `mobile/android/` — see [`docs/mobile-android.md`](docs/mobile-android.md).
 - vast.ai GPU image `ghcr.io/befeast/karaoke-vast:cuda12.4` *(to add under `docker/vast/`)*.
 - YouTube anti-bot: the coordinator image bundles pinned `yt-dlp`,
   `yt-dlp-ejs`, `deno`, Node/npm, and the `bgutil-ytdlp-pot-provider` yt-dlp
