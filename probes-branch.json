@@ -1,0 +1,124 @@
+{
+  "media-390": {
+    "coarse": true,
+    "hover": false,
+    "phone": true,
+    "reduced": true,
+    "w": 390,
+    "overflowX": 0,
+    "scrollH": 844
+  },
+  "console-390": {
+    "play": {
+      "x": 24,
+      "y": 414,
+      "w": 48,
+      "h": 48
+    },
+    "drop": {
+      "x": 41,
+      "y": 670,
+      "w": 308,
+      "h": 44
+    },
+    "minus5": {
+      "x": 80,
+      "y": 416,
+      "w": 46,
+      "h": 44
+    },
+    "plus5": {
+      "x": 134,
+      "y": 416,
+      "w": 47,
+      "h": 44
+    },
+    "sameRowMinusPlus": true,
+    "blendRail": {
+      "x": 41,
+      "y": 630,
+      "w": 308,
+      "h": 28
+    },
+    "faderCount": 0,
+    "waveH": 72,
+    "wrapMinH": "72px",
+    "dropStyle": {
+      "touchAction": "none",
+      "userSelect": "none"
+    },
+    "hint": "tap the wave to seek",
+    "wipeText": "Saiba que isso em mim provoca imensa dor"
+  },
+  "setlist-390": {
+    "zoneW": 44,
+    "thumb": {
+      "w": 26,
+      "h": 26
+    },
+    "thumbBorder": "4px"
+  },
+  "perf-390": {
+    "overlay": true,
+    "railH": 28,
+    "thumb": {
+      "w": 26,
+      "h": 26
+    },
+    "labels": "karaokevox 50%full voice"
+  },
+  "media-768": {
+    "coarse": false,
+    "hover": false,
+    "phone": false,
+    "reduced": true,
+    "w": 768,
+    "overflowX": 0,
+    "scrollH": 1024
+  },
+  "console-768": {
+    "play": {
+      "x": 28,
+      "y": 340,
+      "w": 40,
+      "h": 40
+    },
+    "drop": {
+      "x": 599,
+      "y": 379,
+      "w": 124,
+      "h": 26
+    },
+    "minus5": {
+      "x": 76,
+      "y": 347,
+      "w": 40,
+      "h": 26
+    },
+    "plus5": {
+      "x": 124,
+      "y": 347,
+      "w": 41,
+      "h": 26
+    },
+    "sameRowMinusPlus": true,
+    "blendRail": null,
+    "faderCount": 8,
+    "waveH": 96,
+    "wrapMinH": "96px",
+    "dropStyle": {
+      "touchAction": "none",
+      "userSelect": "none"
+    },
+    "hint": "space play · ←/→ seek · V drops vocals · click wave to seek",
+    "wipeText": "Saiba que isso em mim provoca imensa dor"
+  },
+  "setlist-768": {
+    "zoneW": 16,
+    "thumb": {
+      "w": 18,
+      "h": 18
+    },
+    "thumbBorder": "3px"
+  }
+}
