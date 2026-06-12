@@ -228,6 +228,11 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn.sm { padding: 4px 9px; font-size: 12px; }
+/* Coarse-pointer touch-target floor (#187): the confirm modal's actions are
+   .btn — same 44px sizing the .m-btn recipes got in #184; layout-only. */
+@media (pointer: coarse) {
+  .btn { min-height: 44px; }
+}
 
 /* ─── Skeleton shimmer (stage placeholders) ─────────────────────────────── */
 .skel {
