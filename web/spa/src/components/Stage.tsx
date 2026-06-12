@@ -14,7 +14,8 @@ import { type CSSProperties, lazy, type ReactNode, Suspense, useCallback, useEff
 import { getLyrics, getShare, type LyricsPayload, type SharePayload } from "../api";
 import { artifactHref, artifactView, statusMeta } from "../jobStatus";
 import { fmtDuration, formatRelativeTime } from "../lib/jobListUtils";
-import { sourceDisplay } from "../lib/source";
+import { useCoarsePointer, usePhoneLayout } from "../lib/layout";
+import { compactUrlLabel, sourceDisplay } from "../lib/source";
 import { goDashboard, itemUrl } from "../router";
 import { type StageTheme, useStageTheme } from "../theme";
 import { MBulbs, MicMark } from "./marks";
@@ -50,6 +51,7 @@ export function Stage({ token }: { token: string }) {
   const [toast, setToast] = useState<string | null>(null);
   const [view, setViewRaw] = useState<StageView>(initialView);
   const [theme, toggleTheme] = useStageTheme();
+  const phone = usePhoneLayout();
   const timer = useRef<number | null>(null);
 
   const setView = useCallback((v: StageView) => {
@@ -193,7 +195,11 @@ export function Stage({ token }: { token: string }) {
   return (
     <div style={{ height: "100%", overflow: "auto" }}>
       <div className={theme === "day" ? "m-booth" : "m-stage"} style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "0 22px", height: 54, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+        {/* phone (#184): the row wraps instead of overflowing — same elements,
+            same order; the desktop branch is the untouched port. */}
+        <div style={phone
+          ? { display: "flex", alignItems: "center", gap: 12, padding: "8px 14px", minHeight: 54, borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap" }
+          : { display: "flex", alignItems: "center", gap: 12, padding: "0 22px", height: 54, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
           <button className="m-btn sm ghost" type="button" onClick={goDashboard}>← booth</button>
           <MicMark size={20} />
           <span style={{ flex: 1 }}></span>
@@ -242,6 +248,11 @@ function StageBody({
   const meta = statusMeta(payload.status);
   const isComplete = payload.status === "completed";
   const source = sourceDisplay(payload.source_url);
+  // Mobile adaptations (#184): phone shrinks the title, coarse pointers get
+  // bigger view-toggle hit targets. No m-* mobile source for this page — the
+  // desktop Marquee structure is the design; these only resize/rewrap it.
+  const phone = usePhoneLayout();
+  const coarse = useCoarsePointer();
   const title = payload.title?.trim() || `Job ${payload.job_token.slice(0, 8)}`;
   const pct = Math.max(0, Math.min(100, Math.round(payload.progress)));
 
@@ -281,16 +292,18 @@ function StageBody({
           <div className="m-mono" style={{ fontSize: 11, color: "var(--muted)", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
             {metaBits && <span>{metaBits}</span>}
             {payload.owner_display_name && <span>shared by {payload.owner_display_name}</span>}
-            {/* uploads (#173) have no external source — show the filename, no link */}
+            {/* uploads (#173) have no external source — show the filename, no link.
+                Single-line ellipsis on both widths (#184): the raw URL used to
+                wrap across ~4 lines; the full URL stays in the href. */}
             {source.kind === "url" ? (
-              <a href={payload.source_url} target="_blank" rel="noopener" className="m-mono" style={{ color: "var(--info)", textDecoration: "none", overflowWrap: "anywhere" }}>
-                source: {source.label.replace("https://", "")} ↗
+              <a href={payload.source_url} target="_blank" rel="noopener" className="m-mono" style={{ color: "var(--info)", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+                source: {compactUrlLabel(source.label)} ↗
               </a>
             ) : (
-              <span style={{ overflowWrap: "anywhere" }}>source: {source.label}</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>source: {source.label}</span>
             )}
           </div>
-          <h1 style={{ margin: "6px 0 0", fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 28, letterSpacing: "-0.02em", lineHeight: 1.1, overflowWrap: "anywhere" }}>{title}</h1>
+          <h1 style={{ margin: "6px 0 0", fontFamily: "var(--font-display)", fontWeight: 650, fontSize: phone ? 22 : 28, letterSpacing: "-0.02em", lineHeight: 1.1, overflowWrap: "anywhere" }}>{title}</h1>
           {(payload.artist || payload.album) && (
             <div style={{ marginTop: 2, fontSize: 13, color: "var(--muted)" }}>
               {[payload.artist, payload.album].filter(Boolean).join(" — ")}
@@ -302,7 +315,7 @@ function StageBody({
           <div style={{ display: "flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
             {(["console", "setlist"] as const).map((v) => (
               <button key={v} type="button" onClick={() => setView(v)} className="m-mono" style={{
-                appearance: "none", border: "none", cursor: "pointer", padding: "6px 13px", fontSize: 11,
+                appearance: "none", border: "none", cursor: "pointer", padding: coarse ? "10px 14px" : "6px 13px", fontSize: 11,
                 background: view === v ? "var(--accent)" : "var(--bg-card)",
                 color: view === v ? "var(--accent-fg)" : "var(--fg-soft)", fontWeight: 650,
               }}>{v}</button>

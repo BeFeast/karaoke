@@ -27,3 +27,15 @@ export function sourceDisplay(sourceUrl: string): SourceDisplay {
   }
   return { kind: "url", label: raw };
 }
+
+/**
+ * Compact one-line label for a source URL (#184): `https://`/`http://` and a
+ * leading `www.` stripped, then truncated to `max` chars with a trailing `…`.
+ * Pure string ops — total over any input; non-URL strings pass through
+ * (subject only to the same length cap).
+ */
+export function compactUrlLabel(raw: string, max = 56): string {
+  const s = typeof raw === "string" ? raw : "";
+  const label = s.replace(/^https?:\/\//, "").replace(/^www\./, "");
+  return label.length > max ? `${label.slice(0, max)}…` : label;
+}
