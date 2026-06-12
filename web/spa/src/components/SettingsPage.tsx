@@ -21,6 +21,7 @@ import {
   revokeToken,
 } from "../api";
 import { formatRelativeTime } from "../lib/jobListUtils";
+import { usePhoneLayout } from "../lib/layout";
 import { goDashboard } from "../router";
 import { MarqueeTopBar } from "./Booth";
 import { ConfirmDialog, type ConfirmState } from "./ConfirmDialog";
@@ -86,6 +87,11 @@ function PassesSkeleton() {
 }
 
 export function SettingsPage({ authControl }: { authControl?: ReactNode }) {
+  // Phone (#187): responsive adaptation of the shipped structure — the mint
+  // row stacks (input full width, button below) and the container's side
+  // padding tightens to 16. Desktop branch renders identical DOM (undefined
+  // style values are omitted by React).
+  const phone = usePhoneLayout();
   const [tokens, setTokens] = useState<ExtensionTokenOut[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
@@ -182,20 +188,20 @@ export function SettingsPage({ authControl }: { authControl?: ReactNode }) {
       <div className="m-booth" style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}>
         <MarqueeTopBar authControl={authControl} />
 
-        <div style={{ flex: 1, padding: "24px 24px 20px", maxWidth: 720, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: 1, padding: phone ? "24px 16px 20px" : "24px 24px 20px", maxWidth: 720, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column" }}>
           <button className="m-btn sm ghost" type="button" onClick={goDashboard} style={{ alignSelf: "flex-start", marginLeft: -9 }}>← back to the booth</button>
           <h1 style={{ margin: "10px 0 2px", fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 26, letterSpacing: "-0.015em" }}>Settings</h1>
           <div className="m-mono" style={{ fontSize: 11.5, color: "var(--muted)" }}>{active} active stage pass{active === 1 ? "" : "es"}</div>
 
           <SettingsSection title="stage passes — extension tokens">
             <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)", padding: 14 }}>
-              <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ display: "flex", gap: 10, flexDirection: phone ? "column" : undefined }}>
                 <input value={mintName} onChange={(e) => setMintName(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") void mint(); }}
                   placeholder="Name this pass — e.g. Chrome on the desk machine"
                   maxLength={255} disabled={minting} aria-label="Pass name"
-                  style={{ flex: 1, minWidth: 0, padding: "9px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--bg)", color: "var(--fg)", fontSize: 13, fontFamily: "var(--font-ui)", outline: "none" }}></input>
-                <button className="m-btn primary" type="button" onClick={() => void mint()} disabled={minting || !mintName.trim()}>{minting ? "Minting…" : "Mint pass"}</button>
+                  style={{ flex: phone ? undefined : 1, minWidth: 0, padding: "9px 12px", border: "1px solid var(--border)", borderRadius: 7, background: "var(--bg)", color: "var(--fg)", fontSize: 13, fontFamily: "var(--font-ui)", outline: "none" }}></input>
+                <button className="m-btn primary" type="button" onClick={() => void mint()} disabled={minting || !mintName.trim()} style={{ justifyContent: phone ? "center" : undefined }}>{minting ? "Minting…" : "Mint pass"}</button>
               </div>
               {fresh && (
                 <div className="m-mono" role="status" style={{ marginTop: 10, padding: "8px 11px", borderRadius: 7, background: "var(--accent-soft)", color: "var(--accent)", fontSize: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>

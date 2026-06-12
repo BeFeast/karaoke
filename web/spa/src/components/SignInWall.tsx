@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from "react";
 import { getHealth } from "../api";
+import { useCoarsePointer } from "../lib/layout";
 import { MBulbs, MicMark } from "./marks";
 
 export function SignInScreen({ onSignIn }: { onSignIn: () => void }) {
@@ -85,12 +86,15 @@ export function UserAvatar({
   onManage: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Outside-tap dismiss: document-level pointerdown (fires for touch too) +
+  // the stopPropagation wrapper below — taps inside the menu never reach it.
   useEffect(() => {
     if (!open) return;
     const close = () => setOpen(false);
     window.addEventListener("pointerdown", close);
     return () => window.removeEventListener("pointerdown", close);
   }, [open]);
+  const coarse = useCoarsePointer();
   const entries: [string, () => void][] = [
     ["Settings", onSettings],
     ["Manage account", onManage],
@@ -98,12 +102,21 @@ export function UserAvatar({
   ];
   return (
     <div style={{ position: "relative" }} onPointerDown={(e) => e.stopPropagation()}>
+      {/* ≥44px coarse-pointer hit target (#187): the button is a transparent
+          hit area (30 + 2×7 = 44); the negative margin keeps the 30px layout
+          footprint so the topbar and the visual circle (inner span) are
+          unchanged. Fine pointers keep the exact pre-#187 30×30 geometry. */}
       <button type="button" onClick={() => setOpen(!open)} aria-label="Account" style={{
-        appearance: "none", cursor: "pointer", width: 30, height: 30, borderRadius: "50%",
-        border: "2px solid " + (open ? "var(--accent)" : "var(--border)"),
-        background: "var(--accent-soft)", color: "var(--accent)",
-        font: "700 12px/1 var(--font-ui)", display: "grid", placeItems: "center", padding: 0,
-      }}>{(name || email || "?")[0]}</button>
+        appearance: "none", cursor: "pointer", border: "none", background: "transparent",
+        padding: coarse ? 7 : 0, margin: coarse ? -7 : 0, display: "grid", placeItems: "center",
+      }}>
+        <span style={{
+          width: 30, height: 30, borderRadius: "50%",
+          border: "2px solid " + (open ? "var(--accent)" : "var(--border)"),
+          background: "var(--accent-soft)", color: "var(--accent)",
+          font: "700 12px/1 var(--font-ui)", display: "grid", placeItems: "center",
+        }}>{(name || email || "?")[0]}</span>
+      </button>
       {open && (
         <div style={{
           position: "absolute", right: 0, top: 38, zIndex: 20, minWidth: 198,
@@ -114,14 +127,15 @@ export function UserAvatar({
             <div style={{ fontSize: 12.5, fontWeight: 650 }}>{name}</div>
             <div className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 1 }}>{email}</div>
           </div>
+          {/* Hover lives on .signin-item (styles.css) behind @media (hover:
+              hover) — the old inline onMouseEnter/onMouseLeave mutation left
+              the highlight stuck after a tap on iOS (#187). */}
           {entries.map(([label, fn]) => (
-            <button key={label} type="button" onClick={() => { setOpen(false); fn(); }} style={{
+            <button key={label} type="button" className="signin-item" onClick={() => { setOpen(false); fn(); }} style={{
               appearance: "none", border: "none", cursor: "pointer", width: "100%", textAlign: "left",
-              padding: "7px 10px", borderRadius: 6, background: "transparent",
+              padding: "7px 10px", borderRadius: 6,
               color: label === "Sign out" ? "var(--err)" : "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-ui)",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-soft)"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>{label}</button>
+            }}>{label}</button>
           ))}
         </div>
       )}

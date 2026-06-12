@@ -228,6 +228,11 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 }
 .btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn.sm { padding: 4px 9px; font-size: 12px; }
+/* Coarse-pointer touch-target floor (#187): the confirm modal's actions are
+   .btn — same 44px sizing the .m-btn recipes got in #184; layout-only. */
+@media (pointer: coarse) {
+  .btn { min-height: 44px; }
+}
 
 /* ─── Skeleton shimmer (stage placeholders) ─────────────────────────────── */
 .skel {
@@ -290,7 +295,9 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   to { opacity: 1; }
 }
 .modal {
-  width: 420px;
+  /* Keep side margins on phone widths (#187) — never wider than the
+     viewport minus the overlay's 16px padding on each side. */
+  width: min(420px, calc(100vw - 32px));
   max-width: 100%;
   background: var(--bg-card);
   border: var(--rule);
@@ -479,6 +486,15 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 @keyframes toast-in {
   from { opacity: 0; transform: translate(-50%, 8px); }
   to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* ─── Booth account menu (SignInWall) ───────────────────────────────────── */
+/* Menu-item hover as a class behind the hover-capability guard (#187) —
+   the old inline onMouseEnter/onMouseLeave background mutation left the
+   highlight stuck after a tap on iOS (sticky hover). */
+.signin-item { background: transparent; }
+@media (hover: hover) {
+  .signin-item:hover { background: var(--bg-soft); }
 }
 
 /* ── MARQUEE RECIPES (byte-exact port + sanctioned mobile overrides, Refs #184 — do not edit otherwise) ── */
