@@ -1,4 +1,5 @@
 import { buildJobBody, countYoutubeCookies } from "./cookies.js";
+import { MENU_SPEC, submitRefusal } from "./guard.js";
 
 const DEFAULT_BASE_URL = "https://karaoke.oklabs.uk";
 const SOURCE = "chrome-extension";
@@ -40,21 +41,14 @@ const COOKIE_DOMAINS = ["youtube.com", "google.com"];
 const LEGACY_REFRESH_ALARM = "refresh-youtube-cookies";
 const LEGACY_SYNC_STATE_KEY = "youtubeCookieSync";
 
-const HTTP_URL = /^https?:\/\//i;
-
 chrome.runtime.onInstalled.addListener(() => {
+  // Table-driven registration off MENU_SPEC (guard.js) — exactly one entry per
+  // distinct action. The old page+link pair both rendered on a YouTube video
+  // link, doubling the menu (#177).
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: "submit-page",
-      title: "Submit this video page to Karaoke",
-      contexts: ["page"],
-    });
-
-    chrome.contextMenus.create({
-      id: "submit-link",
-      title: "Submit video link to Karaoke",
-      contexts: ["link"],
-    });
+    for (const item of MENU_SPEC) {
+      chrome.contextMenus.create(item);
+    }
   });
 
   cleanupLegacyCookieSync();
@@ -79,15 +73,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const url = info.linkUrl || info.pageUrl || tab?.url || "";
-  if (!isSubmittableUrl(url)) {
-    await notifyFailure("Use this menu on an http(s) video page or link.");
+
+  // Same guard as the toolbar path (#177): non-http(s) schemes and the booth's
+  // own pages get a friendly refusal instead of a doomed job.
+  let refusal;
+  try {
+    refusal = submitRefusal(url, (await getConfig()).baseUrl);
+  } catch (error) {
+    await notifyFailure(error.message || String(error));
+    return;
+  }
+  if (refusal) {
+    await notifyFailure(refusal.message);
     return;
   }
 
   try {
     const { job, cookiesAttached } = await submitToKaraoke(url);
     await notifySuccess(job);
-    if (info.menuItemId === "submit-page" && tab?.id != null && tab?.url === url) {
+    if (!info.linkUrl && tab?.id != null && tab?.url === url) {
       await rememberTabSubmit(tab.id, url, job.id, cookiesAttached);
     }
   } catch (error) {
@@ -131,8 +135,12 @@ async function submitActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const url = tab?.url || "";
   const tabTitle = tab?.title || "";
-  if (!isSubmittableUrl(url)) {
-    return { ok: false, reason: "unsupported-page" };
+  // Guard before any job is minted (#177): non-http(s) schemes and the booth's
+  // own pages (self-submit minted doomed job #79) get a friendly refusal the
+  // popup renders as a note, not an error.
+  const refusal = submitRefusal(url, (await getConfig()).baseUrl);
+  if (refusal) {
+    return { ok: false, reason: refusal.reason, message: refusal.message };
   }
 
   const dedupKey = `${SUBMITTED_PREFIX}${tab.id}:${url}`;
@@ -143,8 +151,10 @@ async function submitActiveTab() {
       ok: true,
       jobId: previous.jobId,
       cookiesAttached: previous.cookiesAttached,
+      dismissed: Boolean(previous.dismissed),
       cached: true,
       tabTitle,
+      dedupKey,
     };
   }
 
@@ -152,7 +162,7 @@ async function submitActiveTab() {
   await chrome.storage.session.set({
     [dedupKey]: { jobId: job.id, cookiesAttached },
   });
-  return { ok: true, job, jobId: job.id, cookiesAttached, tabTitle };
+  return { ok: true, job, jobId: job.id, cookiesAttached, tabTitle, dedupKey };
 }
 
 async function rememberTabSubmit(tabId, url, jobId, cookiesAttached) {
@@ -183,10 +193,6 @@ async function submitToKaraoke(url) {
     await setErrorBadge();
     throw error;
   }
-}
-
-function isSubmittableUrl(url) {
-  return HTTP_URL.test(String(url || ""));
 }
 
 // Drop the central-jar rotation alarm + stored sync state left by #73/#74. The

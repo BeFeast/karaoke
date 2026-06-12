@@ -6,14 +6,22 @@
 // GET /jobs mini-feed ("tonight"). No fabricated jobs, no invented figures —
 // errors are shown as the server/Chrome reported them.
 
+import { failedReceiptLine } from "./receipt.js";
+
 const DEFAULT_BASE_URL = "https://karaoke.oklabs.uk";
 const ACTIVE_STATUSES = new Set(["queued", "downloading", "separating", "transcribing"]);
 const FEED_LIMIT = 6;
 const RECEIPT_POLL_MS = 1500;
+// How long a feed-row ✕ stays armed ("sure?") before reverting (#177).
+const DELETE_ARM_MS = 4000;
 
 let config = { baseUrl: DEFAULT_BASE_URL, bearerToken: "" };
 let receiptJobId = null;
 let receiptCookieLine = "";
+// The session dedup record behind the receipt — dismissing writes
+// `dismissed: true` back onto it so reopening the popup keeps it hidden.
+let receiptDedupKey = null;
+let receiptRecord = null;
 
 init();
 
@@ -65,8 +73,9 @@ async function submitAndRenderReceipt() {
   }
 
   if (!response.ok) {
-    if (response.reason === "unsupported-page") {
-      renderReceiptNote("nothing submitted — open an http(s) video page, then hit the toolbar");
+    if (response.message) {
+      // Guard refusal (guard.js, #177) — a friendly note, not an error.
+      renderReceiptNote(`nothing submitted — ${response.message}`);
     } else {
       renderReceiptError(response.error || "Submit failed.");
     }
@@ -76,6 +85,17 @@ async function submitAndRenderReceipt() {
   receiptCookieLine = response.cookiesAttached
     ? "youtube session ✓ rode along — this job only"
     : "no youtube session — public fetch";
+  receiptDedupKey = response.dedupKey || null;
+  receiptRecord = {
+    jobId: response.jobId ?? response.job?.id ?? null,
+    cookiesAttached: Boolean(response.cookiesAttached),
+  };
+
+  if (response.dismissed) {
+    // Dismissed on an earlier open — stay hidden; the job rides the feed (#177).
+    hideReceipt();
+    return;
+  }
 
   if (response.job) {
     renderReceiptJob(response.job, response.tabTitle);
@@ -87,7 +107,14 @@ async function submitAndRenderReceipt() {
 }
 
 async function pollReceipt(tabTitle) {
+  if (receiptJobId == null) {
+    return;
+  }
   const job = await fetchJson(`/jobs/${receiptJobId}/status`).catch(() => null);
+  if (receiptJobId == null) {
+    // Dismissed while the fetch was in flight — stop repainting.
+    return;
+  }
   if (job) {
     renderReceiptJob(job, tabTitle);
     if (!ACTIVE_STATUSES.has(job.status)) {
@@ -110,11 +137,30 @@ function renderReceiptJob(job, tabTitle) {
       job.title || tabTitle || job.source_url,
     ),
   );
+  head.append(dismissButton());
   sign.append(head);
 
-  const wipeRow = el("div", { style: "margin-top: 8px" });
-  wipeRow.append(wipe(stageText(job), job.progress ?? 0, 11));
-  sign.append(wipeRow);
+  if (job.status === "failed") {
+    // Status lives in the chip alone (#177 — it used to repeat in the wipe).
+    // One compact line (stage_note / first error line) replaces the raw
+    // PipelineError dump; the full text rides a hover tooltip.
+    const line = failedReceiptLine(job);
+    if (line) {
+      const attrs = {
+        class: "m-mono",
+        style: "margin-top: 8px; font-size: 10px; color: var(--err); overflow: hidden; text-overflow: ellipsis; white-space: nowrap",
+      };
+      const full = String(job.error || "").trim();
+      if (full) {
+        attrs.title = full;
+      }
+      sign.append(el("div", attrs, line));
+    }
+  } else if (job.status !== "cancelled") {
+    const wipeRow = el("div", { style: "margin-top: 8px" });
+    wipeRow.append(wipe(stageText(job), job.progress ?? 0, 11));
+    sign.append(wipeRow);
+  }
 
   const meta = el("div", {
     class: "m-mono",
@@ -122,12 +168,37 @@ function renderReceiptJob(job, tabTitle) {
   });
   meta.append(el("span", {}, receiptCookieLine), el("span", {}, `#${job.id}`));
   sign.append(meta);
+}
 
-  if (job.status === "failed" && job.error) {
-    sign.append(
-      el("div", { class: "m-mono", style: "margin-top: 7px; font-size: 10px; color: var(--err)" }, job.error),
-    );
-  }
+// ✕ on the receipt card — local-state dismiss (#177): hide the card, remember
+// the choice on the session dedup record so reopening the popup keeps it
+// hidden, and let the job surface as a normal "tonight" row. No server call.
+function dismissButton() {
+  const btn = el(
+    "button",
+    {
+      class: "m-btn sm ghost",
+      type: "button",
+      title: "Dismiss this receipt",
+      style: "padding: 0 5px; flex: none; font-size: 11px",
+    },
+    "✕",
+  );
+  btn.addEventListener("click", async () => {
+    hideReceipt();
+    if (receiptDedupKey && receiptRecord) {
+      await chrome.storage.session.set({
+        [receiptDedupKey]: { ...receiptRecord, dismissed: true },
+      });
+    }
+    renderFeed();
+  });
+  return btn;
+}
+
+function hideReceipt() {
+  document.querySelector("#receipt-wrap").hidden = true;
+  receiptJobId = null;
 }
 
 function renderReceiptError(message) {
@@ -216,12 +287,56 @@ function feedRow(job) {
   } else {
     head.append(el("span", { class: "m-mono", style: "font-size: 10.5px; color: var(--accent); flex: none" }, `${job.progress ?? 0}%`));
   }
+  head.append(deleteButton(job));
   row.append(head);
 
   if (running) {
     row.append(wipe(stageText(job), job.progress ?? 0, 10.5));
   }
   return row;
+}
+
+// ✕ on a feed row → DELETE /jobs/{id} (owner-scoped, #51) with an inline
+// two-step confirm: first click arms the button ("sure?"), second click
+// deletes; the arm reverts after a beat. Inline instead of window.confirm —
+// native modal dialogs are unreliable inside MV3 action popups.
+function deleteButton(job) {
+  const idleStyle = "padding: 0 5px; flex: none; font-size: 10.5px; color: var(--muted)";
+  const btn = el(
+    "button",
+    { class: "m-btn sm ghost", type: "button", title: `Delete job #${job.id}`, style: idleStyle },
+    "✕",
+  );
+  let armed = false;
+  let disarmTimer = null;
+  const disarm = () => {
+    armed = false;
+    btn.textContent = "✕";
+    btn.style.color = "var(--muted)";
+  };
+  btn.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    if (!armed) {
+      armed = true;
+      btn.textContent = "sure?";
+      btn.style.color = "var(--err)";
+      disarmTimer = setTimeout(disarm, DELETE_ARM_MS);
+      return;
+    }
+    clearTimeout(disarmTimer);
+    btn.disabled = true;
+    btn.textContent = "…";
+    try {
+      await fetchJson(`/jobs/${job.id}`, { method: "DELETE" });
+    } catch (error) {
+      btn.disabled = false;
+      btn.title = `Delete failed — ${error?.message || error}`;
+      disarm();
+      return;
+    }
+    renderFeed();
+  });
+  return btn;
 }
 
 // ── shared bits ─────────────────────────────────────────────────────────────
@@ -280,14 +395,14 @@ function el(tag, attrs = {}, text) {
   return node;
 }
 
-async function fetchJson(path) {
+async function fetchJson(path, init = {}) {
   const headers = {};
   if (config.bearerToken) {
     headers.Authorization = `Bearer ${config.bearerToken}`;
   }
   let response;
   try {
-    response = await fetch(`${config.baseUrl}${path}`, { headers });
+    response = await fetch(`${config.baseUrl}${path}`, { ...init, headers });
   } catch (error) {
     throw new Error(`the booth at ${hostLabel(config.baseUrl)} didn't answer (${error.message})`);
   }
@@ -295,6 +410,10 @@ async function fetchJson(path) {
     const error = new Error(`HTTP ${response.status}`);
     error.httpStatus = response.status;
     throw error;
+  }
+  if (response.status === 204) {
+    // DELETE /jobs/{id} answers 204 No Content.
+    return null;
   }
   return response.json();
 }
