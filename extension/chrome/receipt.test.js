@@ -3,7 +3,7 @@
 // bun test  (from extension/chrome)
 
 import { describe, expect, test } from "bun:test";
-import { compactErrorLine, failedReceiptLine } from "./receipt.js";
+import { compactErrorLine, extractorReceiptLabel, failedReceiptLine } from "./receipt.js";
 
 // The real shape of `job.error` (worker pipeline.py _run): a one-line summary
 // followed by the captured stderr tail.
@@ -68,5 +68,23 @@ describe("failedReceiptLine", () => {
     const job = { stage_note: "z".repeat(300) };
     expect(failedReceiptLine(job).length).toBe(140);
     expect(failedReceiptLine(job).endsWith("…")).toBe(true);
+  });
+});
+
+describe("extractorReceiptLabel", () => {
+  test("capitalizes the lowercase IE_NAME and adds the tick (#181)", () => {
+    expect(extractorReceiptLabel("youtube")).toBe("Youtube ✓");
+    expect(extractorReceiptLabel("soundcloud")).toBe("Soundcloud ✓");
+  });
+
+  test("already-cased names keep their casing", () => {
+    expect(extractorReceiptLabel("BiliBili")).toBe("BiliBili ✓");
+  });
+
+  test("no extractor → empty label (Submit-anyway receipts show no tick)", () => {
+    expect(extractorReceiptLabel(null)).toBe("");
+    expect(extractorReceiptLabel("")).toBe("");
+    expect(extractorReceiptLabel("   ")).toBe("");
+    expect(extractorReceiptLabel(undefined)).toBe("");
   });
 });

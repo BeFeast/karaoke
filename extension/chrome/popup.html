@@ -29,11 +29,13 @@
         <button id="open-settings" class="m-btn sm ghost" type="button" title="Settings" style="padding: 2px 6px">⚙</button>
       </div>
 
-      <!-- the receipt — submitted on open, already running; the ✕ dismiss
-           hides the whole wrap (#177) -->
+      <!-- the receipt — submitted on open when the preflight (#181) matches a
+           dedicated extractor; the ✕ dismiss hides the whole wrap (#177).
+           popup.js hides the hint on refusal/confirm states, where nothing
+           was submitted. -->
       <div id="receipt-wrap" style="padding: 12px 14px 0">
         <div id="receipt" class="m-sign" style="border-color: var(--accent); padding: 11px 13px"></div>
-        <div class="m-mono" style="font-size: 10px; color: var(--muted); margin: 7px 2px 0">
+        <div id="receipt-hint" class="m-mono" style="font-size: 10px; color: var(--muted); margin: 7px 2px 0">
           the toolbar click already submitted this tab — this popup is just the receipt
         </div>
       </div>

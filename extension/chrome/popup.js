@@ -1,12 +1,15 @@
 // Doorway popup-as-receipt (issue #155, design/m-doorway.jsx MPopupBoard).
 //
-// Opening the popup IS the toolbar click: the service worker submits the
-// active tab (once per tab+URL, chrome.storage.session-deduped) and this page
-// renders the real POST /jobs response as the receipt card, plus the real
-// GET /jobs mini-feed ("tonight"). No fabricated jobs, no invented figures —
-// errors are shown as the server/Chrome reported them.
+// Opening the popup IS the toolbar click: the service worker preflights the
+// active tab against GET /preflight (#181) and submits it when a dedicated
+// yt-dlp extractor matches (once per tab+URL, chrome.storage.session-deduped);
+// this page renders the real POST /jobs response as the receipt card, plus
+// the real GET /jobs mini-feed ("tonight"). Generic-only / unreachable
+// preflights render a confirm state with a Submit-anyway button instead of
+// auto-submitting. No fabricated jobs, no invented figures — errors are shown
+// as the server/Chrome reported them.
 
-import { failedReceiptLine } from "./receipt.js";
+import { extractorReceiptLabel, failedReceiptLine } from "./receipt.js";
 
 const DEFAULT_BASE_URL = "https://karaoke.oklabs.uk";
 const ACTIVE_STATUSES = new Set(["queued", "downloading", "separating", "transcribing"]);
@@ -18,6 +21,9 @@ const DELETE_ARM_MS = 4000;
 let config = { baseUrl: DEFAULT_BASE_URL, bearerToken: "" };
 let receiptJobId = null;
 let receiptCookieLine = "";
+// The matched yt-dlp extractor (preflight #181) — shown as "Youtube ✓" on the
+// receipt meta line; null on Submit-anyway receipts.
+let receiptExtractor = null;
 // The session dedup record behind the receipt — dismissing writes
 // `dismissed: true` back onto it so reopening the popup keeps it hidden.
 let receiptDedupKey = null;
@@ -58,23 +64,32 @@ function hostLabel(baseUrl) {
 
 // ── receipt ─────────────────────────────────────────────────────────────────
 
-async function submitAndRenderReceipt() {
+async function submitAndRenderReceipt(force = false) {
   let response;
   try {
-    response = await chrome.runtime.sendMessage({ type: "submit-active-tab" });
+    response = await chrome.runtime.sendMessage({ type: "submit-active-tab", force });
   } catch (error) {
+    setReceiptHint(false);
     renderReceiptError(String(error?.message || error));
     return;
   }
 
   if (!response) {
+    setReceiptHint(false);
     renderReceiptError("The extension service worker did not answer.");
     return;
   }
 
   if (!response.ok) {
-    if (response.message) {
-      // Guard refusal (guard.js, #177) — a friendly note, not an error.
+    // Nothing was submitted, so the "already submitted" hint would lie.
+    setReceiptHint(false);
+    if (response.confirm) {
+      // Preflight says "not obviously a video" — or could not say at all
+      // (#181). No auto-submit; the user decides with Submit anyway.
+      renderConfirm(response.message);
+    } else if (response.message) {
+      // Guard/preflight refusal (guard.js #177, preflight.js #181) — a
+      // friendly note, not an error.
       renderReceiptNote(`nothing submitted — ${response.message}`);
     } else {
       renderReceiptError(response.error || "Submit failed.");
@@ -85,11 +100,16 @@ async function submitAndRenderReceipt() {
   receiptCookieLine = response.cookiesAttached
     ? "youtube session ✓ rode along — this job only"
     : "no youtube session — public fetch";
+  receiptExtractor = response.extractor || null;
   receiptDedupKey = response.dedupKey || null;
   receiptRecord = {
     jobId: response.jobId ?? response.job?.id ?? null,
     cookiesAttached: Boolean(response.cookiesAttached),
+    extractor: receiptExtractor,
   };
+  // The static "the toolbar click already submitted this tab" hint is only
+  // true on the one-click path — Submit-anyway receipts speak for themselves.
+  setReceiptHint(!force);
 
   if (response.dismissed) {
     // Dismissed on an earlier open — stay hidden; the job rides the feed (#177).
@@ -166,8 +186,36 @@ function renderReceiptJob(job, tabTitle) {
     class: "m-mono",
     style: "display: flex; justify-content: space-between; margin-top: 7px; font-size: 10px; color: var(--muted)",
   });
-  meta.append(el("span", {}, receiptCookieLine), el("span", {}, `#${job.id}`));
+  // "Youtube ✓ · #42" — the preflight-matched extractor rides next to the job
+  // id (#181); Submit-anyway receipts have no match and show the id alone.
+  const extractorLabel = extractorReceiptLabel(receiptExtractor);
+  const idLabel = extractorLabel ? `${extractorLabel} · #${job.id}` : `#${job.id}`;
+  meta.append(el("span", {}, receiptCookieLine), el("span", {}, idLabel));
   sign.append(meta);
+}
+
+// Preflight confirm state (#181): yt-dlp would only reach this page through
+// its catch-all Generic extractor (or the preflight could not answer), so
+// nothing was submitted. One click on Submit anyway re-enters the normal
+// submit path with force=true and the receipt takes over.
+function renderConfirm(message) {
+  const sign = resetReceipt("var(--warn)");
+  sign.append(
+    el("div", { style: "font-size: 11.5px; line-height: 1.5; color: var(--fg-soft)" }, message),
+  );
+  const row = el("div", { style: "margin-top: 9px" });
+  const btn = el("button", { class: "m-btn sm primary", type: "button" }, "Submit anyway");
+  btn.addEventListener("click", () => {
+    btn.disabled = true;
+    renderReceiptNote("submitting this tab…");
+    submitAndRenderReceipt(true).finally(() => renderFeed());
+  });
+  row.append(btn);
+  sign.append(row);
+}
+
+function setReceiptHint(visible) {
+  document.querySelector("#receipt-hint").hidden = !visible;
 }
 
 // ✕ on the receipt card — local-state dismiss (#177): hide the card, remember
