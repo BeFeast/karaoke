@@ -10,16 +10,53 @@ import {
 } from "./preflight.js";
 
 const BASE_HOST = "karaoke.oklabs.uk";
-const SUPPORTED = { supported: true, extractor: "youtube", generic_only: false };
+// Single-media: a confident single track — the only auto-submit path (#192).
+const SUPPORTED = {
+  supported: true,
+  extractor: "youtube",
+  generic_only: false,
+  single_media: true,
+};
+// A dedicated extractor matched, but it returns a feed/playlist/channel/search
+// container, not a single video (#192).
+const CONTAINER = {
+  supported: true,
+  extractor: "youtube:tab",
+  generic_only: false,
+  single_media: false,
+};
+// An older booth that predates #192 omits the single_media key entirely.
+const SUPPORTED_NO_SINGLE_MEDIA_KEY = {
+  supported: true,
+  extractor: "youtube",
+  generic_only: false,
+};
 const GENERIC_ONLY = { supported: false, extractor: null, generic_only: true };
 const UNSUPPORTED = { supported: false, extractor: null, generic_only: false };
 
 describe("classifySubmit", () => {
-  test("dedicated extractor match → submit (one click, no friction)", () => {
+  test("single-media extractor match → submit (one click, no friction)", () => {
     expect(classifySubmit("https://www.youtube.com/watch?v=dQw4w9WgXcQ", BASE_HOST, SUPPORTED)).toBe(
       "submit",
     );
     expect(classifySubmit("http://example.com/clip", BASE_HOST, SUPPORTED)).toBe("submit");
+  });
+
+  test("container extractor match (feed/playlist/channel) → confirm, never silent submit (#192)", () => {
+    expect(classifySubmit("https://www.youtube.com/", BASE_HOST, CONTAINER)).toBe("confirm");
+    expect(
+      classifySubmit("https://www.youtube.com/feed/recommended", BASE_HOST, CONTAINER),
+    ).toBe("confirm");
+  });
+
+  test("supported but no single_media key (older booth) → confirm, never silent submit (#192)", () => {
+    expect(
+      classifySubmit(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        BASE_HOST,
+        SUPPORTED_NO_SINGLE_MEDIA_KEY,
+      ),
+    ).toBe("confirm");
   });
 
   test("generic-only match → confirm (no auto-submit)", () => {
@@ -76,9 +113,19 @@ describe("fetchPreflight", () => {
 
   test("parses a 200 verdict and normalizes the fields", async () => {
     const fetchImpl = async () =>
-      jsonResponse({ supported: true, extractor: "youtube", generic_only: false });
+      jsonResponse({
+        supported: true,
+        extractor: "youtube",
+        generic_only: false,
+        single_media: true,
+      });
     const result = await fetchPreflight(BASE, "https://youtu.be/abc", { fetchImpl });
-    expect(result).toEqual({ supported: true, extractor: "youtube", generic_only: false });
+    expect(result).toEqual({
+      supported: true,
+      extractor: "youtube",
+      generic_only: false,
+      single_media: true,
+    });
   });
 
   test("builds the /preflight URL with the tab URL encoded and sends the auth headers", async () => {
@@ -100,10 +147,15 @@ describe("fetchPreflight", () => {
     expect(seenInit.signal).toBeInstanceOf(AbortSignal);
   });
 
-  test("missing extractor/flags normalize to null/false", async () => {
+  test("missing extractor/flags normalize to null/false (older booth → single_media false)", async () => {
     const fetchImpl = async () => jsonResponse({ supported: false });
     const result = await fetchPreflight(BASE, "https://example.com/x", { fetchImpl });
-    expect(result).toEqual({ supported: false, extractor: null, generic_only: false });
+    expect(result).toEqual({
+      supported: false,
+      extractor: null,
+      generic_only: false,
+      single_media: false,
+    });
   });
 
   test("non-2xx answer → null (caller falls back to confirm)", async () => {

@@ -1,6 +1,7 @@
 import { buildJobBody, countYoutubeCookies } from "./cookies.js";
 import { MENU_SPEC, OPEN_BOOTH_MENU_ID, submitRefusal } from "./guard.js";
 import {
+  CONFIRM_CONTAINER_MESSAGE,
   CONFIRM_GENERIC_MESSAGE,
   CONFIRM_UNAVAILABLE_MESSAGE,
   REFUSE_UNSUPPORTED_MESSAGE,
@@ -196,12 +197,20 @@ async function submitActiveTab({ force = false } = {}) {
     });
     const verdict = classifySubmit(url, baseHostOf(config.baseUrl), preflightResult);
     if (verdict === "confirm") {
-      return {
-        ok: false,
-        confirm: true,
-        reason: preflightResult ? "generic-only" : "preflight-unavailable",
-        message: preflightResult ? CONFIRM_GENERIC_MESSAGE : CONFIRM_UNAVAILABLE_MESSAGE,
-      };
+      // Three confirm flavours, each rendered as a note + Submit-anyway button:
+      // no verdict at all (preflight error/timeout), a dedicated extractor that
+      // returns a feed/playlist/channel/search container (#192), or yt-dlp's
+      // Generic catch-all (#181).
+      let reason = "preflight-unavailable";
+      let message = CONFIRM_UNAVAILABLE_MESSAGE;
+      if (preflightResult?.supported) {
+        reason = "container";
+        message = CONFIRM_CONTAINER_MESSAGE;
+      } else if (preflightResult) {
+        reason = "generic-only";
+        message = CONFIRM_GENERIC_MESSAGE;
+      }
+      return { ok: false, confirm: true, reason, message };
     }
     if (verdict === "refuse") {
       // Not even the Generic extractor wants it — message only, no button.

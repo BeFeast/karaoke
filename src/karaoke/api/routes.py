@@ -238,6 +238,7 @@ class PreflightOut(BaseModel):
     supported: bool
     extractor: str | None
     generic_only: bool
+    single_media: bool
 
 
 class ConfigOut(BaseModel):
@@ -559,6 +560,7 @@ async def preflight(
         supported=result.supported,
         extractor=result.extractor,
         generic_only=result.generic_only,
+        single_media=result.single_media,
     )
 
 
