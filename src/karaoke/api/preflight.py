@@ -31,14 +31,23 @@ class PreflightResult:
     * ``generic_only`` — the URL is syntactically valid http(s) but only the
       catch-all Generic extractor matched (yt-dlp *might* scrape something,
       with no guarantee).
+    * ``single_media`` — the matched extractor returns a single track, not a
+      playlist / feed / channel / search container. Read conservatively from
+      the extractor's ``_RETURN_TYPE``: only the literal ``'video'`` counts;
+      ``'any'`` / ``'playlist'`` / ``None`` (and no match) → ``False`` (#192).
+      This is what gates the extension's one-click auto-submit: container URLs
+      must demote to a confirm instead of silently minting a job.
     """
 
     supported: bool
     extractor: str | None
     generic_only: bool
+    single_media: bool
 
 
-_INVALID_URL = PreflightResult(supported=False, extractor=None, generic_only=False)
+_INVALID_URL = PreflightResult(
+    supported=False, extractor=None, generic_only=False, single_media=False
+)
 
 
 def _is_http_url(url: str) -> bool:
@@ -65,8 +74,23 @@ def match_url(url: str) -> PreflightResult:
         if ie.ie_key() == "Generic":
             generic_matched = True
             continue
-        return PreflightResult(supported=True, extractor=ie.IE_NAME, generic_only=False)
-    return PreflightResult(supported=False, extractor=None, generic_only=generic_matched)
+        # Conservative single-media test (#192): only an extractor that yt-dlp
+        # annotates ``_RETURN_TYPE = 'video'`` is a confident single track.
+        # 'any' / 'playlist' / None (feed, channel, playlist, search) are
+        # containers and must NOT auto-submit — fail safe to a confirm.
+        single_media = getattr(ie, "_RETURN_TYPE", None) == "video"
+        return PreflightResult(
+            supported=True,
+            extractor=ie.IE_NAME,
+            generic_only=False,
+            single_media=single_media,
+        )
+    return PreflightResult(
+        supported=False,
+        extractor=None,
+        generic_only=generic_matched,
+        single_media=False,
+    )
 
 
 # Warm-up sweep: nothing dedicated matches this URL, so every extractor's
