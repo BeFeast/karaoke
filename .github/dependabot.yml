@@ -21,3 +21,12 @@ updates:
           - "yt-dlp"
           - "yt-dlp-ejs"
           - "bgutil-ytdlp-pot-provider"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      github-actions-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
