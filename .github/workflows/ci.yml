@@ -15,7 +15,7 @@ jobs:
     name: lint-test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -47,7 +47,7 @@ jobs:
     env:
       KARAOKE_DATABASE_URL: postgresql+psycopg://karaoke:karaoke@localhost:5432/karaoke
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -62,7 +62,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Require manifest version bump on extension changes
@@ -95,7 +95,7 @@ jobs:
       run:
         working-directory: extension/chrome
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
       - name: Install deps
@@ -110,7 +110,7 @@ jobs:
       run:
         working-directory: web/spa
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
       - name: Install deps
@@ -133,7 +133,7 @@ jobs:
     name: android
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Detect mobile/android changes
