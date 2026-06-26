@@ -704,6 +704,13 @@ _SHARE_HTML_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<!-- The MarqueeMark favicon family (#205) — served at the site root by the
+     API, the same sign as the SPA tab and the extension icons. The share page
+     is the most-shared surface, so it must not unfurl a blank/generic icon. -->
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
 <title>{title} — karaoke</title>
 <style>
  :root {{
