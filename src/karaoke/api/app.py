@@ -12,7 +12,7 @@ from fastapi.responses import RedirectResponse
 
 from karaoke import __version__
 from karaoke.api.routes import router
-from karaoke.api.spa_static import SpaStaticFiles
+from karaoke.api.spa_static import SpaStaticFiles, register_root_icons
 from karaoke.api.tokens import router as tokens_router
 from karaoke.api.ws import get_hub, shutdown_hub, ws_router
 from karaoke.config import Settings, get_settings
@@ -99,6 +99,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # stale index referencing old bundles (issue #122).
     spa = Path(settings.spa_dist_path)
     if spa.is_dir():
+        # Favicon family at the site root (/favicon.ico, /apple-touch-icon.png,
+        # /site.webmanifest, …) — registered before the mount so the bare
+        # domain and the SSR /share page resolve a real icon (issue #205).
+        register_root_icons(app, spa)
         app.mount("/app", SpaStaticFiles(directory=str(spa), html=True), name="spa")
 
     return app

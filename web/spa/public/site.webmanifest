@@ -1,0 +1,14 @@
+{
+  "name": "Karaoke",
+  "short_name": "Karaoke",
+  "start_url": "/app/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#5f7a4a",
+  "background_color": "#fbf9f4",
+  "icons": [
+    { "src": "/favicon.svg", "type": "image/svg+xml", "sizes": "any" },
+    { "src": "/icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "/icon-512.png", "type": "image/png", "sizes": "512x512" }
+  ]
+}
