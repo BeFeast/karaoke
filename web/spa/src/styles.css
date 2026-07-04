@@ -431,6 +431,8 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 .synced-lyrics-seek {
   display: block;
   width: 100%;
+  text-align: start;
+  unicode-bidi: plaintext;
   background: none;
   border: none;
   cursor: pointer;

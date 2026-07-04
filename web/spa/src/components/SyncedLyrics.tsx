@@ -25,6 +25,9 @@ const LINE_TAG = /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
 // Inline word-level tags from Enhanced LRC, e.g. `<00:12.34>`; stripped for the
 // line text since we render line-level highlight.
 const WORD_TAG = /<\d{1,2}:\d{2}(?:[.:]\d{1,3})?>/g;
+const RTL_STRONG = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]/u;
+const LTR_STRONG = /\p{Script=Latin}|\p{Script=Greek}|\p{Script=Cyrillic}/u;
+type LyricsDirection = "ltr" | "rtl" | "auto";
 
 function tagToSeconds(min: string, sec: string, frac?: string): number {
   let t = Number(min) * 60 + Number(sec);
@@ -84,6 +87,21 @@ export function activeLineIndex(lines: LyricLine[], t: number): number {
   return ans;
 }
 
+/**
+ * Pick the scroll container direction from the first strong-direction lyric
+ * character. Returning "auto" keeps the browser bidi fallback for lyrics with
+ * no obvious strong script in the parsed text.
+ */
+export function detectLyricsDirection(lines: LyricLine[]): LyricsDirection {
+  for (const line of lines) {
+    for (const char of line.text) {
+      if (RTL_STRONG.test(char)) return "rtl";
+      if (LTR_STRONG.test(char)) return "ltr";
+    }
+  }
+  return "auto";
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export interface SyncedLyricsProps {
@@ -116,6 +134,7 @@ export function SyncedLyrics({
   // Parse once per LRC body (not per frame).
   const lines = useMemo(() => (lrc ? parseLrc(lrc) : []), [lrc]);
   const hasSynced = lines.length > 0;
+  const lyricsDirection = useMemo(() => detectLyricsDirection(lines), [lines]);
 
   // Active index from the playhead. Cheap binary search; the render below only
   // re-runs when React re-renders this component on a currentTime change.
@@ -156,6 +175,7 @@ export function SyncedLyrics({
           className="synced-lyrics-list"
           ref={listRef}
           aria-label="Synced lyrics"
+          dir={lyricsDirection}
         >
           {lines.map((line, i) => (
             <li
@@ -171,6 +191,7 @@ export function SyncedLyrics({
                 className="synced-lyrics-seek"
                 onClick={() => onSeek(line.t)}
                 title={`Seek to ${formatTimestamp(line.t)}`}
+                dir="auto"
               >
                 {line.text}
               </button>
