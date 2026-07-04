@@ -13,11 +13,8 @@
 //     waveform here would violate the visual-only wavesurfer rule.
 
 import { useRef } from "react";
+import { useActiveTouchStart } from "../lib/touchGuards";
 import { railPct } from "../player/engineMath";
-
-function preventIOSLongPress(e: React.TouchEvent) {
-  e.preventDefault();
-}
 
 const TOUCH_DRAG_GUARDS = {
   touchAction: "none",
@@ -99,16 +96,18 @@ export function ProtoFader({
   ducked?: boolean;
 }) {
   const trackRef = useRef<HTMLDivElement | null>(null);
-  const drag = (e: React.PointerEvent) => {
+  const moveToClientY = (clientY: number) => {
+    const track = trackRef.current;
+    if (!track) return;
+    const r = track.getBoundingClientRect();
+    const pct = 100 - ((clientY - r.top) / r.height) * 100;
+    onChange(Math.round(Math.max(0, Math.min(100, pct))));
+  };
+  const drag = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === "touch") return;
     e.preventDefault();
-    const move = (ev: { clientY: number }) => {
-      const track = trackRef.current;
-      if (!track) return;
-      const r = track.getBoundingClientRect();
-      const pct = 100 - ((ev.clientY - r.top) / r.height) * 100;
-      onChange(Math.round(Math.max(0, Math.min(100, pct))));
-    };
-    move(e);
+    const move = (ev: { clientY: number }) => moveToClientY(ev.clientY);
+    moveToClientY(e.clientY);
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
@@ -116,11 +115,30 @@ export function ProtoFader({
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
+  useActiveTouchStart(trackRef, (e) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    if (!touch) return;
+    moveToClientY(touch.clientY);
+    const move = (ev: TouchEvent) => {
+      ev.preventDefault();
+      const next = ev.touches[0] ?? ev.changedTouches[0];
+      if (next) moveToClientY(next.clientY);
+    };
+    const up = () => {
+      window.removeEventListener("touchmove", move);
+      window.removeEventListener("touchend", up);
+      window.removeEventListener("touchcancel", up);
+    };
+    window.addEventListener("touchmove", move, { passive: false });
+    window.addEventListener("touchend", up);
+    window.addEventListener("touchcancel", up);
+  });
   const shown = ducked ? Math.min(value, 8) : value;
   return (
     <div style={{ display: "grid", justifyItems: "center", gap: 6, userSelect: "none" }}>
       <span className="m-mono" style={{ fontSize: 10, letterSpacing: "0.1em", color }}>{label}</span>
-      <div ref={trackRef} onPointerDown={drag} onTouchStart={preventIOSLongPress} style={{ position: "relative", width: 34, height: 132, display: "flex", justifyContent: "center", cursor: "ns-resize", ...TOUCH_DRAG_GUARDS }}>
+      <div ref={trackRef} onPointerDown={drag} style={{ position: "relative", width: 34, height: 132, display: "flex", justifyContent: "center", cursor: "ns-resize", ...TOUCH_DRAG_GUARDS }}>
         <div style={{ width: 4, borderRadius: 2, background: "var(--border)", position: "relative" }}>
           <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: shown + "%", background: color, borderRadius: 2, opacity: ducked ? 0.45 : 0.85, transition: "height .12s" }}></div>
           <div style={{
@@ -155,13 +173,16 @@ export function BlendRail({
   reducedMotion: boolean;
 }) {
   // perf.jsx:24-35 drag mechanics; position→percent is the pure railPct.
-  const drag = (e: React.PointerEvent) => {
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const moveToClientX = (rail: HTMLElement, clientX: number) => {
+    const r = rail.getBoundingClientRect();
+    onVox(railPct(clientX, r.left, r.width));
+  };
+  const drag = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === "touch") return;
     const rail = e.currentTarget;
-    const move = (ev: { clientX: number }) => {
-      const r = rail.getBoundingClientRect();
-      onVox(railPct(ev.clientX, r.left, r.width));
-    };
-    move(e);
+    const move = (ev: { clientX: number }) => moveToClientX(rail, ev.clientX);
+    moveToClientX(rail, e.clientX);
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
@@ -169,6 +190,26 @@ export function BlendRail({
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
+  useActiveTouchStart(railRef, (e) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    const rail = railRef.current;
+    if (!touch || !rail) return;
+    moveToClientX(rail, touch.clientX);
+    const move = (ev: TouchEvent) => {
+      ev.preventDefault();
+      const next = ev.touches[0] ?? ev.changedTouches[0];
+      if (next) moveToClientX(rail, next.clientX);
+    };
+    const up = () => {
+      window.removeEventListener("touchmove", move);
+      window.removeEventListener("touchend", up);
+      window.removeEventListener("touchcancel", up);
+    };
+    window.addEventListener("touchmove", move, { passive: false });
+    window.addEventListener("touchend", up);
+    window.addEventListener("touchcancel", up);
+  });
   return (
     <div>
       <div className="m-mono" style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--muted)", marginBottom: 8 }}>
@@ -176,7 +217,7 @@ export function BlendRail({
         <span style={{ color: "var(--fg-soft)" }}>vox {vox}%</span>
         <span className="m-stem vox">full voice</span>
       </div>
-      <div onPointerDown={drag} onTouchStart={preventIOSLongPress} style={{ position: "relative", height: 28, display: "flex", alignItems: "center", cursor: "ew-resize", ...TOUCH_DRAG_GUARDS }}>
+      <div ref={railRef} onPointerDown={drag} style={{ position: "relative", height: 28, display: "flex", alignItems: "center", cursor: "ew-resize", ...TOUCH_DRAG_GUARDS }}>
         <div style={{ position: "absolute", left: 0, right: 0, height: 6, borderRadius: 3, background: BLEND_GRADIENT }}></div>
         <span style={{ position: "absolute", left: vox + "%", top: "50%", transform: "translate(-50%,-50%)", width: 26, height: 26, borderRadius: "50%", background: "var(--fg)", border: "4px solid var(--bg)", boxShadow: "var(--shadow-sm)", transition: reducedMotion ? undefined : "left .1s" }}></span>
       </div>
