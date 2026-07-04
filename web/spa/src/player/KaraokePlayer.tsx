@@ -79,7 +79,7 @@ function TransportBar({ player, onPerf }: { player: KaraokePlayerApi; onPerf: ()
     } else player.clearRegion();
   };
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
       <button className="m-btn primary" type="button" onClick={player.playPause} disabled={!player.ready}
         aria-label={player.playing ? "Pause" : "Play"} title="Play / pause (Space)"
         style={{ width: phone ? 48 : 40, height: phone ? 48 : 40, borderRadius: "50%", justifyContent: "center", fontSize: 14 }}>
@@ -88,7 +88,7 @@ function TransportBar({ player, onPerf }: { player: KaraokePlayerApi; onPerf: ()
       <button className="m-btn sm" type="button" onClick={() => player.skip(-5)} disabled={!player.ready} title="Back 5 seconds (←)">−5s</button>
       <button className="m-btn sm" type="button" onClick={() => player.skip(5)} disabled={!player.ready} title="Forward 5 seconds (→)">+5s</button>
       <span className="m-mono" style={{ fontSize: 12, color: "var(--fg-soft)", minWidth: 76 }}>{fmt(player.currentTime)} / {fmt(player.duration)}</span>
-      <span style={{ flex: 1 }}></span>
+      <span style={{ flex: 1, minWidth: 0 }}></span>
       <button className="m-btn sm" type="button" onClick={cycleLoop} disabled={!player.ready}
         title="A–B repeat: press to mark A, again to mark B, again to clear"
         style={a != null ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}>
@@ -230,7 +230,7 @@ function PhoneConsoleModule({
     window.addEventListener("touchcancel", end);
   });
   return (
-    <div style={{ display: "grid", gap: 12, padding: "12px 16px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)" }}>
+    <div style={{ display: "grid", gap: 12, padding: "12px 16px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", minWidth: 0 }}>
       <BlendRail vox={voxPct} onVox={onVox} reducedMotion={reducedMotion} />
       <button ref={dropRef} className="m-btn" type="button"
         onPointerDown={(e) => { if (e.pointerType !== "touch") duckStart(); }} onPointerUp={duckEnd} onPointerLeave={duckEnd} onPointerCancel={duckEnd}
@@ -289,7 +289,7 @@ function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: Tim
     window.addEventListener("touchcancel", up);
   });
   return (
-    <div style={{ display: "flex", gap: 16, alignItems: "stretch" }}>
+    <div style={{ display: "flex", gap: 16, alignItems: "stretch", minWidth: 0 }}>
       {/* Phone (#185): the sign must be allowed to shrink (minWidth: 0) and
           the current-line wipe gets the #176 console cap (maxWidth +
           ellipsis on the .m-wipe root) — the nowrap .m-wipe recipe never
@@ -309,7 +309,7 @@ function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: Tim
           {gapBulbs > 0 ? <MBulbs n={8} lit={gapBulbs} /> : <span></span>}
         </div>
       </div>
-      <div style={{ display: "grid", justifyItems: "center", gridTemplateRows: "auto 1fr auto", padding: "4px 0", gap: 7 }}>
+      <div style={{ display: "grid", justifyItems: "center", gridTemplateRows: "auto 1fr auto", padding: "4px 0", gap: 7, flex: "0 0 auto" }}>
         <span className="m-mono" style={{ fontSize: 9, color: "var(--vox)" }}>VOX</span>
         <div ref={dimmerRef} onPointerDown={dimmerDrag} style={{ width: phone ? 44 : 16, display: "flex", justifyContent: "center", cursor: "ns-resize", touchAction: "none", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}>
           <div style={{ width: 4, borderRadius: 2, background: "linear-gradient(180deg, var(--vox), var(--inst))", position: "relative" }}>
@@ -542,7 +542,7 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
       onKeyDown={onKeyDown}
     >
       {/* waveform card (stage.jsx:126-129; ProtoWave contract → wavesurfer) */}
-      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "14px 16px" }}>
+      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "14px 16px", minWidth: 0 }}>
         {/* min-height mirrors the mount-time canvas height inline — the
             .ksplayer-wave-wrap 96px rule stays untouched (#185) */}
         <div className="ksplayer-wave-wrap" style={{ minHeight: waveHeight }}>
@@ -564,7 +564,7 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
             : { flex: 1, display: "flex", flexDirection: "column", gap: 11, justifyContent: "center", minWidth: 0 }}>
             <TransportBar player={player} onPerf={openPerf} />
             <div className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)" }}>{coarse ? "tap the wave to seek" : "space play · ←/→ seek · V drops vocals · click wave to seek"}</div>
-            <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 650, minHeight: 22 }}>
+            <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 650, minHeight: 22, minWidth: 0 }}>
               {lines.length > 0 && <LiveLyricWipe lines={lines} subscribeTime={player.subscribeTime} />}
             </div>
           </div>
@@ -590,7 +590,7 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
           ))}
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
           <SetlistModule player={player} lines={lines} />
           <TransportBar player={player} onPerf={openPerf} />
         </div>
