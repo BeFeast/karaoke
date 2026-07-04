@@ -130,12 +130,17 @@ function useHoldVDuck(duckStart: () => void, duckEnd: () => void) {
   }, [duckStart, duckEnd]);
 }
 
-// iOS long-press guards for the hold-to-DROP gesture (#185): no text
-// selection, no callout sheet, no context menu mid-hold. Applied on both
-// widths — all four are inert on desktop.
+function preventIOSLongPress(e: React.TouchEvent) {
+  e.preventDefault();
+}
+
+// iOS long-press guards for sustained touch controls (#209): no haptic
+// long-press chain, text selection, callout sheet, or context menu mid-hold.
+// Applied on both widths — inert on desktop.
 const DROP_HOLD_GUARDS = {
   touchAction: "none",
   userSelect: "none",
+  WebkitUserSelect: "none",
   WebkitTouchCallout: "none",
 } as const;
 
@@ -167,7 +172,10 @@ function ConsoleModule({
       <ProtoFader label="INST" color="var(--inst)" value={instPct} onChange={onInst} />
       <div style={{ display: "grid", gap: 8 }}>
         <button className="m-btn sm" type="button"
-          onPointerDown={duckStart} onPointerUp={duckEnd} onPointerLeave={duckEnd}
+          onPointerDown={duckStart} onPointerUp={duckEnd} onPointerLeave={duckEnd} onPointerCancel={duckEnd}
+          onTouchStart={(e) => { preventIOSLongPress(e); duckStart(); }}
+          onTouchEnd={duckEnd}
+          onTouchCancel={duckEnd}
           onContextMenu={(e) => e.preventDefault()}
           style={{ borderColor: "var(--vox)", color: ducked ? "var(--accent-fg)" : "var(--vox)", background: ducked ? "var(--vox)" : "transparent", fontWeight: 700, justifyContent: "center", ...DROP_HOLD_GUARDS }}>DROP</button>
         <span className="m-mono" style={{ fontSize: 9, color: "var(--muted)", textAlign: "center", lineHeight: 1.4 }}>hold to drop vocals<br></br>{coarse ? "while you sing" : 'while you sing · or "V"'}</span>
@@ -207,7 +215,10 @@ function PhoneConsoleModule({
     <div style={{ display: "grid", gap: 12, padding: "12px 16px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)" }}>
       <BlendRail vox={voxPct} onVox={onVox} reducedMotion={reducedMotion} />
       <button className="m-btn" type="button"
-        onPointerDown={duckStart} onPointerUp={duckEnd} onPointerLeave={duckEnd}
+        onPointerDown={duckStart} onPointerUp={duckEnd} onPointerLeave={duckEnd} onPointerCancel={duckEnd}
+        onTouchStart={(e) => { preventIOSLongPress(e); duckStart(); }}
+        onTouchEnd={duckEnd}
+        onTouchCancel={duckEnd}
         onContextMenu={(e) => e.preventDefault()}
         style={{ minHeight: 44, borderColor: "var(--vox)", color: ducked ? "var(--accent-fg)" : "var(--vox)", background: ducked ? "var(--vox)" : "transparent", fontWeight: 700, justifyContent: "center", ...DROP_HOLD_GUARDS }}>DROP</button>
       <span className="m-mono" style={{ fontSize: 9, color: "var(--muted)", textAlign: "center", lineHeight: 1.4 }}>hold to drop vocals<br></br>{coarse ? "while you sing" : 'while you sing · or "V"'}</span>
@@ -262,7 +273,7 @@ function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: Tim
       </div>
       <div style={{ display: "grid", justifyItems: "center", gridTemplateRows: "auto 1fr auto", padding: "4px 0", gap: 7 }}>
         <span className="m-mono" style={{ fontSize: 9, color: "var(--vox)" }}>VOX</span>
-        <div onPointerDown={dimmerDrag} style={{ width: phone ? 44 : 16, display: "flex", justifyContent: "center", cursor: "ns-resize", touchAction: "none" }}>
+        <div onPointerDown={dimmerDrag} onTouchStart={preventIOSLongPress} style={{ width: phone ? 44 : 16, display: "flex", justifyContent: "center", cursor: "ns-resize", touchAction: "none", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}>
           <div style={{ width: 4, borderRadius: 2, background: "linear-gradient(180deg, var(--vox), var(--inst))", position: "relative" }}>
             <span style={{ position: "absolute", top: (100 - vox) + "%", left: "50%", transform: "translate(-50%,-50%)", width: phone ? 26 : 18, height: phone ? 26 : 18, borderRadius: "50%", background: "var(--fg)", border: phone ? "4px solid var(--bg)" : "3px solid var(--bg)", transition: "top .1s" }}></span>
           </div>

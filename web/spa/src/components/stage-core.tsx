@@ -15,6 +15,17 @@
 import { useRef } from "react";
 import { railPct } from "../player/engineMath";
 
+function preventIOSLongPress(e: React.TouchEvent) {
+  e.preventDefault();
+}
+
+const TOUCH_DRAG_GUARDS = {
+  touchAction: "none",
+  userSelect: "none",
+  WebkitUserSelect: "none",
+  WebkitTouchCallout: "none",
+} as const;
+
 export interface TimedLine {
   /** Line start in seconds (from the LRC timestamp). */
   t: number;
@@ -109,7 +120,7 @@ export function ProtoFader({
   return (
     <div style={{ display: "grid", justifyItems: "center", gap: 6, userSelect: "none" }}>
       <span className="m-mono" style={{ fontSize: 10, letterSpacing: "0.1em", color }}>{label}</span>
-      <div ref={trackRef} onPointerDown={drag} style={{ position: "relative", width: 34, height: 132, display: "flex", justifyContent: "center", cursor: "ns-resize", touchAction: "none" }}>
+      <div ref={trackRef} onPointerDown={drag} onTouchStart={preventIOSLongPress} style={{ position: "relative", width: 34, height: 132, display: "flex", justifyContent: "center", cursor: "ns-resize", ...TOUCH_DRAG_GUARDS }}>
         <div style={{ width: 4, borderRadius: 2, background: "var(--border)", position: "relative" }}>
           <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: shown + "%", background: color, borderRadius: 2, opacity: ducked ? 0.45 : 0.85, transition: "height .12s" }}></div>
           <div style={{
@@ -165,7 +176,7 @@ export function BlendRail({
         <span style={{ color: "var(--fg-soft)" }}>vox {vox}%</span>
         <span className="m-stem vox">full voice</span>
       </div>
-      <div onPointerDown={drag} style={{ position: "relative", height: 28, display: "flex", alignItems: "center", cursor: "ew-resize", touchAction: "none" }}>
+      <div onPointerDown={drag} onTouchStart={preventIOSLongPress} style={{ position: "relative", height: 28, display: "flex", alignItems: "center", cursor: "ew-resize", ...TOUCH_DRAG_GUARDS }}>
         <div style={{ position: "absolute", left: 0, right: 0, height: 6, borderRadius: 3, background: BLEND_GRADIENT }}></div>
         <span style={{ position: "absolute", left: vox + "%", top: "50%", transform: "translate(-50%,-50%)", width: 26, height: 26, borderRadius: "50%", background: "var(--fg)", border: "4px solid var(--bg)", boxShadow: "var(--shadow-sm)", transition: reducedMotion ? undefined : "left .1s" }}></span>
       </div>
