@@ -28,6 +28,7 @@ import { BlendRail, lyricState, ProtoFader, type TimedLine } from "../components
 import { MBulbs, MWipe } from "../components/marks";
 import { Perf } from "../components/Perf";
 import { PHONE_QUERY, useCoarsePointer, usePhoneLayout } from "../lib/layout";
+import { useActiveTouchStart } from "../lib/touchGuards";
 import type { StageTheme } from "../theme";
 import { type KaraokePlayerApi, PLAYBACK_RATES, useKaraokePlayer } from "./useKaraokePlayer";
 
@@ -130,12 +131,13 @@ function useHoldVDuck(duckStart: () => void, duckEnd: () => void) {
   }, [duckStart, duckEnd]);
 }
 
-// iOS long-press guards for the hold-to-DROP gesture (#185): no text
-// selection, no callout sheet, no context menu mid-hold. Applied on both
-// widths — all four are inert on desktop.
+// iOS long-press guards for sustained touch controls (#209): no haptic
+// long-press chain, text selection, callout sheet, or context menu mid-hold.
+// Applied on both widths — inert on desktop.
 const DROP_HOLD_GUARDS = {
   touchAction: "none",
   userSelect: "none",
+  WebkitUserSelect: "none",
   WebkitTouchCallout: "none",
 } as const;
 
@@ -160,14 +162,26 @@ function ConsoleModule({
   // Touch shows no keyboard copy (#184): the "V" suffix is dropped on coarse
   // pointers — the hold-to-drop pointer gesture itself works everywhere.
   const coarse = useCoarsePointer();
+  const dropRef = useRef<HTMLButtonElement | null>(null);
   useHoldVDuck(duckStart, duckEnd);
+  useActiveTouchStart(dropRef, (e) => {
+    e.preventDefault();
+    duckStart();
+    const end = () => {
+      duckEnd();
+      window.removeEventListener("touchend", end);
+      window.removeEventListener("touchcancel", end);
+    };
+    window.addEventListener("touchend", end);
+    window.addEventListener("touchcancel", end);
+  });
   return (
     <div style={{ display: "flex", gap: 14, padding: "12px 16px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", alignItems: "center" }}>
       <ProtoFader label="VOX" color="var(--vox)" value={voxPct} ducked={ducked} onChange={onVox} />
       <ProtoFader label="INST" color="var(--inst)" value={instPct} onChange={onInst} />
       <div style={{ display: "grid", gap: 8 }}>
-        <button className="m-btn sm" type="button"
-          onPointerDown={duckStart} onPointerUp={duckEnd} onPointerLeave={duckEnd}
+        <button ref={dropRef} className="m-btn sm" type="button"
+          onPointerDown={(e) => { if (e.pointerType !== "touch") duckStart(); }} onPointerUp={duckEnd} onPointerLeave={duckEnd} onPointerCancel={duckEnd}
           onContextMenu={(e) => e.preventDefault()}
           style={{ borderColor: "var(--vox)", color: ducked ? "var(--accent-fg)" : "var(--vox)", background: ducked ? "var(--vox)" : "transparent", fontWeight: 700, justifyContent: "center", ...DROP_HOLD_GUARDS }}>DROP</button>
         <span className="m-mono" style={{ fontSize: 9, color: "var(--muted)", textAlign: "center", lineHeight: 1.4 }}>hold to drop vocals<br></br>{coarse ? "while you sing" : 'while you sing · or "V"'}</span>
@@ -202,12 +216,24 @@ function PhoneConsoleModule({
   reducedMotion: boolean;
 }) {
   const coarse = useCoarsePointer();
+  const dropRef = useRef<HTMLButtonElement | null>(null);
   useHoldVDuck(duckStart, duckEnd);
+  useActiveTouchStart(dropRef, (e) => {
+    e.preventDefault();
+    duckStart();
+    const end = () => {
+      duckEnd();
+      window.removeEventListener("touchend", end);
+      window.removeEventListener("touchcancel", end);
+    };
+    window.addEventListener("touchend", end);
+    window.addEventListener("touchcancel", end);
+  });
   return (
     <div style={{ display: "grid", gap: 12, padding: "12px 16px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)" }}>
       <BlendRail vox={voxPct} onVox={onVox} reducedMotion={reducedMotion} />
-      <button className="m-btn" type="button"
-        onPointerDown={duckStart} onPointerUp={duckEnd} onPointerLeave={duckEnd}
+      <button ref={dropRef} className="m-btn" type="button"
+        onPointerDown={(e) => { if (e.pointerType !== "touch") duckStart(); }} onPointerUp={duckEnd} onPointerLeave={duckEnd} onPointerCancel={duckEnd}
         onContextMenu={(e) => e.preventDefault()}
         style={{ minHeight: 44, borderColor: "var(--vox)", color: ducked ? "var(--accent-fg)" : "var(--vox)", background: ducked ? "var(--vox)" : "transparent", fontWeight: 700, justifyContent: "center", ...DROP_HOLD_GUARDS }}>DROP</button>
       <span className="m-mono" style={{ fontSize: 9, color: "var(--muted)", textAlign: "center", lineHeight: 1.4 }}>hold to drop vocals<br></br>{coarse ? "while you sing" : 'while you sing · or "V"'}</span>
@@ -224,14 +250,17 @@ function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: Tim
   const ls = lyricState(lines, player.currentTime);
   const gapBulbs = ls.inGap && ls.next ? Math.min(8, Math.ceil(ls.gap)) : 0;
   const vox = Math.round(player.vocalLevel * 100);
-  const dimmerDrag = (e: React.PointerEvent) => {
+  const dimmerRef = useRef<HTMLDivElement | null>(null);
+  const moveDimmerToClientY = (rail: HTMLElement, clientY: number) => {
+    const r = rail.getBoundingClientRect();
+    const pct = 100 - ((clientY - r.top) / r.height) * 100;
+    player.setVocalLevel(Math.round(Math.max(0, Math.min(100, pct))) / 100);
+  };
+  const dimmerDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === "touch") return;
     const rail = e.currentTarget;
-    const move = (ev: { clientY: number }) => {
-      const r = rail.getBoundingClientRect();
-      const pct = 100 - ((ev.clientY - r.top) / r.height) * 100;
-      player.setVocalLevel(Math.round(Math.max(0, Math.min(100, pct))) / 100);
-    };
-    move(e);
+    const move = (ev: { clientY: number }) => moveDimmerToClientY(rail, ev.clientY);
+    moveDimmerToClientY(rail, e.clientY);
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
@@ -239,6 +268,26 @@ function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: Tim
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
+  useActiveTouchStart(dimmerRef, (e) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    const rail = dimmerRef.current;
+    if (!touch || !rail) return;
+    moveDimmerToClientY(rail, touch.clientY);
+    const move = (ev: TouchEvent) => {
+      ev.preventDefault();
+      const next = ev.touches[0] ?? ev.changedTouches[0];
+      if (next) moveDimmerToClientY(rail, next.clientY);
+    };
+    const up = () => {
+      window.removeEventListener("touchmove", move);
+      window.removeEventListener("touchend", up);
+      window.removeEventListener("touchcancel", up);
+    };
+    window.addEventListener("touchmove", move, { passive: false });
+    window.addEventListener("touchend", up);
+    window.addEventListener("touchcancel", up);
+  });
   return (
     <div style={{ display: "flex", gap: 16, alignItems: "stretch" }}>
       {/* Phone (#185): the sign must be allowed to shrink (minWidth: 0) and
@@ -262,7 +311,7 @@ function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: Tim
       </div>
       <div style={{ display: "grid", justifyItems: "center", gridTemplateRows: "auto 1fr auto", padding: "4px 0", gap: 7 }}>
         <span className="m-mono" style={{ fontSize: 9, color: "var(--vox)" }}>VOX</span>
-        <div onPointerDown={dimmerDrag} style={{ width: phone ? 44 : 16, display: "flex", justifyContent: "center", cursor: "ns-resize", touchAction: "none" }}>
+        <div ref={dimmerRef} onPointerDown={dimmerDrag} style={{ width: phone ? 44 : 16, display: "flex", justifyContent: "center", cursor: "ns-resize", touchAction: "none", userSelect: "none", WebkitUserSelect: "none", WebkitTouchCallout: "none" }}>
           <div style={{ width: 4, borderRadius: 2, background: "linear-gradient(180deg, var(--vox), var(--inst))", position: "relative" }}>
             <span style={{ position: "absolute", top: (100 - vox) + "%", left: "50%", transform: "translate(-50%,-50%)", width: phone ? 26 : 18, height: phone ? 26 : 18, borderRadius: "50%", background: "var(--fg)", border: phone ? "4px solid var(--bg)" : "3px solid var(--bg)", transition: "top .1s" }}></span>
           </div>
