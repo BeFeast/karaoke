@@ -3,9 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <!-- The MarqueeMark favicon — same sign as the extension icons, rendered
-         from the exported vector (extension/chrome/icons/render-icons.mjs). -->
-    <link rel="icon" type="image/png" href="/favicon.png" />
+    <!-- The MarqueeMark favicon family (#205) — the same sign as the extension
+         icons, rendered from the exported vector
+         (extension/chrome/icons/render-icons.mjs). Vite rewrites these
+         leading-slash hrefs to /app/… at build; the API also serves the same
+         files at the site root (/favicon.ico etc.) for the bare domain. -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
     <title>Karaoke</title>
     <!-- Theming is room-scoped (#154): booth rooms are always light; the
          stage room flips day/night via its container class. No pre-paint

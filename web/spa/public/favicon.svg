@@ -1,0 +1,17 @@
+<!-- The sign-in mic mark (issue #163) — the rounded card above the stage door
+     (web/spa/src/components/SignInWall.tsx:33-39: 76px card, border-radius 20,
+     2px accent border, card background) holding the MicMark glyph verbatim
+     (web/spa/src/components/marks.tsx MicMark / design m-brand.jsx: 24-viewBox,
+     capsule rect x=9 y=2 w=6 h=12 rx=3, arc/stand path, stroke-width 2, round
+     caps/joins) at the sign-in ratio (38/76). Colors are the day-card literals
+     under the Final green bake (marquee.css :root): bg-card #fbf9f4, accent
+     #5f7a4a, fg #24201a. The card rect is stroked centered (rx 19 at x/y 1),
+     so the painted outer edge is exactly the CSS border-box: radius 20 at
+     0..76. Do not redraw; re-render via render-icons.mjs. -->
+<svg width="76" height="76" viewBox="0 0 76 76" aria-label="Karaoke mark" xmlns="http://www.w3.org/2000/svg">
+  <rect x="1" y="1" width="74" height="74" rx="19" fill="#fbf9f4" stroke="#5f7a4a" stroke-width="2"></rect>
+  <svg x="19" y="19" width="38" height="38" viewBox="0 0 24 24" fill="none">
+    <rect x="9" y="2" width="6" height="12" rx="3" fill="#5f7a4a"></rect>
+    <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" stroke="#24201a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+  </svg>
+</svg>

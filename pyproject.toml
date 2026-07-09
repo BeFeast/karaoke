@@ -1,6 +1,6 @@
 [project]
 name = "karaoke"
-version = "0.30.1"
+version = "0.30.5"
 description = "URL → isolated vocals + instrumental playback + lyrics; coordinator on devbox + ephemeral vast.ai GPU."
 authors = [
     { name = "Oleg Kossoy", email = "oleg@kossoy.com" }
@@ -9,7 +9,7 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
 dependencies = [
-    "alembic>=1.18.4",
+    "alembic>=1.18.5",
     "asyncpg>=0.31.0",
     # yt-dlp plugin: auto-fetches GVS PO tokens from the bgutil provider sidecar
     # (HTTP server mode) so YouTube web/mweb clients aren't skipped/403'd and the
@@ -17,15 +17,15 @@ dependencies = [
     # provider server itself runs as a separate docker sidecar — see
     # docker/api/README.md.
     "bgutil-ytdlp-pot-provider>=1.3.1",
-    "cryptography>=48.0.1",
-    "fastapi>=0.136.3",
+    "cryptography>=49.0.0",
+    "fastapi>=0.139.0",
     "httpx>=0.28.1",
     "psycopg[binary]>=3.3.4",
-    "pydantic-settings>=2.14.1",
+    "pydantic-settings>=2.14.2",
     "pyjwt[crypto]>=2.13.0",
     "python-multipart>=0.0.32",
-    "sqlalchemy>=2.0.50",
-    "uvicorn[standard]>=0.49.0",
+    "sqlalchemy>=2.0.51",
+    "uvicorn[standard]>=0.50.0",
     "websockets>=16.0",
     # Known-good YouTube extractor stack. Keep exact pins: the nightly canary
     # catches breakage, and Dependabot opens deliberate bump PRs.
@@ -37,15 +37,15 @@ dependencies = [
 karaoke = "karaoke:main"
 
 [build-system]
-requires = ["uv_build>=0.11.20,<0.12.0"]
+requires = ["uv_build>=0.11.26,<0.12.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
     "aiosqlite>=0.22.1",
-    "pytest>=9.0.3",
+    "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
-    "ruff>=0.15.16",
+    "ruff>=0.15.20",
 ]
 
 [tool.ruff]

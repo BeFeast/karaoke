@@ -193,22 +193,22 @@ export function Stage({ token }: { token: string }) {
   // .m-stage (night) — the FINAL token sets are baked into those classes, so
   // the ◐ toggle is a class swap scoped to THIS room only.
   return (
-    <div style={{ height: "100%", overflow: "auto" }}>
-      <div className={theme === "day" ? "m-booth" : "m-stage"} style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}>
+    <div style={{ height: "100%", width: "100%", overflow: "auto", overflowX: "hidden" }}>
+      <div className={theme === "day" ? "m-booth" : "m-stage"} style={{ minHeight: "100%", width: "100%", minWidth: 0, display: "flex", flexDirection: "column" }}>
         {/* phone (#184): the row wraps instead of overflowing — same elements,
             same order; the desktop branch is the untouched port. */}
         <div style={phone
-          ? { display: "flex", alignItems: "center", gap: 12, padding: "8px 14px", minHeight: 54, borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap" }
-          : { display: "flex", alignItems: "center", gap: 12, padding: "0 22px", height: 54, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+          ? { display: "flex", alignItems: "center", gap: 12, padding: "8px 14px", minHeight: 54, borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap", minWidth: 0 }
+          : { display: "flex", alignItems: "center", gap: 12, padding: "0 22px", height: 54, borderBottom: "1px solid var(--border)", flexShrink: 0, minWidth: 0 }}>
           <button className="m-btn sm ghost" type="button" onClick={goDashboard}>← booth</button>
           <MicMark size={20} />
-          <span style={{ flex: 1 }}></span>
+          <span style={{ flex: 1, minWidth: 0 }}></span>
           <span className="m-chip info">unlisted share</span>
           <button className="m-btn sm" type="button" onClick={() => void onCopyLink()}>⧉ Copy link</button>
           <button className="m-btn sm ghost" type="button" title="Day / night" onClick={toggleTheme}>◐</button>
         </div>
 
-        <div style={{ flex: 1, maxWidth: 760, width: "100%", margin: "0 auto", padding: "22px 24px 20px", display: "flex", flexDirection: "column", gap: 16, minHeight: 0 }}>
+        <div style={{ flex: 1, maxWidth: 760, width: "100%", margin: "0 auto", padding: phone ? "18px 14px 18px" : "22px 24px 20px", display: "flex", flexDirection: "column", gap: 16, minHeight: 0, minWidth: 0 }}>
           {content}
         </div>
         <Toast message={toast} onDone={() => setToast(null)} />
@@ -287,11 +287,11 @@ function StageBody({
   return (
     <>
       {/* header block: meta row + title + view toggle (stage.jsx:105-124) */}
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 14, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 14, flexWrap: "wrap", minWidth: 0 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="m-mono" style={{ fontSize: 11, color: "var(--muted)", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
             {metaBits && <span>{metaBits}</span>}
-            {payload.owner_display_name && <span>shared by {payload.owner_display_name}</span>}
+            {payload.owner_display_name && <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>shared by {payload.owner_display_name}</span>}
             {/* uploads (#173) have no external source — show the filename, no link.
                 Single-line ellipsis on both widths (#184): the raw URL used to
                 wrap across ~4 lines; the full URL stays in the href. */}
@@ -305,7 +305,7 @@ function StageBody({
           </div>
           <h1 style={{ margin: "6px 0 0", fontFamily: "var(--font-display)", fontWeight: 650, fontSize: phone ? 22 : 28, letterSpacing: "-0.02em", lineHeight: 1.1, overflowWrap: "anywhere" }}>{title}</h1>
           {(payload.artist || payload.album) && (
-            <div style={{ marginTop: 2, fontSize: 13, color: "var(--muted)" }}>
+            <div style={{ marginTop: 2, fontSize: 13, color: "var(--muted)", overflowWrap: "anywhere" }}>
               {[payload.artist, payload.album].filter(Boolean).join(" — ")}
             </div>
           )}
@@ -326,14 +326,14 @@ function StageBody({
 
       {/* in-flight: stage chip + worker note + wipebar, refreshed by the poll */}
       {meta.active && (
-        <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "13px 16px", display: "grid", gap: 10 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "13px 16px", display: "grid", gap: 10, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
             <span className={`m-chip ${meta.chip === "neutral" ? "" : meta.chip}`}><span className="m-dot"></span>{meta.label}</span>
             <span className="m-mono" style={{ fontSize: 11.5, color: "var(--muted)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {payload.stage_note || meta.note}
             </span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
             <div className="m-wipebar" style={{ "--wipe": pct + "%", flex: 1 } as CSSProperties}><i></i></div>
             <span className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)" }}>{pct}%</span>
           </div>
@@ -392,7 +392,7 @@ function StageBody({
 
       {/* take home (stage.jsx:150-157) — real downloads via artifactHref */}
       {isComplete && (
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: "auto", borderTop: "1px dashed var(--border)", paddingTop: 13, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: "auto", borderTop: "1px dashed var(--border)", paddingTop: 13, flexWrap: "wrap", minWidth: 0 }}>
           <span className="m-mono" style={{ fontSize: 10.5, letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--muted)", marginRight: 6 }}>take home</span>
           {vocals && <a className="m-btn sm" href={vocals.href} download><span className="m-stem vox"></span>vocals.mp3</a>}
           {instrumental && <a className="m-btn sm" href={instrumental.href} download><span className="m-stem inst"></span>karaoke.mp3</a>}
@@ -401,7 +401,7 @@ function StageBody({
           ) : lyricsFile ? (
             <a className="m-btn sm" href={lyricsFile.href} download>≡ {lyricsFile.name}</a>
           ) : null}
-          <span style={{ flex: 1 }}></span>
+          <span style={{ flex: 1, minWidth: 0 }}></span>
           {source.kind === "url" && (
             <a className="m-btn sm ghost" href={payload.source_url} target="_blank" rel="noopener">▶ original ↗</a>
           )}
