@@ -581,7 +581,11 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 .m-wipe .w-dim { color: color-mix(in oklab, var(--muted) 55%, transparent); }
 .m-wipe .w-fill {
   position: absolute;
-  inset: 0;
+  /* Anchor the sung fill to the line's visual start via logical inset: under
+     dir=rtl (Hebrew/Arabic) inline-start resolves to the RIGHT edge, so the
+     highlight sweeps right→left; under dir=ltr it stays left-anchored (#214). */
+  inset-block: 0;
+  inset-inline-start: 0;
   color: var(--accent);
   overflow: hidden;
   white-space: nowrap;

@@ -297,14 +297,14 @@ function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: Tim
           pushed the dimmer rail off-screen (pre-existing at 390px), which
           would have left the widened hit zone unreachable. */}
       <div className="m-sign" style={{ flex: 1, minWidth: phone ? 0 : undefined, padding: "16px 22px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 9, textAlign: "center" }}>
-        <div style={{ fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 500, color: "var(--lyric-prev)", minHeight: 18 }}>{ls.prev ? ls.prev.text : "—"}</div>
+        <div dir="auto" style={{ fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 500, color: "var(--lyric-prev)", minHeight: 18 }}>{ls.prev ? ls.prev.text : "—"}</div>
         <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, lineHeight: 1.25, minHeight: 28 }}>
           {ls.cur
             ? <MWipe text={ls.cur.text} pct={ls.sung} size={22} family="var(--font-display)" weight={700} fill="var(--accent)" dim="var(--lyric-dim)"
                 style={phone ? { maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" } : undefined} />
             : <span style={{ color: "var(--lyric-dim)" }}>{ls.next ? "get ready…" : "intro"}</span>}
         </div>
-        <div style={{ fontFamily: "var(--font-display)", fontSize: 15, fontWeight: 540, color: "var(--lyric-next)", minHeight: 19 }}>{ls.next ? ls.next.text : "— end —"}</div>
+        <div dir="auto" style={{ fontFamily: "var(--font-display)", fontSize: 15, fontWeight: 540, color: "var(--lyric-next)", minHeight: 19 }}>{ls.next ? ls.next.text : "— end —"}</div>
         <div style={{ display: "flex", justifyContent: "center", marginTop: 2, minHeight: 8 }}>
           {gapBulbs > 0 ? <MBulbs n={8} lit={gapBulbs} /> : <span></span>}
         </div>
@@ -358,7 +358,7 @@ function LiveLyricWipe({
     [lines, subscribeTime],
   );
   return (
-    <span className="m-wipe" style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 650, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" }}>
+    <span className="m-wipe" dir="auto" style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 650, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" }}>
       <span className="w-dim" style={{ color: "var(--lyric-dim)" }} ref={dimRef}></span>
       <span className="w-fill" style={{ color: "var(--accent)" }} ref={fillRef} aria-hidden="true"></span>
     </span>

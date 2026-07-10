@@ -31,7 +31,7 @@ export function MWipe({
   style?: React.CSSProperties;
 }) {
   return (
-    <span className="m-wipe" style={{ fontSize: size, fontFamily: family, fontWeight: weight, ...style }}>
+    <span className="m-wipe" dir="auto" style={{ fontSize: size, fontFamily: family, fontWeight: weight, ...style }}>
       <span className="w-dim" style={dim ? { color: dim } : undefined}>{text}</span>
       <span className="w-fill" style={{ width: pct + "%", ...(fill ? { color: fill } : null) }} aria-hidden="true">{text}</span>
     </span>
