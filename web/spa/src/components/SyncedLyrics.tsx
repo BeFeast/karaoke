@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef } from "react";
 
 // ─── LRC parsing ────────────────────────────────────────────────────────────
 //
@@ -88,18 +88,60 @@ export function activeLineIndex(lines: LyricLine[], t: number): number {
 }
 
 /**
+ * Direction of a single text run from its first strong-direction character:
+ * "rtl" for a leading Hebrew/Arabic (etc.) strong char, "ltr" for a leading
+ * Latin/Greek/Cyrillic one, "auto" when the run has no strong-direction
+ * character (leaving the browser's bidi fallback in charge). Resolving per
+ * line — not per block — is what keeps a mixed-script surface correct: an
+ * English intro must not force the later Hebrew/Arabic lines to LTR (#214).
+ */
+export function detectTextDirection(text: string): LyricsDirection {
+  for (const char of text) {
+    if (RTL_STRONG.test(char)) return "rtl";
+    if (LTR_STRONG.test(char)) return "ltr";
+  }
+  return "auto";
+}
+
+/**
  * Pick the scroll container direction from the first strong-direction lyric
- * character. Returning "auto" keeps the browser bidi fallback for lyrics with
- * no obvious strong script in the parsed text.
+ * character across all lines. Returning "auto" keeps the browser bidi fallback
+ * for lyrics with no obvious strong script in the parsed text.
  */
 export function detectLyricsDirection(lines: LyricLine[]): LyricsDirection {
   for (const line of lines) {
-    for (const char of line.text) {
-      if (RTL_STRONG.test(char)) return "rtl";
-      if (LTR_STRONG.test(char)) return "ltr";
-    }
+    const dir = detectTextDirection(line.text);
+    if (dir !== "auto") return dir;
   }
   return "auto";
+}
+
+/**
+ * Plain (non-synced) lyrics rendered one block per source line, each carrying
+ * its own first-strong direction. A single `dir` on the whole block would let
+ * the block's first strong character force every later line's alignment and
+ * edge punctuation to the wrong side, so mixed-script lyrics (an English intro
+ * before Hebrew/Arabic verses) must resolve direction per line (#214). Blank
+ * source lines keep their height via a non-breaking space.
+ */
+export function PlainLyrics({
+  text,
+  className,
+  style,
+}: {
+  text: string;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  return (
+    <div className={className} style={style}>
+      {text.split(/\r?\n/).map((line, i) => (
+        <div key={i} dir={detectTextDirection(line)}>
+          {line || " "}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -204,7 +246,7 @@ export function SyncedLyrics({
 
   // ── Plain fallback ─────────────────────────────────────────────────────────
   if (plainLyrics) {
-    return <pre className="lyrics-text" dir="auto">{plainLyrics}</pre>;
+    return <PlainLyrics text={plainLyrics} className="lyrics-text" />;
   }
   return (
     <div style={{ textAlign: "center", padding: "32px 20px", color: "var(--muted)", fontSize: 12.5 }}>

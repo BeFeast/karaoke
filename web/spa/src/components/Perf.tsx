@@ -44,6 +44,7 @@ import type { KaraokePlayerApi } from "../player/useKaraokePlayer";
 import type { StageTheme } from "../theme";
 import { FIT_FLOOR, balancedSplit, fitLineScale, splitFill } from "./lineFit";
 import { MBulbs, MicMark } from "./marks";
+import { PlainLyrics } from "./SyncedLyrics";
 // BLEND_GRADIENT + the phone rail recipe moved to stage-core (#185) so the
 // phone console reuses them; the desktop rail below still paints the gradient.
 import { BLEND_GRADIENT, BlendRail, lyricState, type TimedLine } from "./stage-core";
@@ -399,9 +400,10 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
         // Plain-lyrics fallback — centered plain text, NO fake timing.
         <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflowY: "auto", padding: m.pad, textAlign: "center" }}>
           {plain ? (
-            <div dir="auto" style={{ margin: "auto", padding: "24px 0", fontFamily: "var(--font-display)", fontSize: m.prev * sz, fontWeight: 500, lineHeight: 1.5, color: "var(--fg-soft)", whiteSpace: "pre-wrap" }}>
-              {plain}
-            </div>
+            <PlainLyrics
+              text={plain}
+              style={{ margin: "auto", padding: "24px 0", fontFamily: "var(--font-display)", fontSize: m.prev * sz, fontWeight: 500, lineHeight: 1.5, color: "var(--fg-soft)", whiteSpace: "pre-wrap" }}
+            />
           ) : (
             <div style={{ margin: "auto", padding: "24px 0" }}>
               <div style={{ fontFamily: "var(--font-display)", fontSize: m.cur * sz, fontWeight: 700, letterSpacing: m.track, lineHeight: m.lh, textShadow: "var(--glow)" }}>{title}</div>
