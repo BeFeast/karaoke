@@ -204,7 +204,7 @@ export function SyncedLyrics({
 
   // ── Plain fallback ─────────────────────────────────────────────────────────
   if (plainLyrics) {
-    return <pre className="lyrics-text">{plainLyrics}</pre>;
+    return <pre className="lyrics-text" dir="auto">{plainLyrics}</pre>;
   }
   return (
     <div style={{ textAlign: "center", padding: "32px 20px", color: "var(--muted)", fontSize: 12.5 }}>
