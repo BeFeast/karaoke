@@ -282,6 +282,71 @@ def _tag_seconds(match: re.Match[str]) -> float:
     return minutes * 60 + seconds + frac
 
 
+def repair_aligned_lrc(body: str) -> str:
+    """Repair CTC boundary-absorption in a force-aligned Enhanced LRC (#241).
+
+    ctc-forced-aligner assigns every emission frame to some token, so leading
+    instrumental silence gets absorbed into a line's FIRST word (its start is
+    seconds before the voice) and trailing silence into the sung-end tag.
+    Live evidence (Creep, job `rQM-`): "I" spanned 1:34.42→1:36.82 while the
+    voice starts ≈1:36.4 — which both broke the drift check against curated
+    LRCLIB tags and made the wipe crawl through the first word during the
+    instrumental.
+
+    Per line: when the first word's span to the second word (or the sung-end
+    gap after the last word) exceeds ``max(3 s, 4× median word gap)``, pull it
+    in to ``median gap`` from its neighbor. The line ``[..]`` tag follows the
+    repaired first word. Lines with < 2 word tags pass through untouched.
+    Pure + tolerant: unparseable lines are kept verbatim.
+    """
+    out: list[str] = []
+    for raw in body.splitlines():
+        tag = _LRC_TAG_CAP_RE.match(raw)
+        if tag is None:
+            out.append(raw)
+            continue
+        rest = raw[tag.end() :]
+        word_tags = list(_LRC_WORD_TAG_CAP_RE.finditer(rest))
+        if len(word_tags) < 3 or rest[word_tags[-1].end() :].strip():
+            out.append(raw)
+            continue
+        starts = [_tag_seconds(m) for m in word_tags[:-1]]
+        end = _tag_seconds(word_tags[-1])
+        gaps = [b - a for a, b in zip(starts, starts[1:], strict=False) if b > a]
+        if not gaps:
+            out.append(raw)
+            continue
+        gaps_sorted = sorted(gaps)
+        median_gap = max(gaps_sorted[len(gaps_sorted) // 2], 0.2)
+        threshold = max(2.0, 3.0 * median_gap)
+        new_start = starts[0]
+        if len(starts) >= 2 and starts[1] - starts[0] > threshold:
+            new_start = starts[1] - median_gap
+        new_end = end
+        if end - starts[-1] > threshold:
+            new_end = starts[-1] + median_gap
+        if new_start == starts[0] and new_end == end:
+            out.append(raw)
+            continue
+        pieces = [_fmt_lrc_timestamp(new_start)]
+        cursor = 0
+        for i, m in enumerate(word_tags):
+            pieces.append(rest[cursor : m.start()])
+            if i == 0:
+                pieces.append(_fmt_lrc_word_tag(new_start))
+            elif i == len(word_tags) - 1:
+                pieces.append(_fmt_lrc_word_tag(new_end))
+            else:
+                pieces.append(m.group())
+            cursor = m.end()
+        pieces.append(rest[cursor:])
+        out.append("".join(pieces))
+    repaired = "\n".join(out)
+    if body.endswith("\n"):
+        repaired += "\n"
+    return repaired
+
+
 @dataclass(frozen=True, slots=True)
 class _AlignerLine:
     """One parsed aligner Enhanced-LRC line, for the LRCLIB word-tag merge.
@@ -451,7 +516,15 @@ def merge_lrclib_word_tags(
             out.append(raw)
             continue
         al = aligner[cursor]
-        drift_ok = any(abs(al.start - t) <= drift_tolerance_s for t in times)
+        # Anchor drift on the SECOND word too: even after repair the first
+        # word can carry residual leading-silence absorption, while word 2
+        # is voice-locked (#241 measurements: 33/36 vs 28/37 within 2 s).
+        anchors = [al.start]
+        if len(al.word_starts) >= 2:
+            anchors.append(al.word_starts[1])
+        drift_ok = any(
+            abs(a - t) <= drift_tolerance_s for a in anchors for t in times
+        )
         # A text match outside tolerance can mean the aligner entry belongs to
         # a LATER occurrence of a repeated line (this one was dropped, #149).
         # Defer consuming it only when a later curated line with the same text
@@ -460,7 +533,9 @@ def merge_lrclib_word_tags(
         if not drift_ok:
             defer = any(
                 p_norm == norm
-                and any(abs(al.start - t) <= drift_tolerance_s for t in p_times)
+                and any(
+                    abs(a - t) <= drift_tolerance_s for a in anchors for t in p_times
+                )
                 for _, _, p_norm, p_times in parsed[i + 1 :]
             )
             if not defer:

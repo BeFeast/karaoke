@@ -924,3 +924,52 @@ def test_plain_aligner_lines_count_as_matched_for_the_gate(tmp_path):
     )
     assert prov["lyrics_source"] == SOURCE_LRCLIB_SYNCED
     assert "lyrics_lrclib_rejected" not in prov
+
+
+def test_coverage_reject_prefers_aligned_lrc_over_asr_floor(tmp_path):
+    """#241: when curated timing misfits (low coverage) but the aligner timed
+    the same text against the real audio, ship the aligned LRC as
+    forced_aligned instead of dropping to the ASR floor."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path, "asr fallback")
+    synced = _many_line_lrc(12)
+    # aligner covers all 12 lines but at times far from the curated tags
+    aligned = "\n".join(
+        f"[{(i * 7 + 100) // 60:02d}:{(i * 7 + 100) % 60:05.2f}]"
+        + " ".join(
+            f"<{(i * 7 + 100 + j) // 60:02d}:{(i * 7 + 100 + j) % 60:05.2f}>{w}"
+            for j, w in enumerate(f"line number {i}".split())
+        )
+        + f" <{(i * 7 + 104) // 60:02d}:{(i * 7 + 104) % 60:05.2f}>"
+        for i in range(12)
+    )
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=synced, plain=lrc_to_plain(synced), source="lrclib_get"),
+        exports,
+        whisper,
+        aligned_lrc_path=_aligned_file(tmp_path, aligned),
+    )
+    assert prov["lyrics_source"] == SOURCE_FORCED_ALIGNED
+    assert prov["lyrics_align_reason"].startswith("align_coverage_low")
+    body = (exports / "lyrics.lrc").read_text()
+    assert "<" in body  # word tags shipped
+    assert (exports / "lyrics.txt").read_text() == lrc_to_plain(synced)
+
+
+def test_coverage_reject_with_sparse_aligned_falls_to_floor(tmp_path):
+    """Degenerate alignment (< 50% of eligible lines) cannot ride the #241
+    fallback — the ASR floor still wins."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path, "asr words")
+    synced = _many_line_lrc(12)
+    aligned = "[10:00.00]<10:00.00>line <10:00.20>number <10:00.40>0 <10:00.60>"
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=synced, plain=lrc_to_plain(synced), source="lrclib_get"),
+        exports,
+        whisper,
+        aligned_lrc_path=_aligned_file(tmp_path, aligned),
+    )
+    assert prov["lyrics_source"] == SOURCE_WHISPER_ASR
+    assert prov["lyrics_lrclib_rejected"].startswith("align_coverage_low")
