@@ -21,7 +21,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse, HTMLResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -204,11 +204,50 @@ class SharePayload(BaseModel):
     artifacts: list[ArtifactOut]
 
 
+class LyricsWord(BaseModel):
+    """A single time-synced word within a lyrics line (Enhanced LRC).
+
+    * ``t`` — word start in seconds.
+    * ``d`` — word duration in seconds (next word's start minus this word's
+      start; the last word uses the line's trailing end tag), or ``None`` when
+      unknown (last word without a trailing end tag).
+    * ``text`` — the clean word text (no timing tags).
+    """
+
+    t: float
+    d: float | None
+    text: str
+
+
 class LyricsLine(BaseModel):
-    """A single time-synced lyrics line: ``t`` seconds → ``text``."""
+    """A single time-synced lyrics line: ``t`` seconds → ``text``.
+
+    Enhanced-LRC lines additionally carry per-word timing:
+
+    * ``end`` — the line's sung end in seconds from a trailing ``<mm:ss.xx>``
+      tag, or ``None`` when absent.
+    * ``words`` — parsed ``[{t, d, text}]`` word timings, or ``None`` for plain
+      lines (no ``<>`` tags) and for malformed lines that degrade to a plain
+      wipe.
+
+    ``end`` and ``words`` are omitted from the serialized payload when ``None``,
+    so plain lines stay byte-identical to the pre-word-timing shape.
+    """
 
     t: float
     text: str
+    end: float | None = None
+    words: list[LyricsWord] | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_empty_word_timing(self, handler):  # type: ignore[no-untyped-def]
+        data = handler(self)
+        # Plain lines carry no word timing; drop the nullable fields so the
+        # payload matches the pre-Enhanced-LRC shape exactly.
+        for key in ("end", "words"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
 
 
 class LyricsPayload(BaseModel):
@@ -216,10 +255,13 @@ class LyricsPayload(BaseModel):
 
     * ``synced`` — true when a time-synced ``.lrc`` is available; ``lines`` is
       then populated and the player can highlight the active line.
-    * ``lrc`` — raw ``.lrc`` body when synced, else ``None``.
-    * ``lines`` — parsed ``[{t, text}]`` (sorted, blank lines dropped) when
-      synced, else ``None``.
-    * ``plain`` — plain-text lyrics when available, else ``None``.
+    * ``lrc`` — raw ``.lrc`` body when synced, else ``None`` (kept verbatim,
+      including any inline ``<mm:ss.xx>`` word tags — it is the export surface).
+    * ``lines`` — parsed ``[{t, text, end?, words?}]`` (sorted, blank lines
+      dropped) when synced, else ``None``. ``end``/``words`` appear only for
+      Enhanced-LRC lines that carry ``<>`` word tags.
+    * ``plain`` — plain-text lyrics when available, else ``None`` (all timing
+      tags stripped).
     * ``source`` — provenance (``lrclib_synced`` / ``lrclib_plain`` /
       ``whisper_asr`` / ``instrumental`` / inferred fallback).
     """
@@ -940,45 +982,108 @@ async def share_page(
     return HTMLResponse(_render_share_html(job, lyrics_text))
 
 
-# One LRC timestamp tag, e.g. "[01:23.45]" / "[1:23]" / "[01:23:456]". Multiple
-# tags may prefix a single line; we expand each into its own timed line. Mirrors
-# the worker's ``_LRC_TIMESTAMP_RE`` but captures the components for conversion.
+# One LRC line timestamp tag, e.g. "[01:23.45]" / "[1:23]" / "[01:23:456]".
+# Multiple tags may prefix a single line; we expand each into its own timed
+# line. Mirrors the worker's ``_LRC_TIMESTAMP_RE`` but captures the components
+# for conversion.
 _LRC_TAG_RE = re.compile(r"\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]")
+
+# One inline Enhanced-LRC word tag, e.g. "<01:23.45>". Same shape as the line
+# tag (2-/3-digit fraction), but ``<>``-delimited and inline before each word.
+_LRC_WORD_TAG_RE = re.compile(r"<(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?>")
+
+
+def _lrc_tag_seconds(match: re.Match[str]) -> float:
+    """Convert a matched ``[..]``/``<..>`` timestamp tag to seconds.
+
+    Normalizes the fractional part to seconds regardless of 2- or 3-digit
+    precision (".45" -> 0.45s, ".456" -> 0.456s).
+    """
+    minutes = int(match.group(1))
+    seconds = int(match.group(2))
+    frac_raw = match.group(3) or "0"
+    frac = int(frac_raw) / (10 ** len(frac_raw))
+    return minutes * 60 + seconds + frac
+
+
+def _parse_lrc_words(body: str) -> tuple[list[LyricsWord] | None, float | None]:
+    """Parse inline Enhanced-LRC ``<mm:ss.xx>`` word tags from a line body.
+
+    ``body`` is a single LRC line with the leading ``[mm:ss.xx]`` tag(s) already
+    removed; it may still contain inline ``<..>`` word tags. Returns
+    ``(words, end)`` where each word's ``d`` is the next word's start minus its
+    own start (the last word uses ``end`` when present, else ``None``), and
+    ``end`` is the line's sung end from a trailing tag (``None`` when absent).
+
+    Returns ``(None, None)`` for plain lines (no word tags) and for malformed
+    enhanced lines that must degrade to a plain line wipe — never raises.
+    """
+    tags = list(_LRC_WORD_TAG_RE.finditer(body))
+    if not tags:
+        return None, None  # plain line — today's behavior
+    # Words must be tag-led: any text before the first word tag is malformed.
+    if body[: tags[0].start()].strip():
+        return None, None
+    segments: list[tuple[float, str]] = []
+    for i, match in enumerate(tags):
+        stop = tags[i + 1].start() if i + 1 < len(tags) else len(body)
+        segments.append((_lrc_tag_seconds(match), body[match.end() : stop].strip()))
+    # A trailing tag with no following word text is the line's sung end.
+    end: float | None = None
+    if segments[-1][1] == "":
+        end = round(segments[-1][0], 3)
+        segments = segments[:-1]
+    # Only a bare end tag, or an empty-text word mid-line -> degrade to plain.
+    if not segments or any(text == "" for _, text in segments):
+        return None, None
+    words: list[LyricsWord] = []
+    for i, (t, text) in enumerate(segments):
+        if i + 1 < len(segments):
+            d: float | None = round(segments[i + 1][0] - t, 3)
+        else:
+            d = round(end - t, 3) if end is not None else None
+        words.append(LyricsWord(t=round(t, 3), d=d, text=text))
+    return words, end
 
 
 def _parse_lrc_lines(lrc: str) -> list[LyricsLine]:
     """Parse an LRC body into sorted ``LyricsLine`` entries.
 
-    Lines without a timestamp tag (e.g. ``[ar:]`` metadata or free text) and
-    timestamped lines whose text is blank are dropped. A single line carrying
-    several timestamp tags expands into one entry per tag.
+    Lines without a line timestamp tag (e.g. ``[ar:]`` metadata or free text)
+    and timestamped lines whose text is blank are dropped. A single line
+    carrying several timestamp tags expands into one entry per tag (with the
+    same parsed words). Inline Enhanced-LRC ``<mm:ss.xx>`` word tags are parsed
+    into ``words``/``end`` and stripped from ``text``.
     """
     lines: list[LyricsLine] = []
     for raw in lrc.splitlines():
-        tags = list(_LRC_TAG_RE.finditer(raw))
-        if not tags:
+        line_tags = list(_LRC_TAG_RE.finditer(raw))
+        if not line_tags:
             continue
-        text = _LRC_TAG_RE.sub("", raw).strip()
+        # Strip the leading [..] tags, keeping any inline <..> word tags.
+        body = _LRC_TAG_RE.sub("", raw)
+        text = _LRC_WORD_TAG_RE.sub("", body).strip()
         if not text:
             continue
-        for tag in tags:
-            minutes = int(tag.group(1))
-            seconds = int(tag.group(2))
-            frac_raw = tag.group(3) or "0"
-            # Normalize the fractional part to seconds regardless of 2- or
-            # 3-digit precision (".45" -> 0.45s, ".456" -> 0.456s).
-            frac = int(frac_raw) / (10 ** len(frac_raw))
-            t = minutes * 60 + seconds + frac
-            lines.append(LyricsLine(t=round(t, 3), text=text))
+        words, end = _parse_lrc_words(body)
+        for tag in line_tags:
+            lines.append(
+                LyricsLine(
+                    t=round(_lrc_tag_seconds(tag), 3),
+                    text=text,
+                    end=end,
+                    words=words,
+                )
+            )
     lines.sort(key=lambda line: line.t)
     return lines
 
 
 def _lrc_strip_timestamps(lrc: str) -> str:
-    """Derive plain text from an LRC body (drop tags + blank lines)."""
+    """Derive plain text from an LRC body (drop line + word tags, blank lines)."""
     out: list[str] = []
     for raw in lrc.splitlines():
-        stripped = _LRC_TAG_RE.sub("", raw).strip()
+        stripped = _LRC_WORD_TAG_RE.sub("", _LRC_TAG_RE.sub("", raw)).strip()
         if stripped:
             out.append(stripped)
     return "\n".join(out)

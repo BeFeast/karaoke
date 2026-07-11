@@ -706,6 +706,149 @@ def test_share_lyrics_empty_when_no_artifacts(client, tmp_path):
     }
 
 
+def _get_lyrics(client, tmp_path, lrc_body):
+    """Seed a job with ``lrc_body`` as its ``lyrics.lrc`` and GET its lyrics."""
+    from karaoke.config import get_settings
+
+    _, token = _seed_job_with_metadata(artist="A", track="B")
+    exports = Path(tmp_path) / token / "exports"
+    exports.mkdir(parents=True, exist_ok=True)
+    (exports / "lyrics.lrc").write_text(lrc_body, encoding="utf-8")
+
+    _override_artifact_root(client, tmp_path)
+    try:
+        r = client.get(f"/share/{token}/lyrics")
+    finally:
+        client.app.dependency_overrides.pop(get_settings, None)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_share_lyrics_enhanced_words_with_trailing_end(client, tmp_path):
+    """Enhanced-LRC line -> clean text + per-word timing + trailing sung end.
+
+    Last word's ``d`` comes from the trailing ``<..>`` end tag; ``text`` and
+    ``plain`` carry no ``<>`` tags; ``lrc`` keeps the raw word tags verbatim.
+    """
+    lrc = "[00:00.00]<00:01.00>hello <00:03.00>world <00:05.00>\n"
+    body = _get_lyrics(client, tmp_path, lrc)
+
+    assert body["synced"] is True
+    # Raw LRC (export surface) keeps the inline word tags.
+    assert body["lrc"] == lrc
+    # No <..> tags ever leak into text or plain.
+    assert "<" not in body["plain"] and ">" not in body["plain"]
+    assert body["plain"] == "hello world"
+    assert body["lines"] == [
+        {
+            "t": 0.0,
+            "text": "hello world",
+            "end": 5.0,
+            "words": [
+                {"t": 1.0, "d": 2.0, "text": "hello"},
+                {"t": 3.0, "d": 2.0, "text": "world"},
+            ],
+        }
+    ]
+    line = body["lines"][0]
+    assert "<" not in line["text"] and ">" not in line["text"]
+
+
+def test_share_lyrics_enhanced_words_without_trailing_end(client, tmp_path):
+    """No trailing tag -> line ``end`` omitted and last word's ``d`` is null."""
+    body = _get_lyrics(
+        client, tmp_path, "[00:00.00]<00:01.00>hello <00:03.00>world\n"
+    )
+    assert body["lines"] == [
+        {
+            "t": 0.0,
+            "text": "hello world",
+            "words": [
+                {"t": 1.0, "d": 2.0, "text": "hello"},
+                {"t": 3.0, "d": None, "text": "world"},
+            ],
+        }
+    ]
+    # No trailing end tag -> the line carries no ``end`` key.
+    assert "end" not in body["lines"][0]
+
+
+def test_share_lyrics_mixed_plain_and_enhanced(client, tmp_path):
+    """Mixed file: plain lines stay word-less; enhanced lines gain words."""
+    lrc = (
+        "[00:01.00]plain line\n"
+        "[00:10.00]<00:11.00>sung <00:12.50>word <00:13.00>\n"
+    )
+    body = _get_lyrics(client, tmp_path, lrc)
+
+    assert body["plain"] == "plain line\nsung word"
+    assert body["lines"] == [
+        {"t": 1.0, "text": "plain line"},
+        {
+            "t": 10.0,
+            "text": "sung word",
+            "end": 13.0,
+            "words": [
+                {"t": 11.0, "d": 1.5, "text": "sung"},
+                {"t": 12.5, "d": 0.5, "text": "word"},
+            ],
+        },
+    ]
+    # Plain line keeps today's byte-identical shape (no new keys).
+    assert body["lines"][0] == {"t": 1.0, "text": "plain line"}
+
+
+def test_share_lyrics_malformed_word_tag_degrades_to_plain(client, tmp_path):
+    """Text before the first word tag is malformed -> degrade to a plain line.
+
+    The line still strips its ``<>`` tags (hard requirement) and never 500s.
+    """
+    body = _get_lyrics(
+        client, tmp_path, "[00:01.00]hello <00:02.00>world\n"
+    )
+    assert body["lines"] == [{"t": 1.0, "text": "hello world"}]
+    assert "<" not in body["plain"] and ">" not in body["plain"]
+    assert body["plain"] == "hello world"
+
+
+def test_share_lyrics_plain_lrc_backward_compatible(client, tmp_path):
+    """Plain LRC -> ``words``/``end`` absent, payload identical to today."""
+    body = _get_lyrics(
+        client, tmp_path, "[00:12.50]first line\n[01:05.00]second line\n"
+    )
+    assert body["lines"] == [
+        {"t": 12.5, "text": "first line"},
+        {"t": 65.0, "text": "second line"},
+    ]
+    for line in body["lines"]:
+        assert "words" not in line
+        assert "end" not in line
+
+
+def test_share_lyrics_multiple_line_tags_duplicate_words(client, tmp_path):
+    """Several leading ``[..]`` tags expand to one entry each, same words."""
+    lrc = "[00:01.00][00:20.00]<00:01.50>hi <00:02.00>there <00:03.00>\n"
+    body = _get_lyrics(client, tmp_path, lrc)
+
+    words = [
+        {"t": 1.5, "d": 0.5, "text": "hi"},
+        {"t": 2.0, "d": 1.0, "text": "there"},
+    ]
+    assert body["lines"] == [
+        {"t": 1.0, "text": "hi there", "end": 3.0, "words": words},
+        {"t": 20.0, "text": "hi there", "end": 3.0, "words": words},
+    ]
+
+
+def test_share_lyrics_word_schema_in_openapi(client):
+    """Response schema exposes the new ``LyricsWord`` / word-timing fields."""
+    schema = client.get("/openapi.json").json()["components"]["schemas"]
+    assert "LyricsWord" in schema
+    assert set(schema["LyricsWord"]["properties"]) == {"t", "d", "text"}
+    line_props = schema["LyricsLine"]["properties"]
+    assert "words" in line_props and "end" in line_props
+
+
 def test_me_returns_admin_for_trusted_lan(client):
     """Default conftest is trusted-LAN -> admin identity."""
     r = client.get("/me")
