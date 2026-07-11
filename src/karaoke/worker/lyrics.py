@@ -758,11 +758,17 @@ class LyricsSource:
         status, body = self._http("GET", f"{self._base}/api/search", {"q": query})
         if status != 200 or not isinstance(body, list) or not body:
             return None
-        candidates = [c for c in body if isinstance(c, dict)]
+        # Gate BEFORE ranking: only candidates whose duration is known and
+        # within the hard-reject window are eligible — otherwise a highly
+        # ranked wrong-duration record shadows a valid lower-ranked one.
+        candidates = [
+            c
+            for c in body
+            if isinstance(c, dict)
+            and (delta := _duration_delta(c, duration)) is not None
+            and delta <= _DURATION_REJECT_S
+        ]
         if not candidates:
             return None
         best = max(candidates, key=lambda c: _score_candidate(c, query, duration))
-        delta = _duration_delta(best, duration)
-        if delta is None or delta > _DURATION_REJECT_S:
-            return None
         return _from_record(best, source="lrclib_search")

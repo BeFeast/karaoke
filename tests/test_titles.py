@@ -151,6 +151,9 @@ def test_parse_artist_track_returns_dataclass():
         ("A. Something", []),
         ("Mr. Brightside", []),
         ("Dr. Feelgood", []),
+        # in-title abbreviation dots are skipped, the NEXT real boundary cuts
+        ("Song Pt. 2", []),
+        ("Song Pt. 2. Official video", ["Song Pt. 2"]),
         # a bare quoted phrase still strips its guillemets (a new query)
         ("«Конь»", ["Конь"]),
         # empty / none inputs

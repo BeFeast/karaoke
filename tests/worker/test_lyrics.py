@@ -483,6 +483,29 @@ def test_kon_title_resolves_via_artist_free_ladder():
     assert len(rec.calls) == 3
 
 
+def test_ladder_duration_gate_runs_before_ranking():
+    """A higher-scoring wrong-duration candidate must not shadow a valid
+    in-tolerance one — the gate filters BEFORE ranking picks the best."""
+    wrong_duration = {
+        "trackName": "Конь",          # exact title -> top similarity score
+        "artistName": "Любэ",
+        "duration": 300.0,             # 97 s off -> hard-rejected
+        "syncedLyrics": SYNCED_BODY,
+        "plainLyrics": PLAIN_BODY,
+    }
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/search", "code": 200, "body": [wrong_duration, _KON_RECORD]},
+    ])
+    src = LyricsSource(http=rec)
+    parsed = parse_artist_track(_KON_TITLE)
+    result = src.fetch(artist=parsed.artist, track=parsed.track, duration=203)
+    assert result.found is True
+    assert result.synced_lrc == SYNCED_BODY
+    assert result.match_variant == "Конь"
+
+
 def test_ladder_rejects_artist_free_instrumental_match():
     """An artist-free /api/search?q= record flagged instrumental is NOT
     accepted — duration alone is too weak to mark a lyrical track

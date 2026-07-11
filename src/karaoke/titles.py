@@ -228,6 +228,11 @@ _LEADING_QUOTED_RE = re.compile(
 # First sentence-terminating boundary: a "." followed by whitespace/end, "//",
 # or "|". Everything from there on is cut when a usable head remains.
 _SENTENCE_CUT_RE = re.compile(r"\.\s|\.$|//|\|")
+# A "." boundary is an in-title abbreviation (not a sentence end) when the
+# token before it is 1-2 LETTERS ("Pt.", "Mr.", "Dr."). Digits don't count —
+# "…Pt. 2." ends a real sentence. Cutting at an abbreviation would emit a
+# truncated query that can fuzzy-match the wrong record.
+_ABBREV_TOKEN_RE = re.compile(r"(?:^|\s)([^\W\d_]{1,2})\.$", re.UNICODE)
 
 
 def track_cleanup_variants(track: str | None) -> list[str]:
@@ -263,15 +268,18 @@ def track_cleanup_variants(track: str | None) -> list[str]:
             seen.add(inner.lower())
             text = inner
 
-    m = _SENTENCE_CUT_RE.search(text)
-    if m:
+    for m in _SENTENCE_CUT_RE.finditer(text):
         head = text[: m.start()].strip()
-        # >= 3 chars: a 2-letter head is almost always an abbreviation whose
-        # period tripped the sentence cut ("Mr. Brightside" -> "Mr"), not a
-        # usable track name.
+        # A "." boundary whose preceding token is 1-2 chars is an in-title
+        # abbreviation ("Song Pt. 2", "Mr. Brightside") — not a sentence end;
+        # try the next boundary instead of emitting a truncated query.
+        if m.group().startswith(".") and _ABBREV_TOKEN_RE.search(f"{head}."):
+            continue
+        # >= 3 chars: a shorter head is an artifact, not a usable track name.
         if len(head) >= 3 and head.lower() not in seen:
             variants.append(head)
             seen.add(head.lower())
+        break
 
     return variants
 
