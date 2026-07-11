@@ -87,6 +87,12 @@ _MIN_SPLIT_GAP_S = 1.0
 # curated LRCLIB line timing must win over a bad word alignment.
 _WORD_MERGE_DRIFT_S = 2.0
 
+# Physically implausible singing pace (#244): line characters per second of
+# aligned span above this means the aligner crammed absent text into a tiny
+# window. Fast rap tops out around ~20 chars/s sustained; crammed lines in a
+# cut performance show 40+.
+_MAX_CHARS_PER_SECOND = 30.0
+
 # Lyrics-source provenance values recorded in metadata.json.
 SOURCE_LRCLIB_SYNCED = "lrclib_synced"
 # LRCLIB text that we force-aligned against the vocal stem into a synced LRC
@@ -565,6 +571,85 @@ def merge_lrclib_word_tags(
     if synced_lrc.endswith("\n"):
         merged += "\n"
     return merged, True, eligible, matched_count
+
+
+def drop_unreliable_aligned_lines(
+    body: str, scores: list[float | None] | None
+) -> tuple[str, int]:
+    """Drop crammed/implausible lines from a force-aligned Enhanced LRC (#244).
+
+    A cut/shortened performance (TV edit) forces monotonic CTC alignment to
+    place the ABSENT part of the curated text somewhere — it gets crammed into
+    tiny spans wherever the acoustics complain least, and every line after the
+    cut point drifts. Two independent guards, either drops the line:
+
+    * **pace**: singing faster than ``_MAX_CHARS_PER_SECOND`` characters of
+      line text per second of aligned span is physically implausible (job 133:
+      the crammed tail sang a 31-char line in 0.72 s = 43 chars/s);
+    * **score outlier** (needs ``scores`` from an r8+ image, one entry per
+      line, aligned by order): mean per-frame logprob below
+      ``median − 2×MAD`` of the job's own distribution — self-calibrating, no
+      absolute threshold to tune per language/genre. Applied only when at
+      least 8 lines carry scores.
+
+    Returns ``(filtered_body, dropped_count)``. Lines without word tags pass
+    through (no span to judge). Never raises; on any parse quirk the line is
+    kept.
+    """
+    lines = body.splitlines()
+    keep: list[str] = []
+    dropped = 0
+
+    numeric = [s for s in (scores or []) if isinstance(s, (int, float))]
+    cutoff: float | None = None
+    if len(numeric) >= 8:
+        srt = sorted(numeric)
+        med = srt[len(srt) // 2]
+        mad = sorted(abs(s - med) for s in numeric)[len(numeric) // 2]
+        cutoff = med - 2.0 * max(mad, 0.25)
+
+    for i, raw in enumerate(lines):
+        tag = _LRC_TAG_CAP_RE.match(raw)
+        if tag is None:
+            keep.append(raw)
+            continue
+        rest = raw[tag.end() :]
+        word_tags = list(_LRC_WORD_TAG_CAP_RE.finditer(rest))
+        text = _LRC_WORD_TAG_CAP_RE.sub("", rest).strip()
+        # Plain aligned lines (no word tags — token-drift output) carry no
+        # trustworthy positional timing to judge; both guards skip them.
+        if len(word_tags) < 2:
+            keep.append(raw)
+            continue
+        # Pace over WORD STARTS (first→last), not the sung-end tag: crammed
+        # lines pack all word starts into a fraction of a second while the
+        # end tag absorbs the remaining silence (job 133: 6 word starts in
+        # 0.52 s, end tag 5 s later). Exclude the last word's own length —
+        # its duration is not covered by the start-to-start span.
+        if len(word_tags) >= 3 and not rest[word_tags[-1].end() :].strip():
+            starts = [_tag_seconds(m) for m in word_tags[:-1]]
+            span = starts[-1] - starts[0]
+            words = text.split()
+            chars = len(" ".join(words[:-1])) if len(words) > 1 else len(text)
+            if span >= 0 and chars > 0:
+                pace = chars / max(span, 0.05)
+                if pace > _MAX_CHARS_PER_SECOND:
+                    dropped += 1
+                    continue
+        if (
+            cutoff is not None
+            and scores is not None
+            and i < len(scores)
+            and isinstance(scores[i], (int, float))
+            and scores[i] < cutoff
+        ):
+            dropped += 1
+            continue
+        keep.append(raw)
+    filtered = "\n".join(keep)
+    if body.endswith("\n"):
+        filtered += "\n"
+    return filtered, dropped
 
 
 def aligned_text_agreement(synced_lrc: str, aligned_lrc: str | None) -> tuple[int, int]:

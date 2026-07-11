@@ -506,6 +506,14 @@ class RunpodClient:
         # the pipeline falls back to LRCLIB plain / Whisper.
         aligned_lrc_path: Path | None = None
         aligned = output.get("aligned_lrc")
+        # Per-line alignment scores (r8, #244) ride next to the LRC so the
+        # coordinator can drop relatively bad lines. Old images omit the key.
+        scores = output.get("aligned_line_scores")
+        if isinstance(scores, list) and aligned and str(aligned).strip():
+            with contextlib.suppress(OSError):
+                (work_dir / "aligned.scores.json").write_text(
+                    json.dumps(scores), encoding="utf-8"
+                )
         if isinstance(aligned, str) and aligned.strip():
             aligned_lrc_path = work_dir / "aligned.lrc"
             aligned_lrc_path.write_text(aligned, encoding="utf-8")

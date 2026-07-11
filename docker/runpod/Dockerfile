@@ -178,7 +178,7 @@ RUN /opt/karaoke-venv/bin/python -c "import py_compile; py_compile.compile('/wor
 
 LABEL org.opencontainers.image.title="karaoke RunPod Serverless worker" \
       org.opencontainers.image.description="CUDA 12.4 GPU worker for karaoke on RunPod Serverless: pre-cached BS-Roformer (model_bs_roformer_ep_317_sdr_12.9755, stem separation via audio-separator) + large-v3-turbo (lyrics). Coordinator owns yt-dlp/ffmpeg; this image runs GPU stages only via a JSON-in/JSON-out handler." \
-      org.opencontainers.image.version="cuda12.4-r7" \
+      org.opencontainers.image.version="cuda12.4-r8" \
       org.opencontainers.image.source="https://github.com/BeFeast/karaoke"
 
 ENTRYPOINT ["/opt/karaoke-venv/bin/python", "/work/handler.py"]

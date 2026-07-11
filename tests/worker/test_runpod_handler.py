@@ -127,7 +127,7 @@ def test_aligned_lrc_emits_enhanced_word_tags():
     """Enhanced LRC (#218): every kept line = ``[start]`` + ``<start>word`` per
     word + one trailing ``<end>`` tag (last word's end). The low-confidence
     middle line is dropped whole (line-level, #149) — no partial/stray tags."""
-    lrc = handler._word_timestamps_to_lrc(WORDS, TEXT, stride=STRIDE_MS)
+    lrc, _scores = handler._word_timestamps_to_lrc(WORDS, TEXT, stride=STRIDE_MS)
     assert lrc == (
         "[00:01.00]<00:01.00>hello <00:01.60>there <00:02.00>\n"
         "[00:40.00]<00:40.00>closing <00:40.60>words <00:41.00>"
@@ -137,7 +137,7 @@ def test_aligned_lrc_emits_enhanced_word_tags():
 
 
 def test_aligned_lrc_drops_low_confidence_line():
-    lrc = handler._word_timestamps_to_lrc(WORDS, TEXT, stride=STRIDE_MS)
+    lrc, _scores = handler._word_timestamps_to_lrc(WORDS, TEXT, stride=STRIDE_MS)
     # two kept lines, middle (low-confidence) line dropped whole.
     assert lrc.splitlines() == [
         "[00:01.00]<00:01.00>hello <00:01.60>there <00:02.00>",
@@ -148,7 +148,7 @@ def test_aligned_lrc_drops_low_confidence_line():
 def test_aligned_lrc_without_stride_keeps_all_lines():
     """No stride (caller didn't pass one) → no confidence check; all three lines
     kept, each with Enhanced-LRC word tags + trailing end tag."""
-    lrc = handler._word_timestamps_to_lrc(WORDS, TEXT)
+    lrc, _scores = handler._word_timestamps_to_lrc(WORDS, TEXT)
     assert lrc == (
         "[00:01.00]<00:01.00>hello <00:01.60>there <00:02.00>\n"
         "[00:30.00]<00:30.00>missing <00:30.02>verse <00:30.04>line <00:30.06>\n"
@@ -160,7 +160,7 @@ def test_aligned_lrc_missing_scores_never_drops():
     """Old aligner output without ``score`` keys is never filtered — the middle
     line survives, carrying its per-word Enhanced-LRC tags."""
     words = [_wt(w["start"], w["end"]) for w in WORDS]
-    lrc = handler._word_timestamps_to_lrc(words, TEXT, stride=STRIDE_MS)
+    lrc, _scores = handler._word_timestamps_to_lrc(words, TEXT, stride=STRIDE_MS)
     assert (
         "[00:30.00]<00:30.00>missing <00:30.02>verse <00:30.04>line <00:30.06>"
         in lrc.splitlines()
@@ -171,7 +171,7 @@ def test_aligned_lrc_all_lines_dropped_returns_empty():
     """A wholly-garbage alignment yields "" — the handler then omits
     ``aligned_lrc`` and the coordinator falls back to the Whisper floor."""
     words = [_wt(10.0 + i * 0.02, 10.02 + i * 0.02, -40.0) for i in range(7)]
-    assert handler._word_timestamps_to_lrc(words, TEXT, stride=STRIDE_MS) == ""
+    assert handler._word_timestamps_to_lrc(words, TEXT, stride=STRIDE_MS)[0] == ""
 
 
 def test_aligned_lrc_threshold_env_override(monkeypatch):
@@ -179,7 +179,7 @@ def test_aligned_lrc_threshold_env_override(monkeypatch):
     monkeypatch.setenv("KARAOKE_ALIGN_MIN_AVG_LOGPROB", "-0.1")
     strict = _load_handler()
     # Even the confidently-aligned lines (≈ -0.4/frame) fall below -0.1.
-    assert strict._word_timestamps_to_lrc(WORDS, TEXT, stride=STRIDE_MS) == ""
+    assert strict._word_timestamps_to_lrc(WORDS, TEXT, stride=STRIDE_MS)[0] == ""
 
 
 def test_aligned_lrc_tokenization_drift_disables_word_tags():
@@ -190,7 +190,7 @@ def test_aligned_lrc_tokenization_drift_disables_word_tags():
     timed at the end of the last aligned word). Consumers fall back to the
     linear line wipe."""
     words = [_wt(1.0, 1.5, -10.0), _wt(1.6, 2.0, -8.0)]
-    lrc = handler._word_timestamps_to_lrc(words, TEXT, stride=STRIDE_MS)
+    lrc, _scores = handler._word_timestamps_to_lrc(words, TEXT, stride=STRIDE_MS)
     assert lrc == (
         "[00:01.00]hello there\n"
         "[00:02.00]missing verse line\n"
