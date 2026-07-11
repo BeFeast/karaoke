@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.35.0] - 2026-07-11
+
+_Bump: minor_
+
+- feat(lyrics): r8 per-line align scores + unreliable-line drop for cut performances (#244) (#245)
+
 ## [v0.34.0] - 2026-07-11
 
 _Bump: minor_
