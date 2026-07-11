@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.31.0] - 2026-07-11
+
+_Bump: minor_
+
+- feat(lyrics-api): parse Enhanced LRC word tags into words[] on LyricsLine (#223)
+- feat(worker): Whisper-floor Enhanced LRC word tags + mega-segment split (#219) (#224)
+- fix(runpod): stop Whisper repetition-collapse + emit Enhanced LRC word tags (r7) (#225)
+- feat(spa): word-accurate lyric wipe from Enhanced-LRC words[]/end (#221) (#227)
+
 ## [v0.3.1] - 2026-06-11
 
 _Bump: patch_
