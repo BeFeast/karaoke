@@ -902,3 +902,25 @@ def test_no_aligned_lrc_skips_the_coverage_gate(tmp_path):
         whisper,
     )
     assert prov["lyrics_source"] == SOURCE_LRCLIB_SYNCED
+
+
+def test_plain_aligner_lines_count_as_matched_for_the_gate(tmp_path):
+    """Aligner lines that matched the text but carried no word tags (token
+    drift → plain line-level output) still prove the text fits the audio:
+    the record must NOT be coverage-rejected."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path)
+    synced = _many_line_lrc(12)
+    # Aligner echoes every line at the right time but WITHOUT word tags.
+    aligned = "\n".join(
+        f"[{i:02d}:00.50]line number {i}" for i in range(12)
+    )
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=synced, plain=lrc_to_plain(synced), source="lrclib_get"),
+        exports,
+        whisper,
+        aligned_lrc_path=_aligned_file(tmp_path, aligned),
+    )
+    assert prov["lyrics_source"] == SOURCE_LRCLIB_SYNCED
+    assert "lyrics_lrclib_rejected" not in prov

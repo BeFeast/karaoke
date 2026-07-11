@@ -402,12 +402,15 @@ def merge_lrclib_word_tags(
     untouched.
 
     Pure + total: any parse quirk leaves the affected line plain. Returns
-    ``(merged_lrc, merged_any, eligible, merged)`` — ``eligible`` counts the
-    single-tag non-empty LRCLIB lines that were merge candidates and ``merged``
-    how many actually received word tags; their ratio is a *match-quality*
-    signal (#237): curated text that belongs to a different performance
-    aligns almost nowhere. When nothing merged, ``merged_lrc`` is
-    ``synced_lrc`` verbatim (byte-exact fallback) and ``merged_any`` is False.
+    ``(merged_lrc, merged_any, eligible, matched)`` — ``eligible`` counts the
+    single-tag non-empty LRCLIB lines that were merge candidates and
+    ``matched`` how many found their aligner counterpart (text equal, start
+    within drift tolerance) — regardless of whether word tags were actually
+    spliced (a plain aligner line or token-count drift still proves the TEXT
+    fits the audio). Their ratio is a *match-quality* signal (#237): curated
+    text that belongs to a different performance matches almost nowhere.
+    When nothing merged, ``merged_lrc`` is ``synced_lrc`` verbatim (byte-exact
+    fallback) and ``merged_any`` is False.
     """
     if not aligned_lrc or not aligned_lrc.strip():
         return synced_lrc, False, 0, 0
@@ -434,7 +437,7 @@ def merge_lrclib_word_tags(
     cursor = 0
     merged_any = False
     eligible = 0
-    merged_count = 0
+    matched_count = 0
     for i, raw in enumerate(raw_lines):
         tag, text, norm, times = parsed[i]
         # Lines without a tag or without text pass through and do not consume
@@ -465,6 +468,8 @@ def merge_lrclib_word_tags(
             out.append(raw)
             continue
         cursor += 1
+        if len(times) == 1:
+            matched_count += 1
         # Multi-tag lines ([t1][t2]text) consume their aligner entry (their
         # text was sent to the aligner) but stay plain — repeated-tag timing
         # is ambiguous.
@@ -472,16 +477,15 @@ def merge_lrclib_word_tags(
         if len(times) == 1 and al.word_starts and len(al.word_starts) == len(words):
             out.append(_splice_word_tags(raw[: tag.end()], text, al.word_starts, al.end))
             merged_any = True
-            merged_count += 1
             continue
         out.append(raw)
     if not merged_any:
-        return synced_lrc, False, eligible, 0
+        return synced_lrc, False, eligible, matched_count
     merged = "\n".join(out)
     # Preserve the source's final newline (byte-preserving outside merged lines).
     if synced_lrc.endswith("\n"):
         merged += "\n"
-    return merged, True, eligible, merged_count
+    return merged, True, eligible, matched_count
 
 
 @dataclass(frozen=True, slots=True)

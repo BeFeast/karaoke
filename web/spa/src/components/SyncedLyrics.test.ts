@@ -138,14 +138,23 @@ describe("parseLrc first-word line-start adjustment (#236)", () => {
     expect(line.t).toBe(30);
   });
 
-  test("clamps the adjustment to the previous line's start (monotonic)", () => {
+  test("clamps the adjustment strictly after the previous line's start", () => {
     const body = [
       "[00:10.00]plain first line",
       "[00:10.10]<00:09.50>early <00:11.00>word <00:12.00>",
     ].join("\n");
     const [a, b] = parseLrc(body);
     expect(a.t).toBe(10);
-    expect(b.t).toBe(10); // clamped to a.t, not 9.5
+    // clamped to a.t + epsilon, not 9.5 — the previous line stays selectable
+    expect(b.t).toBeGreaterThan(a.t);
+    expect(b.t).toBeLessThan(10.1);
+  });
+
+  test("repeated-stamp copies: only the earliest copy is pulled to the word", () => {
+    const body = "[00:10.00][00:40.00]<00:09.60>chorus <00:11.00>line <00:12.00>";
+    const [a, b] = parseLrc(body);
+    expect(a.t).toBeCloseTo(9.6, 5);
+    expect(b.t).toBe(40); // later repeat keeps its curated stamp
   });
 
   test("leaves word-less lines untouched", () => {

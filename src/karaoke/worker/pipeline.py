@@ -516,7 +516,7 @@ def _resolve_lyrics(
         # ``lrclib_synced``. Tolerant: a missing/garbage aligned LRC or any
         # unmergeable line degrades to the plain LRCLIB line exactly.
         aligned = _read_aligned_lrc(aligned_lrc_path)
-        merged_lrc, word_timing, eligible, merged_n = merge_lrclib_word_tags(
+        merged_lrc, word_timing, eligible, matched_n = merge_lrclib_word_tags(
             lyrics.synced_lrc, aligned
         )
         # Match-quality gate (#237): the aligner tried to fit the curated text
@@ -527,9 +527,9 @@ def _resolve_lyrics(
         # actually ran (aligned present) and the record is big enough for the
         # ratio to mean anything.
         if aligned and eligible >= _ALIGN_COVERAGE_MIN_LINES:
-            coverage = merged_n / eligible
+            coverage = matched_n / eligible
             if coverage < _ALIGN_COVERAGE_MIN_RATIO:
-                align_coverage_reject = f"align_coverage_low ({merged_n}/{eligible})"
+                align_coverage_reject = f"align_coverage_low ({matched_n}/{eligible})"
                 _log.warning(
                     "rejecting lrclib_synced: word-merge coverage %s below %.0f%%",
                     align_coverage_reject,
