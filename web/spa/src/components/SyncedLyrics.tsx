@@ -8,14 +8,34 @@ import { type CSSProperties, useEffect, useMemo, useRef } from "react";
 // active-line lookup is a plain binary search.
 //
 // Enhanced LRC carries word-level offsets as inline `<mm:ss.xx>` tags. We strip
-// those for the line text (word-level highlight is a documented nice-to-have,
-// not the requirement) but keep the leading line timestamp intact.
+// those from the line *text* (so display stays clean) but also parse them into
+// per-word `words`/`end` timing so the wipe can fill word-by-word (#221). Plain
+// lines carry no `<>` tags and keep `words`/`end` undefined — a per-line
+// fallback, so mixed files (some enhanced, some plain) are valid.
+
+export interface LyricWord {
+  /** Word start in seconds. */
+  t: number;
+  /**
+   * Word duration in seconds: the next word's start minus this word's start;
+   * the last word uses the line's trailing end tag. `null` when unknown (last
+   * word with no trailing end tag) — the consumer derives it from the next
+   * line's start (stage-core.timeLines).
+   */
+  d: number | null;
+  /** Clean word text (timing tags removed). */
+  text: string;
+}
 
 export interface LyricLine {
   /** Line start time in seconds. */
   t: number;
   /** Display text with timestamp tags removed. */
   text: string;
+  /** Per-word timings for Enhanced-LRC lines; undefined for plain lines. */
+  words?: LyricWord[];
+  /** Line sung-end in seconds from a trailing `<mm:ss.xx>` tag; else undefined. */
+  end?: number;
 }
 
 // Leading line timestamp: [mm:ss], [mm:ss.xx], [mm:ss.xxx] (also tolerates a
@@ -23,8 +43,11 @@ export interface LyricLine {
 // leading tags on one line each yield a line.
 const LINE_TAG = /\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
 // Inline word-level tags from Enhanced LRC, e.g. `<00:12.34>`; stripped for the
-// line text since we render line-level highlight.
+// line text (display stays clean). The capturing variant parses the same tags
+// into word timings — kept as separate objects so the two never share the
+// stateful `lastIndex` of a global regex.
 const WORD_TAG = /<\d{1,2}:\d{2}(?:[.:]\d{1,3})?>/g;
+const WORD_TAG_CAP = /<(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?>/g;
 const RTL_STRONG = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]/u;
 const LTR_STRONG = /\p{Script=Latin}|\p{Script=Greek}|\p{Script=Cyrillic}/u;
 type LyricsDirection = "ltr" | "rtl" | "auto";
@@ -39,8 +62,53 @@ function tagToSeconds(min: string, sec: string, frac?: string): number {
 }
 
 /**
+ * Parse inline Enhanced-LRC `<mm:ss.xx>` word tags from a line body (the text
+ * after the leading `[..]` line tag(s), word tags still present). Returns the
+ * per-word timings and the line's sung `end`, or `{}` for a plain line and for
+ * a malformed enhanced line that must degrade to today's linear line wipe.
+ * Mirrors the server's `_parse_lrc_words` (routes.py) so client + API agree.
+ */
+function parseWordTags(body: string): { words?: LyricWord[]; end?: number } {
+  WORD_TAG_CAP.lastIndex = 0;
+  const tags: RegExpExecArray[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = WORD_TAG_CAP.exec(body)) !== null) tags.push(m);
+  if (tags.length === 0) return {}; // plain line — today's behavior
+  // Words must be tag-led: any text before the first word tag is malformed.
+  if (body.slice(0, tags[0].index).trim()) return {};
+  const segments: { t: number; text: string }[] = [];
+  for (let i = 0; i < tags.length; i++) {
+    const stop = i + 1 < tags.length ? tags[i + 1].index : body.length;
+    segments.push({
+      t: tagToSeconds(tags[i][1], tags[i][2], tags[i][3]),
+      text: body.slice(tags[i].index + tags[i][0].length, stop).trim(),
+    });
+  }
+  // A trailing tag with no following word text is the line's sung end.
+  let end: number | undefined;
+  if (segments[segments.length - 1].text === "") {
+    end = segments[segments.length - 1].t;
+    segments.pop();
+  }
+  // Only a bare end tag, or an empty-text word mid-line -> degrade to plain.
+  if (segments.length === 0 || segments.some((s) => s.text === "")) return {};
+  const words: LyricWord[] = segments.map((s, i) => ({
+    t: s.t,
+    d:
+      i + 1 < segments.length
+        ? segments[i + 1].t - s.t
+        : end != null
+          ? end - s.t
+          : null,
+    text: s.text,
+  }));
+  return { words, end };
+}
+
+/**
  * Parse an LRC body into time-sorted lyric lines. Pure + side-effect free so
- * callers can memoize on the raw string.
+ * callers can memoize on the raw string. Enhanced-LRC `<mm:ss.xx>` word tags
+ * are parsed into per-line `words`/`end` and stripped from the display text.
  */
 export function parseLrc(body: string): LyricLine[] {
   const lines: LyricLine[] = [];
@@ -58,9 +126,12 @@ export function parseLrc(body: string): LyricLine[] {
       lastTagEnd = LINE_TAG.lastIndex;
     }
     if (stamps.length === 0) continue; // metadata line (e.g. [ti:], [ar:]) or blank
-    const text = raw.slice(lastTagEnd).replace(WORD_TAG, "").trim();
+    const bodyText = raw.slice(lastTagEnd);
+    const text = bodyText.replace(WORD_TAG, "").trim();
     if (!text) continue; // drop blank / no-text lines
-    for (const t of stamps) lines.push({ t, text });
+    const { words, end } = parseWordTags(bodyText);
+    // Repeated leading tags share the same parsed words (like the server).
+    for (const t of stamps) lines.push({ t, text, words, end });
   }
   lines.sort((a, b) => a.t - b.t);
   return lines;
