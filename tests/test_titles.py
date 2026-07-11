@@ -8,6 +8,7 @@ from karaoke.titles import (
     derive_metadata,
     normalize_title,
     parse_artist_track,
+    track_cleanup_variants,
 )
 
 # ---------------------------------------------------------------------------
@@ -120,6 +121,55 @@ def test_parse_artist_track_returns_dataclass():
     assert isinstance(result, ParsedTitle)
     assert result.artist == "A"
     assert result.track == "B"
+
+
+# ---------------------------------------------------------------------------
+# track_cleanup_variants (#230 fallback ladder)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("track", "expected"),
+    [
+        # the job-#126 driver: leading quoted phrase wins, then nothing left to cut
+        ("«Конь». Голубой Ургант. Фрагмент выпуска от 30.12.2018", ["Конь"]),
+        # leading straight / curly quotes are handled the same way
+        ('"Song". Live on some show', ["Song"]),
+        ("“Song”. Live on some show", ["Song"]),
+        # no leading quote → cut at the first sentence-terminating "."
+        ("Конь. Голубой Ургант", ["Конь"]),
+        # cut on "|" and "//" too
+        ("Song | Official channel clips", ["Song"]),
+        ("Song // extra chatter", ["Song"]),
+        # both steps fire cumulatively: strip quote THEN cut the remainder
+        ('«Song. Live»', ["Song. Live", "Song"]),
+        # a clean track with nothing to strip yields no extra variants
+        ("Get Lucky", []),
+        ("Get Lucky (Acoustic)", []),
+        # the cut head must be >= 3 chars, else it is not emitted (2-letter
+        # heads are abbreviation artifacts: "Mr. Brightside" must NOT yield "Mr")
+        ("A. Something", []),
+        ("Mr. Brightside", []),
+        ("Dr. Feelgood", []),
+        # in-title abbreviation dots are skipped, the NEXT real boundary cuts
+        ("Song Pt. 2", []),
+        ("Song Pt. 2. Official video", ["Song Pt. 2"]),
+        # a bare quoted phrase still strips its guillemets (a new query)
+        ("«Конь»", ["Конь"]),
+        # empty / none inputs
+        (None, []),
+        ("", []),
+        ("   ", []),
+    ],
+)
+def test_track_cleanup_variants(track, expected):
+    assert track_cleanup_variants(track) == expected
+
+
+def test_track_cleanup_variants_bounded():
+    """The ladder never yields more than two variants (≤ 3 extra HTTP calls)."""
+    variants = track_cleanup_variants("«First. Second. Third». Trailing | chatter")
+    assert len(variants) <= 2
 
 
 # ---------------------------------------------------------------------------

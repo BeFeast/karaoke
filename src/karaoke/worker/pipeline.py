@@ -905,6 +905,10 @@ async def run_real_job(
         # line; provenance stays ``lrclib_synced``.
         if lyrics_prov.get("lyrics_word_timing"):
             metadata["lyrics_word_timing"] = lyrics_prov["lyrics_word_timing"]
+        # Which cleaned track variant hit via the #230 fallback ladder — only
+        # present when the parsed (artist, track) missed and a variant matched.
+        if lyrics.match_variant:
+            metadata["lyrics_match_variant"] = lyrics.match_variant
         (exports_dir / "metadata.json").write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
         )
