@@ -137,6 +137,8 @@ def whisper_segments_to_lrc(segments: list[dict[str, Any]] | None) -> str:
             start = float(seg["start"])
         except (KeyError, TypeError, ValueError):
             continue
+        if not math.isfinite(start):
+            continue
         start = max(start, 0.0)
         lines.append((start, f"{_fmt_lrc_timestamp(start)}{text}"))
     lines.sort(key=lambda item: item[0])

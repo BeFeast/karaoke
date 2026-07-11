@@ -611,6 +611,23 @@ def test_segments_to_lrc_malformed_words_fall_back_to_plain_line():
         assert whisper_segments_to_lrc([seg]) == "[00:05.00]fallback", words
 
 
+def test_segments_to_lrc_non_finite_segment_start_is_skipped():
+    """A word-less (or words-demoted) segment with a NaN/Infinity ``start``
+    is skipped instead of reaching timestamp formatting."""
+    segs = [
+        {"start": float("nan"), "end": 6.0, "text": "gone"},
+        {"start": float("inf"), "end": 6.0, "text": "gone too"},
+        {
+            "start": float("nan"),
+            "end": 6.0,
+            "text": "demoted",
+            "words": [{"bad": 1}],
+        },
+        {"start": 1.0, "end": 2.0, "text": "kept"},
+    ]
+    assert whisper_segments_to_lrc(segs) == "[00:01.00]kept"
+
+
 def test_segments_to_lrc_malformed_words_without_start_are_skipped():
     """Malformed words demote to the word-less path, which then skips the
     segment entirely when it also lacks a numeric ``start`` (today's rule)."""
