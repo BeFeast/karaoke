@@ -124,23 +124,42 @@ WORDS = [
 
 
 def test_aligned_lrc_drops_low_confidence_line():
+    """#218 Enhanced LRC: surviving lines carry per-word ``<..>`` start tags plus
+    a trailing line-end tag; the #149 low-confidence line drop is unchanged."""
     lrc = handler._word_timestamps_to_lrc(WORDS, TEXT, stride=STRIDE_MS)
-    assert lrc == "[00:01.00]hello there\n[00:40.00]closing words"
-
-
-def test_aligned_lrc_without_stride_keeps_all_lines():
-    """No stride (caller didn't pass one) → no confidence check, pre-#149 shape."""
-    lrc = handler._word_timestamps_to_lrc(WORDS, TEXT)
     assert lrc == (
-        "[00:01.00]hello there\n[00:30.00]missing verse line\n[00:40.00]closing words"
+        "[00:01.00]<00:01.00>hello <00:01.60>there <00:02.00>\n"
+        "[00:40.00]<00:40.00>closing <00:40.60>words <00:41.00>"
     )
 
 
+def test_aligned_lrc_without_stride_keeps_all_lines():
+    """No stride (caller didn't pass one) → no confidence check; every line is
+    rendered with #218 word tags (the middle line is kept, not dropped)."""
+    lrc = handler._word_timestamps_to_lrc(WORDS, TEXT)
+    assert lrc == (
+        "[00:01.00]<00:01.00>hello <00:01.60>there <00:02.00>\n"
+        "[00:30.00]<00:30.00>missing <00:30.02>verse <00:30.04>line <00:30.06>\n"
+        "[00:40.00]<00:40.00>closing <00:40.60>words <00:41.00>"
+    )
+
+
+def test_aligned_lrc_word_tag_time_format_matches_line_tag():
+    """The inline ``<mm:ss.xx>`` word tags use the exact time shape of the
+    ``[mm:ss.xx]`` line tag (2-digit centiseconds), per the #218 contract."""
+    assert handler._fmt_word_timestamp(1.6) == "<00:01.60>"
+    assert handler._fmt_word_timestamp(65.05) == "<01:05.05>"
+    # bare form (no delimiters) shared by both tag kinds
+    assert handler._fmt_lrc_time(1.6) == "00:01.60"
+    assert handler._fmt_lrc_timestamp(1.6) == "[00:01.60]"
+
+
 def test_aligned_lrc_missing_scores_never_drops():
-    """Old aligner output without ``score`` keys is never filtered."""
+    """Old aligner output without ``score`` keys is never filtered; the middle
+    line survives and is rendered with #218 word tags."""
     words = [_wt(w["start"], w["end"]) for w in WORDS]
     lrc = handler._word_timestamps_to_lrc(words, TEXT, stride=STRIDE_MS)
-    assert "missing verse line" in lrc
+    assert "[00:30.00]<00:30.00>missing <00:30.02>verse <00:30.04>line <00:30.06>" in lrc
 
 
 def test_aligned_lrc_all_lines_dropped_returns_empty():
@@ -159,10 +178,123 @@ def test_aligned_lrc_threshold_env_override(monkeypatch):
 
 
 def test_aligned_lrc_tokenization_drift_keeps_tail_lines():
-    """More text words than aligned timestamps: tail lines are kept, timed at
-    the end of the last aligned word (pre-#149 behavior preserved)."""
+    """More text words than aligned timestamps: the fully-aligned first line
+    gets #218 word tags, while the tail lines (out of timestamps) stay plain
+    (word-less) lines timed at the end of the last aligned word. Mixed
+    word-tagged / plain lines are valid Enhanced LRC (#218 contract)."""
     words = [_wt(1.0, 1.5, -10.0), _wt(1.6, 2.0, -8.0)]
     lrc = handler._word_timestamps_to_lrc(words, TEXT, stride=STRIDE_MS)
     assert lrc == (
-        "[00:01.00]hello there\n[00:02.00]missing verse line\n[00:02.00]closing words"
+        "[00:01.00]<00:01.00>hello <00:01.60>there <00:02.00>\n"
+        "[00:02.00]missing verse line\n"
+        "[00:02.00]closing words"
     )
+
+
+# ---------------------------------------------------------------------------
+# _transcribe kwargs — repetition-collapse + music-tuned guards (#218)
+# ---------------------------------------------------------------------------
+class _FakeWhisperInfo:
+    """Stand-in for faster-whisper's transcribe ``info`` (evidence job shape)."""
+
+    language = "ru"
+    language_probability = 0.86
+    duration = 203.0
+
+
+class _FakeWhisperWord:
+    def __init__(self, start, end, word, probability):
+        self.start = start
+        self.end = end
+        self.word = word
+        self.probability = probability
+
+
+class _FakeWhisperSegment:
+    def __init__(self, start, end, text, words=None):
+        self.start = start
+        self.end = end
+        self.text = text
+        self.words = words
+
+
+class _FakeWhisperModel:
+    """Records the transcribe(...) call and returns a canned (segments, info)."""
+
+    def __init__(self, segments=None):
+        self.calls = []
+        self._segments = segments or []
+
+    def transcribe(self, audio, **kwargs):
+        self.calls.append((audio, kwargs))
+        return iter(self._segments), _FakeWhisperInfo()
+
+
+def test_transcribe_kwargs_repetition_collapse_guards(tmp_path, monkeypatch):
+    """``_transcribe`` calls faster-whisper with the #218 anti-collapse kwargs:
+    ``condition_on_previous_text=False``, tuned VAD params, the temperature
+    fallback ladder and the music-tuned hallucination guards — while keeping
+    ``word_timestamps``/``beam_size`` and auto language detection."""
+    fake = _FakeWhisperModel()
+    monkeypatch.setattr(handler, "_get_whisper", lambda: fake)
+    wav = tmp_path / "vocals.wav"
+    wav.write_bytes(b"\x00")
+
+    lyrics_txt, lyrics_json = handler._transcribe(wav)
+
+    assert len(fake.calls) == 1
+    _audio, kwargs = fake.calls[0]
+    # The main fix (repetition-collapse) + music-tuned guards.
+    assert kwargs["condition_on_previous_text"] is False
+    assert kwargs["vad_filter"] is True
+    assert kwargs["vad_parameters"] == {
+        "min_silence_duration_ms": 500,
+        "speech_pad_ms": 400,
+    }
+    assert kwargs["temperature"] == [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    assert kwargs["compression_ratio_threshold"] == 2.4
+    assert kwargs["log_prob_threshold"] == -1.0
+    assert kwargs["no_speech_threshold"] == 0.6
+    assert kwargs["hallucination_silence_threshold"] == 2.0
+    # Unchanged knobs: per-word timing, beam search, auto language detect.
+    assert kwargs["word_timestamps"] is True
+    assert kwargs["beam_size"] == 5
+    assert "language" not in kwargs  # auto-detect, not forced
+    # Empty transcript still yields a well-formed lyrics_json.
+    assert lyrics_json["language"] == "ru"
+    assert lyrics_json["language_probability"] == 0.86
+    assert lyrics_json["segments"] == []
+    assert lyrics_txt == ""
+
+
+def test_transcribe_maps_segments_and_words(tmp_path, monkeypatch):
+    """Segment/word mapping is preserved: each segment carries stripped text and
+    a per-word list, and lyrics_txt joins the stripped segment texts."""
+    seg = _FakeWhisperSegment(
+        start=1.0,
+        end=2.5,
+        text=" hello there ",
+        words=[
+            _FakeWhisperWord(1.0, 1.5, "hello", 0.9),
+            _FakeWhisperWord(1.6, 2.0, "there", 0.8),
+        ],
+    )
+    fake = _FakeWhisperModel(segments=[seg])
+    monkeypatch.setattr(handler, "_get_whisper", lambda: fake)
+    wav = tmp_path / "vocals.wav"
+    wav.write_bytes(b"\x00")
+
+    lyrics_txt, lyrics_json = handler._transcribe(wav)
+
+    assert lyrics_txt == "hello there"
+    assert lyrics_json["segments"] == [
+        {
+            "start": 1.0,
+            "end": 2.5,
+            "text": " hello there ",
+            "words": [
+                {"start": 1.0, "end": 1.5, "word": "hello", "probability": 0.9},
+                {"start": 1.6, "end": 2.0, "word": "there", "probability": 0.8},
+            ],
+        }
+    ]
