@@ -167,12 +167,13 @@ def test_plain_plus_aligned_lrc_writes_synced(tmp_path):
     assert (exports / "lyrics.txt").read_text() == "plain one\nplain two"
 
 
-def test_synced_wins_over_aligned(tmp_path):
-    """Native LRCLIB synced always wins; the aligned LRC is ignored."""
+def test_synced_wins_over_nonmatching_aligned(tmp_path):
+    """Native LRCLIB synced wins: a non-matching aligned LRC merges nothing, so
+    the curated body is written verbatim and no word-timing flag is set (#222)."""
     exports = tmp_path / "exports"
     exports.mkdir()
     whisper = _whisper(tmp_path)
-    aligned = _aligned_file(tmp_path)
+    aligned = _aligned_file(tmp_path)  # ALIGNED text differs from SYNCED
 
     prov = _resolve_lyrics(
         LyricsResult(synced_lrc=SYNCED, plain="hello world\nsecond line", source="lrclib_get"),
@@ -181,7 +182,44 @@ def test_synced_wins_over_aligned(tmp_path):
         aligned,
     )
     assert prov["lyrics_source"] == SOURCE_LRCLIB_SYNCED
+    assert "lyrics_word_timing" not in prov
     assert (exports / "lyrics.lrc").read_text() == SYNCED
+
+
+def test_synced_merges_aligner_word_tags(tmp_path):
+    """When the aligner timed the SAME curated text, its word ``<>`` tags are
+    merged into the LRCLIB lines: provenance stays ``lrclib_synced``, the curated
+    line tags/text are preserved, and ``lyrics_word_timing`` marks the merge."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path)
+    aligned = _aligned_file(
+        tmp_path,
+        body=(
+            "[00:12.05]<00:12.05>hello <00:12.9>world <00:13.4>\n"
+            "[00:15.55]<00:15.55>second <00:16.1>line <00:16.8>"
+        ),
+    )
+
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=SYNCED, plain="hello world\nsecond line", source="lrclib_get"),
+        exports,
+        whisper,
+        aligned,
+    )
+    assert prov["lyrics_source"] == SOURCE_LRCLIB_SYNCED  # provenance unchanged
+    assert prov["synced"] is True
+    assert prov["lyrics_word_timing"] == SOURCE_FORCED_ALIGNED
+    lrc = (exports / "lyrics.lrc").read_text()
+    # Curated LRCLIB line tags kept; aligner word tags spliced in.
+    assert lrc == (
+        "[00:12.00]<00:12.05>hello <00:12.90>world <00:13.40>\n"
+        "[00:15.50]<00:15.55>second <00:16.10>line <00:16.80>"
+    )
+    # Line text stays byte-identical to the curated LRCLIB source.
+    assert lrc_to_plain(lrc) == lrc_to_plain(SYNCED)
+    # Plain-text export unchanged.
+    assert (exports / "lyrics.txt").read_text() == "hello world\nsecond line"
 
 
 def test_plain_only_no_aligned_falls_back_to_plain(tmp_path):
