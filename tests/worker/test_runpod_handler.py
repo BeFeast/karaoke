@@ -182,19 +182,21 @@ def test_aligned_lrc_threshold_env_override(monkeypatch):
     assert strict._word_timestamps_to_lrc(WORDS, TEXT, stride=STRIDE_MS) == ""
 
 
-def test_aligned_lrc_tokenization_drift_keeps_tail_lines():
-    """More text words than aligned timestamps → a valid *mixed* Enhanced LRC:
-    the fully-aligned first line carries word tags, while the two tail lines
-    with no aligned words stay plain (no ``<>`` tags), timed at the end of the
-    last aligned word (pre-#149 tail behavior preserved). Consumers fall back to
-    a linear line wipe for the plain lines."""
+def test_aligned_lrc_tokenization_drift_disables_word_tags():
+    """Timestamp count ≠ text word count (preprocess/romanize token drift) →
+    the positional word↔timestamp mapping is untrustworthy anywhere, so NO
+    word tags are emitted at all: every line stays plain, timed at its first
+    aligned word (tail lines with no words left keep the pre-#149 behavior,
+    timed at the end of the last aligned word). Consumers fall back to the
+    linear line wipe."""
     words = [_wt(1.0, 1.5, -10.0), _wt(1.6, 2.0, -8.0)]
     lrc = handler._word_timestamps_to_lrc(words, TEXT, stride=STRIDE_MS)
     assert lrc == (
-        "[00:01.00]<00:01.00>hello <00:01.60>there <00:02.00>\n"
+        "[00:01.00]hello there\n"
         "[00:02.00]missing verse line\n"
         "[00:02.00]closing words"
     )
+    assert "<" not in lrc
 
 
 # ---------------------------------------------------------------------------

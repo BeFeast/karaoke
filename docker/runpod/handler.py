@@ -446,6 +446,21 @@ def _word_timestamps_to_lrc(
     out: list[str] = []
     wi = 0
     n = len(word_timestamps)
+    # The aligner's preprocess/romanize step can merge or split tokens, so the
+    # timestamp count may drift from the original text's whitespace words. The
+    # positional word↔timestamp mapping below is only trustworthy when the
+    # counts match exactly — after a drifted token every tag would mark the
+    # wrong word. On mismatch keep line-start timing (pre-r7 behavior) and
+    # emit no word tags at all.
+    total_words = sum(len(ln.split()) for ln in lines)
+    emit_word_tags = n == total_words
+    if not emit_word_tags:
+        LOG.info(
+            "aligner token drift (%d timestamps vs %d words): "
+            "emitting line-level LRC without word tags",
+            n,
+            total_words,
+        )
     for line in lines:
         words = line.split()
         if not words:
@@ -463,7 +478,11 @@ def _word_timestamps_to_lrc(
         if _line_below_confidence(line_ts, stride):
             LOG.info("dropping low-confidence aligned line: %r", line.strip())
             continue
-        out.append(_enhanced_lrc_line(words, line_ts))
+        if emit_word_tags:
+            out.append(_enhanced_lrc_line(words, line_ts))
+        else:
+            start = float(line_ts[0].get("start") or 0.0)
+            out.append(f"{_fmt_lrc_timestamp(start)}{line.strip()}")
     return "\n".join(out)
 
 
