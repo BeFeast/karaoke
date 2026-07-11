@@ -37,6 +37,7 @@ network — the same test seam shape the RunPod/vast clients use.
 """
 from __future__ import annotations
 
+import math
 import re
 import threading
 from collections.abc import Callable
@@ -161,6 +162,10 @@ def _parse_words(raw: Any) -> list[tuple[float, float, str]] | None:
             start = float(word["start"])
             end = float(word["end"])
         except (KeyError, TypeError, ValueError):
+            return None
+        # float() accepts "nan"/"inf" strings and float NaN/Infinity, which
+        # would blow up timestamp formatting downstream — treat as malformed.
+        if not (math.isfinite(start) and math.isfinite(end)):
             return None
         text = str(word.get("word") or "").strip()
         if not text:

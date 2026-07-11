@@ -598,6 +598,9 @@ def test_segments_to_lrc_malformed_words_fall_back_to_plain_line():
     bad_word_sets = [
         [{"start": 5.0, "word": " a"}],                      # missing "end"
         [{"start": "x", "end": 6.0, "word": " a"}],          # non-numeric start
+        [{"start": float("nan"), "end": 6.0, "word": " a"}],  # NaN start
+        [{"start": 5.0, "end": float("inf"), "word": " a"}],  # infinite end
+        [{"start": "nan", "end": 6.0, "word": " a"}],        # "nan" string
         [{"start": 5.0, "end": 6.0, "word": "   "}],         # empty word text
         [{"start": 5.0, "end": 6.0, "word": " a"}, "nope"],  # non-dict entry
         [],                                                   # empty words list
