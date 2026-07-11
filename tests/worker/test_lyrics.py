@@ -23,6 +23,7 @@ from karaoke.worker.lyrics import (
     LyricsSource,
     lrc_to_plain,
     merge_lrclib_word_tags,
+    repair_aligned_lrc,
     whisper_segments_to_lrc,
 )
 
@@ -1134,3 +1135,42 @@ def test_merge_nonmonotonic_aligner_tags_leave_line_plain():
         merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
         assert word_timing is False, aligned
         assert merged == synced
+
+
+# ---------------------------------------------------------------------------
+# repair_aligned_lrc (#241): CTC boundary-absorption repair
+# ---------------------------------------------------------------------------
+
+def test_repair_pulls_in_silence_absorbed_first_word():
+    """The Creep case: first word spans the instrumental gap (2.4 s to word 2
+    vs ~0.2 s median gap) — its start is pulled to median-gap before word 2,
+    and the line tag follows."""
+    body = "[01:34.42]<01:34.42>I <01:36.82>want <01:37.04>a <01:37.16>perfect <01:37.78>soul <01:37.98>"
+    out = repair_aligned_lrc(body)
+    assert out.startswith("[01:36.")
+    assert "<01:34.42>" not in out
+    # word 2 onward untouched
+    assert "<01:36.82>want" in out and "<01:37.78>soul" in out
+
+
+def test_repair_pulls_in_silence_absorbed_end_tag():
+    """Trailing silence absorbed into the sung-end tag is pulled back to
+    median-gap after the last word."""
+    body = "[00:10.00]<00:10.00>la <00:10.20>la <00:10.40>la <00:10.60>la <00:20.00>"
+    out = repair_aligned_lrc(body)
+    assert "<00:20.00>" not in out
+    assert out.endswith("<00:10.80>")
+
+
+def test_repair_leaves_normal_lines_untouched():
+    body = "[00:10.00]<00:10.00>steady <00:10.40>pace <00:10.80>words <00:11.20>"
+    assert repair_aligned_lrc(body) == body
+
+
+def test_repair_passes_through_short_and_plain_lines():
+    for body in (
+        "[00:10.00]plain line no tags",
+        "[00:10.00]<00:10.00>one <00:11.00>",  # < 3 word tags
+        "free text",
+    ):
+        assert repair_aligned_lrc(body) == body
