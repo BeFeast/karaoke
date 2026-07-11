@@ -511,6 +511,35 @@ def test_ladder_editions_expansion_finds_hidden_edition():
     assert rec.calls[-1][2] == {"artist_name": "Любэ", "track_name": "Конь"}
 
 
+def test_ladder_editions_expansion_tries_all_title_matched_artists():
+    """Multiple artists share the exact title: the first artist's editions all
+    fail the gate, a later artist's edition is in tolerance — it wins."""
+    cover_wrong = {
+        "trackName": "Конь",
+        "artistName": "Cover Band",
+        "duration": 300.0,
+        "syncedLyrics": SYNCED_BODY,
+        "plainLyrics": PLAIN_BODY,
+    }
+    lube_wrong = {**_KON_RECORD, "duration": 217.0}
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        # ladder q=Конь: two artists, both editions wrong-duration
+        {"expect_in": "/api/search", "code": 200, "body": [cover_wrong, lube_wrong]},
+        # follow-up 1 (Cover Band): still nothing in tolerance
+        {"expect_in": "/api/search", "code": 200, "body": [cover_wrong]},
+        # follow-up 2 (Любэ): the 202.59 s edition appears
+        {"expect_in": "/api/search", "code": 200, "body": [lube_wrong, _KON_RECORD]},
+    ])
+    src = LyricsSource(http=rec)
+    parsed = parse_artist_track(_KON_TITLE)
+    result = src.fetch(artist=parsed.artist, track=parsed.track, duration=203)
+    assert result.found is True
+    assert result.synced_lrc == SYNCED_BODY
+    assert rec.calls[-1][2] == {"artist_name": "Любэ", "track_name": "Конь"}
+
+
 def test_ladder_editions_expansion_requires_title_match():
     """Gate-failed candidates whose track name differs from the query do NOT
     trigger the editions follow-up — the song itself is unconfirmed."""

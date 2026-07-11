@@ -768,6 +768,11 @@ class LyricsSource:
         # right and only the edition is wrong — one artist+track follow-up
         # surfaces its other editions, re-gated the same way.
         folded = query.casefold()
+        # Deduplicate title-matched (artist, track) pairs preserving order —
+        # multiple artists can share the exact title, and the first artist may
+        # have no in-tolerance edition while a later one does. Each pair costs
+        # one follow-up call, so keep the total bounded.
+        pairs: list[tuple[str, str]] = []
         for c in body:
             if not isinstance(c, dict):
                 continue
@@ -777,14 +782,20 @@ class LyricsSource:
                 continue
             if track_name.casefold() != folded:
                 continue
+            key = (artist_name, track_name)
+            if key not in pairs:
+                pairs.append(key)
+        for artist_name, track_name in pairs[:_MAX_LADDER_QUERIES]:
             status2, body2 = self._http(
                 "GET",
                 f"{self._base}/api/search",
                 {"artist_name": artist_name, "track_name": track_name},
             )
-            if status2 == 200 and isinstance(body2, list) and body2:
-                return self._pick_gated(body2, query, duration)
-            return None
+            if status2 != 200 or not isinstance(body2, list) or not body2:
+                continue
+            picked = self._pick_gated(body2, query, duration)
+            if picked is not None:
+                return picked
         return None
 
     def _pick_gated(
