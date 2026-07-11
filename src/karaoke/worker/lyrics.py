@@ -758,9 +758,44 @@ class LyricsSource:
         status, body = self._http("GET", f"{self._base}/api/search", {"q": query})
         if status != 200 or not isinstance(body, list) or not body:
             return None
-        # Gate BEFORE ranking: only candidates whose duration is known and
-        # within the hard-reject window are eligible — otherwise a highly
-        # ranked wrong-duration record shadows a valid lower-ranked one.
+        picked = self._pick_gated(body, query, duration)
+        if picked is not None:
+            return picked
+        # Editions expansion (#233): /api/search?q= returns LRCLIB's top-N by
+        # relevance, which can hide the in-tolerance *edition* of a song whose
+        # visible records all fail the duration gate. When a gate-failed
+        # candidate's track name equals the query (case-folded), the SONG is
+        # right and only the edition is wrong — one artist+track follow-up
+        # surfaces its other editions, re-gated the same way.
+        folded = query.casefold()
+        for c in body:
+            if not isinstance(c, dict):
+                continue
+            track_name = str(c.get("trackName") or "").strip()
+            artist_name = str(c.get("artistName") or "").strip()
+            if not track_name or not artist_name:
+                continue
+            if track_name.casefold() != folded:
+                continue
+            status2, body2 = self._http(
+                "GET",
+                f"{self._base}/api/search",
+                {"artist_name": artist_name, "track_name": track_name},
+            )
+            if status2 == 200 and isinstance(body2, list) and body2:
+                return self._pick_gated(body2, query, duration)
+            return None
+        return None
+
+    def _pick_gated(
+        self, body: list[Any], query: str, duration: int
+    ) -> LyricsResult | None:
+        """Duration-gate ``body`` BEFORE ranking, then pick the best candidate.
+
+        Gate-first matters: a highly ranked wrong-duration record must not
+        shadow a valid lower-ranked one. Returns ``None`` when no candidate
+        survives the gate.
+        """
         candidates = [
             c
             for c in body

@@ -483,6 +483,57 @@ def test_kon_title_resolves_via_artist_free_ladder():
     assert len(rec.calls) == 3
 
 
+def test_ladder_editions_expansion_finds_hidden_edition():
+    """q= returns only wrong-duration editions of the right song; the ladder
+    follows up with artist+track and accepts the in-tolerance edition (#233)."""
+    wrong_edition = {
+        "trackName": "Конь",
+        "artistName": "Любэ",
+        "duration": 217.0,          # gate-rejected
+        "syncedLyrics": SYNCED_BODY,
+        "plainLyrics": PLAIN_BODY,
+    }
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        # ladder q=Конь: only the 217 s edition is visible
+        {"expect_in": "/api/search", "code": 200, "body": [wrong_edition]},
+        # editions follow-up artist+track: the 202.59 s edition appears
+        {"expect_in": "/api/search", "code": 200, "body": [wrong_edition, _KON_RECORD]},
+    ])
+    src = LyricsSource(http=rec)
+    parsed = parse_artist_track(_KON_TITLE)
+    result = src.fetch(artist=parsed.artist, track=parsed.track, duration=203)
+    assert result.found is True
+    assert result.synced_lrc == SYNCED_BODY
+    assert result.match_variant == "Конь"
+    # follow-up call used artist_name+track_name from the title-matched record
+    assert rec.calls[-1][2] == {"artist_name": "Любэ", "track_name": "Конь"}
+
+
+def test_ladder_editions_expansion_requires_title_match():
+    """Gate-failed candidates whose track name differs from the query do NOT
+    trigger the editions follow-up — the song itself is unconfirmed."""
+    unrelated = {
+        "trackName": "Конь-Огонь",
+        "artistName": "Калинов Мост",
+        "duration": 219.0,
+        "syncedLyrics": SYNCED_BODY,
+        "plainLyrics": PLAIN_BODY,
+    }
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/search", "code": 200, "body": [unrelated]},
+    ])
+    src = LyricsSource(http=rec)
+    parsed = parse_artist_track(_KON_TITLE)
+    result = src.fetch(artist=parsed.artist, track=parsed.track, duration=203)
+    assert result.found is False
+    # exactly 3 calls: get + artist search + one ladder query, no follow-up
+    assert len(rec.calls) == 3
+
+
 def test_ladder_duration_gate_runs_before_ranking():
     """A higher-scoring wrong-duration candidate must not shadow a valid
     in-tolerance one — the gate filters BEFORE ranking picks the best."""
@@ -532,13 +583,20 @@ def test_ladder_rejects_artist_free_instrumental_match():
 
 
 def test_ladder_miss_falls_through_to_floor():
-    """Every variant misses (wrong-duration artist-free candidate is rejected) →
-    empty result, so the pipeline keeps today's Whisper ASR floor."""
+    """Every variant misses (wrong-duration artist-free candidate is rejected;
+    its title match triggers ONE editions follow-up (#233) that also fails the
+    gate) → empty result, so the pipeline keeps today's Whisper ASR floor."""
     parsed = parse_artist_track(_KON_TITLE)
     rec = _Recorder([
         {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
         {"expect_in": "/api/search", "code": 200, "body": []},
         # A same-titled but wrong-duration record must NOT be trusted artist-free.
+        {
+            "expect_in": "/api/search",
+            "code": 200,
+            "body": [{**_KON_RECORD, "duration": 999}],
+        },
+        # #233 editions follow-up: still nothing in tolerance → gate holds.
         {
             "expect_in": "/api/search",
             "code": 200,
@@ -551,7 +609,7 @@ def test_ladder_miss_falls_through_to_floor():
     assert result.found is False
     assert result.source == "none"
     assert result.match_variant is None
-    assert len(rec.calls) == 3
+    assert len(rec.calls) == 4
 
 
 def test_ladder_is_bounded_and_queries_each_variant():
