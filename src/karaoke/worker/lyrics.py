@@ -652,19 +652,22 @@ def drop_unreliable_aligned_lines(
     return filtered, dropped
 
 
-def aligned_text_agreement(synced_lrc: str, aligned_lrc: str | None) -> tuple[int, int]:
+def aligned_text_agreement(
+    synced_lrc: str, aligned_lrc: str | None
+) -> tuple[int, int, int]:
     """In-order TEXT agreement between curated lines and aligner output (#241).
 
-    Returns ``(agreed, eligible)``: ``eligible`` = single-tag non-empty
-    curated lines; ``agreed`` = how many find their aligner counterpart by
-    normalized text alone, walking both sides in order (longest common
-    subsequence-style greedy cursor, all timing ignored). This is the
-    fallback-gate signal: when curated TIMING misfits a different
-    performance, high text agreement proves the aligner still recognized and
-    timed the same LYRICS against the real audio.
+    Returns ``(agreed, eligible, aligner_total)``: ``eligible`` = single-tag
+    non-empty curated lines; ``agreed`` = how many find their aligner
+    counterpart by normalized text alone, walking both sides in order (greedy
+    cursor, all timing ignored); ``aligner_total`` = aligner lines present.
+    The fallback gate (#253) judges ``agreed`` against ``aligner_total``, NOT
+    ``eligible``: the VAD veto (r9) legitimately removes curated lines that
+    are not sung in this cut, so a shorter-but-faithful aligned output must
+    still win over the ASR floor.
     """
     if not aligned_lrc or not aligned_lrc.strip():
-        return 0, 0
+        return 0, 0, 0
     aligner_norms = [al.norm for al in _parse_aligner_lines(aligned_lrc)]
     agreed = 0
     eligible = 0
@@ -685,7 +688,7 @@ def aligned_text_agreement(synced_lrc: str, aligned_lrc: str | None) -> tuple[in
                 agreed += 1
                 cursor = j + 1
                 break
-    return agreed, eligible
+    return agreed, eligible, len(aligner_norms)
 
 
 @dataclass(frozen=True, slots=True)

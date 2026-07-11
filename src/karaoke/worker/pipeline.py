@@ -546,16 +546,21 @@ def _resolve_lyrics(
         # text_matched (in-order text agreement between the aligner output and
         # the curated lines, drift ignored): a degenerate or wrong-text
         # alignment cannot pass, and both ratio sides count the same lines.
-        agreed_n, agree_eligible = (
+        agreed_n, _agree_eligible, aligner_total = (
             aligned_text_agreement(lyrics.synced_lrc, aligned)
             if align_coverage_reject is not None
-            else (0, 0)
+            else (0, 0, 0)
         )
+        # Gate against the ALIGNER's kept-line count (#253): the r9 VAD veto
+        # legitimately removes curated lines not sung in this cut, so the
+        # aligned output is expected to be shorter than the curated record.
+        # What matters is that what it KEPT is faithful (>= 80% text match)
+        # and substantial enough to beat the ASR floor (>= 6 lines).
         if (
             align_coverage_reject is not None
             and aligned
-            and agree_eligible > 0
-            and agreed_n >= 0.5 * agree_eligible
+            and aligner_total >= 6
+            and agreed_n >= 0.8 * aligner_total
         ):
             lyrics_lrc.write_text(aligned, encoding="utf-8")
             plain_text = lyrics.plain or lrc_to_plain(lyrics.synced_lrc)
