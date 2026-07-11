@@ -302,3 +302,14 @@ def test_voiced_overlap_math():
     assert handler._voiced_overlap(12.0, 18.0, regions) == 1.0
     assert handler._voiced_overlap(0.0, 10.0, regions) == 0.0
     assert abs(handler._voiced_overlap(15.0, 25.0, regions) - 0.5) < 1e-9
+
+
+def test_vad_veto_ignores_internal_instrumental_gap():
+    """A genuinely sung line with a long instrumental gap BETWEEN its words
+    (or an absorbed-silence span) is kept: overlap is per-word, so the gap
+    never enters the denominator."""
+    text = "gapped line"
+    words = [_wt(1.0, 1.5, -0.4), _wt(20.0, 20.5, -0.4)]  # 18.5 s apart
+    voiced = [(0.8, 1.7), (19.8, 20.7)]  # each word sits in voice
+    lrc, _ = handler._word_timestamps_to_lrc(words, text, stride=STRIDE_MS, voiced=voiced)
+    assert "gapped" in lrc

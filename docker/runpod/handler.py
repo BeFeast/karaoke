@@ -550,12 +550,23 @@ def _word_timestamps_to_lrc(
             continue
         # VAD veto (#247): monotonic CTC MUST place every input line somewhere,
         # so text absent from this audio edit lands on instrumental sections —
-        # with locally-plausible scores (band bleed). A line whose aligned
-        # window barely overlaps actual voiced audio was not sung there.
+        # with locally-plausible scores (band bleed). Overlap is measured over
+        # the individual WORD spans (sum covered / sum span), not the whole
+        # first-to-last window: a sung line with a long internal instrumental
+        # gap or an absorbed-silence first word must not dilute its own
+        # denominator. Timestamps here are seconds (postprocess_results
+        # converts frames via stride — same units the LRC tags are built from).
         if voiced is not None:
-            w_start = float(line_ts[0].get("start") or 0.0)
-            w_end = float(line_ts[-1].get("end") or w_start)
-            if _voiced_overlap(w_start, w_end, voiced) < _ALIGN_MIN_VOICED_OVERLAP:
+            total_span = 0.0
+            covered = 0.0
+            for ts in line_ts:
+                w0 = float(ts.get("start") or 0.0)
+                w1 = float(ts.get("end") or w0)
+                if w1 <= w0:
+                    continue
+                total_span += w1 - w0
+                covered += _voiced_overlap(w0, w1, voiced) * (w1 - w0)
+            if total_span > 0 and covered / total_span < _ALIGN_MIN_VOICED_OVERLAP:
                 LOG.info("VAD veto: aligned line not sung: %r", line.strip())
                 continue
         if emit_word_tags:
