@@ -16,8 +16,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from karaoke.titles import parse_artist_track
 from karaoke.worker.lyrics import (
     LRC_WORD_TAG_RE,
+    _MAX_LADDER_QUERIES,
     LyricsSource,
     lrc_to_plain,
     merge_lrclib_word_tags,
@@ -435,6 +437,131 @@ def test_get_path_unaffected_by_duration_reject():
     assert result.synced_lrc == SYNCED_BODY
     assert result.rejected is None
     assert len(rec.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# 10. fallback cleanup ladder + artist-free duration-gated retry (#230)
+# ---------------------------------------------------------------------------
+# The job-#126 title: yt-dlp parsed artist="Little Big", track="«Конь». …",
+# so both /api/get and the artist-scoped /api/search miss. The ladder cleans
+# the track to "Конь" and retries artist-free — LRCLIB curates it under Любэ,
+# duration 202.59 s vs the 203 s source (an exact-duration synced hit).
+_KON_TITLE = "Little Big — «Конь». Голубой Ургант. Фрагмент выпуска от 30.12.2018"
+_KON_RECORD = {
+    "trackName": "Конь",
+    "artistName": "Любэ",
+    "duration": 202.59,
+    "syncedLyrics": SYNCED_BODY,
+    "plainLyrics": PLAIN_BODY,
+}
+
+
+def test_kon_title_resolves_via_artist_free_ladder():
+    """The exact job-#126 title → an LRCLIB synced hit through the ladder."""
+    parsed = parse_artist_track(_KON_TITLE)
+    assert parsed.artist == "Little Big"
+    assert parsed.track.startswith("«Конь»")
+
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        # Artist-scoped search still misses (wrong artist for this cut).
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        # Artist-free q=Конь finds the curated Любэ record — duration matches.
+        {"expect_in": "/api/search", "code": 200, "body": [_KON_RECORD]},
+    ])
+    src = LyricsSource(http=rec)
+    result = src.fetch(artist=parsed.artist, track=parsed.track, duration=203)
+
+    assert result.source == "lrclib_search"
+    assert result.synced_lrc == SYNCED_BODY
+    assert result.found is True
+    # The winning variant is recorded for metadata.json debuggability.
+    assert result.match_variant == "Конь"
+    # The retry was artist-free and carried the cleaned track as ``q``.
+    assert rec.calls[-1][2] == {"q": "Конь"}
+    # Bounded: /api/get + artist search + exactly one ladder query.
+    assert len(rec.calls) == 3
+
+
+def test_ladder_miss_falls_through_to_floor():
+    """Every variant misses (wrong-duration artist-free candidate is rejected) →
+    empty result, so the pipeline keeps today's Whisper ASR floor."""
+    parsed = parse_artist_track(_KON_TITLE)
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        # A same-titled but wrong-duration record must NOT be trusted artist-free.
+        {
+            "expect_in": "/api/search",
+            "code": 200,
+            "body": [{**_KON_RECORD, "duration": 999}],
+        },
+    ])
+    src = LyricsSource(http=rec)
+    result = src.fetch(artist=parsed.artist, track=parsed.track, duration=203)
+
+    assert result.found is False
+    assert result.source == "none"
+    assert result.match_variant is None
+    assert len(rec.calls) == 3
+
+
+def test_ladder_is_bounded_and_queries_each_variant():
+    """A track yielding two cleaned variants issues one artist-free query each —
+    ≤ _MAX_LADDER_QUERIES extra HTTP calls, in ladder order."""
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+    ])
+    src = LyricsSource(http=rec)
+    result = src.fetch(artist="X", track="«Song. Extra». Tail", duration=200)
+
+    assert result.found is False
+    ladder_calls = [c[2] for c in rec.calls if c[2] and "q" in c[2]]
+    assert ladder_calls == [{"q": "Song. Extra"}, {"q": "Song"}]
+    assert len(ladder_calls) <= _MAX_LADDER_QUERIES
+
+
+def test_ladder_skipped_without_duration():
+    """Artist-free matches rely solely on the duration gate; with no known audio
+    duration the ladder is skipped entirely (no extra HTTP calls)."""
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+    ])
+    src = LyricsSource(http=rec)
+    result = src.fetch(artist="X", track="«Конь». Голубой Ургант", duration=None)
+
+    assert result.found is False
+    assert len(rec.calls) == 2  # get + artist search only; no ladder
+
+
+def test_ladder_not_run_when_primary_search_hits():
+    """A direct artist-scoped hit returns before the ladder — even when the
+    track has cleanable variants — so no extra queries are issued."""
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {
+            "expect_in": "/api/search",
+            "code": 200,
+            "body": [
+                {
+                    "trackName": "«Song». Live",
+                    "duration": 201,
+                    "syncedLyrics": SYNCED_BODY,
+                    "plainLyrics": PLAIN_BODY,
+                }
+            ],
+        },
+    ])
+    src = LyricsSource(http=rec)
+    result = src.fetch(artist="Artist", track="«Song». Live at X", duration=200)
+
+    assert result.source == "lrclib_search"
+    assert result.match_variant is None
+    assert len(rec.calls) == 2  # a 3rd (ladder) call would raise "unscripted"
 
 
 # ---------------------------------------------------------------------------

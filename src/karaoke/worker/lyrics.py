@@ -41,10 +41,12 @@ import math
 import re
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import httpx
+
+from karaoke.titles import track_cleanup_variants
 
 LRCLIB_BASE = "https://lrclib.net"
 USER_AGENT = "karaoke/1.0 (+https://github.com/BeFeast/karaoke)"
@@ -56,6 +58,9 @@ _DURATION_TOLERANCE_S = 2
 # record is rejected (text included) and the pipeline falls through to the
 # Whisper ASR floor. Does not apply to /api/get — LRCLIB enforces ±2s there.
 _DURATION_REJECT_S = 5
+# Upper bound on the extra artist-free ``/api/search?q=`` calls the #230 cleanup
+# ladder may issue after the parsed ``(artist, track)`` lookup missed.
+_MAX_LADDER_QUERIES = 3
 
 # Matches an LRC line timestamp tag, e.g. "[01:23.45]" / "[01:23]", including
 # repeated tags on one line. Used to derive plain text from a synced LRC body.
@@ -489,6 +494,11 @@ class LyricsResult:
       set alongside ``rejected``; never makes :attr:`found` true, so #148's
       reject semantics are unchanged. The pipeline force-aligns it against the
       actual vocal stem.
+    * ``match_variant`` — the cleaned track variant that produced this hit via
+      the #230 fallback ladder (e.g. ``"Конь"`` for a title whose parsed track
+      was ``«Конь». Голубой Ургант. …``), or ``None`` when the parsed
+      ``(artist, track)`` matched directly. Surfaced in ``metadata.json`` as
+      ``lyrics_match_variant`` for debuggability only.
     """
 
     synced_lrc: str | None = None
@@ -497,6 +507,7 @@ class LyricsResult:
     source: str = "none"
     rejected: str | None = None
     rejected_text: str | None = None
+    match_variant: str | None = None
 
     @property
     def found(self) -> bool:
@@ -652,9 +663,27 @@ class LyricsSource:
         if get_result is not None and get_result.found:
             return get_result
         search_result = self._try_search(artist, track, duration)
-        # Keep a duration-rejected result (#148) as-is: it carries the
-        # rejection reason for metadata.json provenance.
-        if search_result is not None and (search_result.found or search_result.rejected):
+        if search_result is not None and search_result.found:
+            return search_result
+
+        # Fallback ladder (#230): the parsed (artist, track) missed. Retry with
+        # progressively cleaned track variants via an artist-free
+        # /api/search?q=<variant> — covers covers / TV performances where the
+        # channel-supplied artist is wrong (e.g. «Конь» credited to Little Big
+        # but curated under Любэ). Each candidate must clear the same duration
+        # hard-reject (#148): an exact-duration synced hit (±5s) is trustworthy
+        # even with a mismatched artist, and a wrong-duration one is dropped.
+        # Requires a known audio duration (the gate is the only safety net here)
+        # and is bounded to ≤ _MAX_LADDER_QUERIES extra HTTP calls.
+        if duration is not None:
+            for variant in track_cleanup_variants(track)[:_MAX_LADDER_QUERIES]:
+                laddered = self._try_search_q(variant, duration)
+                if laddered is not None and laddered.found:
+                    return replace(laddered, match_variant=variant)
+
+        # No ladder hit: preserve the primary search result's #148 rejection /
+        # #149 salvaged text for the pipeline's force-align + provenance.
+        if search_result is not None and search_result.rejected:
             return search_result
         return LyricsResult(source="none")
 
@@ -711,4 +740,26 @@ class LyricsSource:
                 rejected=f"duration_mismatch ({round(delta, 1):g}s)",
                 rejected_text=salvaged or None,
             )
+        return _from_record(best, source="lrclib_search")
+
+    def _try_search_q(self, query: str, duration: int) -> LyricsResult | None:
+        """Artist-free fuzzy search via ``GET /api/search?q=<query>`` (#230).
+
+        Scores candidates with :func:`_score_candidate` against ``query`` and
+        accepts the best one only when its duration is known and within
+        ``_DURATION_REJECT_S`` of the actual audio — the mismatched-artist risk
+        means the duration gate is the sole safety net, so unlike the
+        artist-scoped path this never salvages a wrong-duration record's text.
+        Returns ``None`` on a transport miss, an empty result, or a
+        gate-failing best candidate (so the ladder keeps trying / falls back)."""
+        status, body = self._http("GET", f"{self._base}/api/search", {"q": query})
+        if status != 200 or not isinstance(body, list) or not body:
+            return None
+        candidates = [c for c in body if isinstance(c, dict)]
+        if not candidates:
+            return None
+        best = max(candidates, key=lambda c: _score_candidate(c, query, duration))
+        delta = _duration_delta(best, duration)
+        if delta is None or delta > _DURATION_REJECT_S:
+            return None
         return _from_record(best, source="lrclib_search")

@@ -214,6 +214,65 @@ def parse_artist_track(title: str | None) -> ParsedTitle:
     return ParsedTitle(artist=None, track=_fold_feat(cleaned))
 
 
+# ---------------------------------------------------------------------------
+# Track-name cleanup ladder (fallback LRCLIB queries, #230)
+# ---------------------------------------------------------------------------
+
+# A track that OPENS with a quoted phrase (guillemets / straight / curly / low
+# quotes): keep only the quoted phrase and drop the trailing upload chatter.
+# e.g. «Конь». Голубой Ургант. Фрагмент выпуска … → Конь
+_LEADING_QUOTED_RE = re.compile(
+    r'^\s*[«"“„‹‘]\s*(?P<inner>[^«»"“”„‹›‘’]+?)\s*[»"”“›’]'
+)
+
+# First sentence-terminating boundary: a "." followed by whitespace/end, "//",
+# or "|". Everything from there on is cut when a usable head remains.
+_SENTENCE_CUT_RE = re.compile(r"\.\s|\.$|//|\|")
+
+
+def track_cleanup_variants(track: str | None) -> list[str]:
+    """Progressively cleaned track-name variants for a *fallback* LRCLIB lookup.
+
+    Applied only when the parsed ``(artist, track)`` already missed (see
+    :mod:`karaoke.worker.lyrics`). The steps are cumulative — each operates on
+    the output of the previous one — and a variant is emitted only when a step
+    actually changed the text:
+
+      1. If the track opens with a quoted phrase, keep only that phrase:
+         ``«Конь». Голубой Ургант. …`` → ``Конь``.
+      2. Cut everything from the first sentence-terminating ``.`` / ``//`` /
+         ``|`` when at least two characters remain before it:
+         ``Конь. Голубой Ургант`` → ``Конь``.
+
+    The result never includes the original ``track`` and is de-duplicated
+    (case-insensitively), so the caller issues at most one HTTP query per
+    genuinely new variant. Returns ``[]`` when nothing changes.
+    """
+    text = (track or "").strip()
+    if not text:
+        return []
+
+    variants: list[str] = []
+    seen = {text.lower()}
+
+    m = _LEADING_QUOTED_RE.match(text)
+    if m:
+        inner = m.group("inner").strip()
+        if inner and inner.lower() not in seen:
+            variants.append(inner)
+            seen.add(inner.lower())
+            text = inner
+
+    m = _SENTENCE_CUT_RE.search(text)
+    if m:
+        head = text[: m.start()].strip()
+        if len(head) >= 2 and head.lower() not in seen:
+            variants.append(head)
+            seen.add(head.lower())
+
+    return variants
+
+
 def derive_metadata(info: dict | None) -> dict[str, object | None]:
     """Best-effort ``(artist, track, album, duration)`` from a yt-dlp info dict.
 
