@@ -266,7 +266,10 @@ def track_cleanup_variants(track: str | None) -> list[str]:
     m = _SENTENCE_CUT_RE.search(text)
     if m:
         head = text[: m.start()].strip()
-        if len(head) >= 2 and head.lower() not in seen:
+        # >= 3 chars: a 2-letter head is almost always an abbreviation whose
+        # period tripped the sentence cut ("Mr. Brightside" -> "Mr"), not a
+        # usable track name.
+        if len(head) >= 3 and head.lower() not in seen:
             variants.append(head)
             seen.add(head.lower())
 

@@ -678,7 +678,10 @@ class LyricsSource:
         if duration is not None:
             for variant in track_cleanup_variants(track)[:_MAX_LADDER_QUERIES]:
                 laddered = self._try_search_q(variant, duration)
-                if laddered is not None and laddered.found:
+                # An artist-free instrumental "match" is untrustworthy — the
+                # only evidence is duration, and marking a lyrical track
+                # instrumental drops its transcript entirely. Require lyrics.
+                if laddered is not None and laddered.found and not laddered.instrumental:
                     return replace(laddered, match_variant=variant)
 
         # No ladder hit: preserve the primary search result's #148 rejection /

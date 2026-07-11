@@ -18,8 +18,8 @@ from typing import Any
 
 from karaoke.titles import parse_artist_track
 from karaoke.worker.lyrics import (
-    LRC_WORD_TAG_RE,
     _MAX_LADDER_QUERIES,
+    LRC_WORD_TAG_RE,
     LyricsSource,
     lrc_to_plain,
     merge_lrclib_word_tags,
@@ -481,6 +481,31 @@ def test_kon_title_resolves_via_artist_free_ladder():
     assert rec.calls[-1][2] == {"q": "Конь"}
     # Bounded: /api/get + artist search + exactly one ladder query.
     assert len(rec.calls) == 3
+
+
+def test_ladder_rejects_artist_free_instrumental_match():
+    """An artist-free /api/search?q= record flagged instrumental is NOT
+    accepted — duration alone is too weak to mark a lyrical track
+    instrumental (that would drop the transcript entirely)."""
+    instrumental = {
+        "trackName": "Конь",
+        "artistName": "Любэ",
+        "duration": 202.59,
+        "instrumental": True,
+        "syncedLyrics": "",
+        "plainLyrics": "",
+    }
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/search", "code": 200, "body": [instrumental]},
+    ])
+    src = LyricsSource(http=rec)
+    parsed = parse_artist_track(_KON_TITLE)
+    result = src.fetch(artist=parsed.artist, track=parsed.track, duration=203)
+    assert result.found is False
+    assert result.instrumental is False
+    assert result.match_variant is None
 
 
 def test_ladder_miss_falls_through_to_floor():

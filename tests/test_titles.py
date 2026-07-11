@@ -146,8 +146,11 @@ def test_parse_artist_track_returns_dataclass():
         # a clean track with nothing to strip yields no extra variants
         ("Get Lucky", []),
         ("Get Lucky (Acoustic)", []),
-        # the cut head must be >= 2 chars, else it is not emitted
+        # the cut head must be >= 3 chars, else it is not emitted (2-letter
+        # heads are abbreviation artifacts: "Mr. Brightside" must NOT yield "Mr")
         ("A. Something", []),
+        ("Mr. Brightside", []),
+        ("Dr. Feelgood", []),
         # a bare quoted phrase still strips its guillemets (a new query)
         ("«Конь»", ["Конь"]),
         # empty / none inputs
