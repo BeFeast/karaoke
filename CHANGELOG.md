@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.32.1] - 2026-07-11
+
+_Bump: patch_
+
+- fix(lyrics): LRCLIB editions expansion for title-matched wrong-duration candidates (#233) (#234)
+
 ## [v0.32.0] - 2026-07-11
 
 _Bump: minor_
