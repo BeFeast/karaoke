@@ -55,6 +55,7 @@ from karaoke.worker.lyrics import (
     LyricsResult,
     LyricsSource,
     aligned_text_agreement,
+    drop_unreliable_aligned_lines,
     lrc_to_plain,
     merge_lrclib_word_tags,
     repair_aligned_lrc,
@@ -704,8 +705,24 @@ def _read_aligned_lrc(aligned_lrc_path: Path | None) -> str | None:
         return None
     if not body.strip() or not LRC_TIMESTAMP_RE.search(body):
         return None
-    # Repair CTC boundary-absorption (leading/trailing silence swallowed by
-    # the first word / sung-end tag) before any drift checks or export (#241).
+    # Per-line alignment scores (r8+, #244) live next to the LRC; older
+    # images/jobs simply have no file → scores=None and only the pace guard
+    # applies inside the drop filter.
+    scores: list[float | None] | None = None
+    scores_path = aligned_lrc_path.with_name("aligned.scores.json")
+    try:
+        raw_scores = json.loads(scores_path.read_text(encoding="utf-8"))
+        if isinstance(raw_scores, list):
+            scores = raw_scores
+    except (OSError, ValueError):
+        scores = None
+    # Drop crammed/unreliable lines FIRST (their bogus spans would poison the
+    # boundary repair's median), then repair CTC boundary absorption (#241).
+    body, dropped = drop_unreliable_aligned_lines(body, scores)
+    if dropped:
+        _log.info("dropped %d unreliable aligned line(s) (#244)", dropped)
+    if not body.strip() or not LRC_TIMESTAMP_RE.search(body):
+        return None
     return repair_aligned_lrc(body)
 
 

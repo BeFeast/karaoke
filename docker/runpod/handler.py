@@ -372,8 +372,10 @@ def _fmt_lrc_word_tag(seconds: float) -> str:
 
 def _force_align_to_lrc(
     vocals_wav: Path, text: str, language: str
-) -> str:
-    """Force-align ``text`` against the ``vocals_wav`` stem → line-level LRC.
+) -> tuple[str, list[float | None]]:
+    """Force-align ``text`` against the ``vocals_wav`` stem → Enhanced LRC.
+
+    Returns ``(lrc_body, line_scores)`` — see :func:`_word_timestamps_to_lrc`.
 
     Uses ctc-forced-aligner (MMS-300m). Produces one ``[mm:ss.xx]line`` per
     source lyric line, timed at the start of the first aligned token of that
@@ -412,7 +414,7 @@ def _force_align_to_lrc(
 
 def _word_timestamps_to_lrc(
     word_timestamps: list[dict[str, Any]], text: str, stride: float | None = None
-) -> str:
+) -> tuple[str, list[float | None]]:
     """Build an Enhanced LRC from ctc-forced-aligner word timestamps.
 
     ``word_timestamps`` is a list of ``{"text", "start", "end", "score", ...}``
@@ -441,9 +443,17 @@ def _word_timestamps_to_lrc(
     unchanged; only the kept lines now carry word tags. Missing scores or an
     unknown stride skip the check (never drop), so older aligner output shapes
     keep the pre-#149 behavior.
+
+    Returns ``(lrc_body, line_scores)`` — one entry per emitted LRC line, the
+    line's mean per-frame log-prob (the #149 gate metric) or ``None`` when the
+    stride/scores were unavailable. The coordinator uses the distribution of
+    these scores to drop *relatively* bad lines (#244): a cut/shortened
+    performance forces monotonic CTC to cram the absent text somewhere, and
+    those crammed lines score visibly worse than the job's own median.
     """
     lines = [ln for ln in text.splitlines()]
     out: list[str] = []
+    out_scores: list[float | None] = []
     wi = 0
     n = len(word_timestamps)
     # The aligner's preprocess/romanize step can merge or split tokens, so the
@@ -474,6 +484,7 @@ def _word_timestamps_to_lrc(
             # to a linear line wipe for it.
             start = float(word_timestamps[-1].get("end") or 0.0) if n else 0.0
             out.append(f"{_fmt_lrc_timestamp(start)}{line.strip()}")
+            out_scores.append(None)
             continue
         if _line_below_confidence(line_ts, stride):
             LOG.info("dropping low-confidence aligned line: %r", line.strip())
@@ -483,7 +494,8 @@ def _word_timestamps_to_lrc(
         else:
             start = float(line_ts[0].get("start") or 0.0)
             out.append(f"{_fmt_lrc_timestamp(start)}{line.strip()}")
-    return "\n".join(out)
+        out_scores.append(_line_avg_logprob(line_ts, stride))
+    return "\n".join(out), out_scores
 
 
 def _enhanced_lrc_line(words: list[str], line_ts: list[dict[str, Any]]) -> str:
@@ -507,21 +519,20 @@ def _enhanced_lrc_line(words: list[str], line_ts: list[dict[str, Any]]) -> str:
     return f"{_fmt_lrc_timestamp(line_start)}{' '.join(tokens)}"
 
 
-def _line_below_confidence(
+def _line_avg_logprob(
     line_ts: list[dict[str, Any]], stride: float | None
-) -> bool:
-    """True when a line's mean per-frame log-prob is below the drop threshold.
+) -> float | None:
+    """A line's mean per-frame alignment log-prob, or ``None`` if unscoreable.
 
     ctc-forced-aligner's per-word ``score`` is the *sum* of frame log-probs
     over the word's span, and ``start``/``end`` are ``frame_index * stride/1000``
     — so ``(end - start) * 1000 / stride`` recovers the frame count and
     ``sum(scores) / sum(frames)`` is the line's mean per-frame log-prob.
     Tolerant by design: unknown stride, a missing/non-numeric ``score`` on any
-    word, or a degenerate frame count all return False (keep the line) so the
-    filter can only ever drop lines it positively scored.
+    word, or a degenerate frame count return ``None``.
     """
     if not stride or stride <= 0:
-        return False
+        return None
     total_score = 0.0
     total_frames = 0.0
     for w in line_ts:
@@ -530,10 +541,23 @@ def _line_below_confidence(
             start = float(w.get("start") or 0.0)
             end = float(w.get("end") or 0.0)
         except (KeyError, TypeError, ValueError):
-            return False
+            return None
         # A word occupies at least one emission frame; clamp degenerate spans.
         total_frames += max((end - start) * 1000.0 / stride, 1.0)
-    return (total_score / total_frames) < _ALIGN_MIN_AVG_LOGPROB
+    if total_frames <= 0:
+        return None
+    return total_score / total_frames
+
+
+def _line_below_confidence(
+    line_ts: list[dict[str, Any]], stride: float | None
+) -> bool:
+    """True when a line's mean per-frame log-prob is below the drop threshold
+    (#149). ``None`` scores keep the line — the filter only drops lines it
+    positively scored.
+    """
+    avg = _line_avg_logprob(line_ts, stride)
+    return avg is not None and avg < _ALIGN_MIN_AVG_LOGPROB
 
 
 def _put_file(path: Path, presigned_url: str, content_type: str) -> None:
@@ -633,10 +657,15 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
             # coordinator falls back to the plain text / Whisper transcript.
             if want_align:
                 try:
-                    lrc = _force_align_to_lrc(vocals_path, align_text, align_lang)
+                    lrc, line_scores = _force_align_to_lrc(
+                        vocals_path, align_text, align_lang
+                    )
                     if lrc.strip():
                         result["aligned_lrc"] = lrc
                         result["aligned_lang"] = align_lang
+                        # Per emitted line: mean per-frame logprob (or null).
+                        # The coordinator drops relative outliers (#244).
+                        result["aligned_line_scores"] = line_scores
                     else:
                         LOG.warning("force-align produced empty LRC; omitting")
                 except Exception as exc:  # noqa: BLE001 — never fatal

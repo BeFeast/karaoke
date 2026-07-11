@@ -21,6 +21,7 @@ from karaoke.worker.lyrics import (
     _MAX_LADDER_QUERIES,
     LRC_WORD_TAG_RE,
     LyricsSource,
+    drop_unreliable_aligned_lines,
     lrc_to_plain,
     merge_lrclib_word_tags,
     repair_aligned_lrc,
@@ -1174,3 +1175,54 @@ def test_repair_passes_through_short_and_plain_lines():
         "free text",
     ):
         assert repair_aligned_lrc(body) == body
+
+
+# ---------------------------------------------------------------------------
+# drop_unreliable_aligned_lines (#244): crammed-tail filtering
+# ---------------------------------------------------------------------------
+
+def test_drop_crammed_line_by_pace():
+    """Job-133 shape: all word starts packed into half a second (the sung-end
+    tag absorbing the rest) is an implausible pace — the line is dropped."""
+    body = (
+        "[00:10.00]<00:10.00>Выйду <00:10.40>ночью <00:11.00>в <00:11.20>поле <00:12.00>\n"
+        "[03:17.36]<03:17.36>Мы <03:17.42>идём <03:17.52>с <03:17.56>конём <03:17.68>по <03:17.74>полю <03:17.88>вдвоём <03:22.88>"
+    )
+    filtered, dropped = drop_unreliable_aligned_lines(body, None)
+    assert dropped == 1
+    assert "идём" not in filtered
+    assert "Выйду" in filtered
+
+
+def test_drop_score_outlier_self_calibrating():
+    """With r8 per-line scores, a line far below the job's own median−2×MAD
+    is dropped even at a plausible pace."""
+    lines = [
+        f"[00:{10 + i * 5:02d}.00]<00:{10 + i * 5:02d}.00>слово <00:{11 + i * 5:02d}.00>ещё <00:{12 + i * 5:02d}.00>тут <00:{13 + i * 5:02d}.00>"
+        for i in range(9)
+    ]
+    body = "\n".join(lines)
+    scores = [-1.0] * 8 + [-9.0]  # last line is a gross outlier
+    filtered, dropped = drop_unreliable_aligned_lines(body, scores)
+    assert dropped == 1
+    assert len(filtered.splitlines()) == 8
+
+
+def test_drop_requires_enough_scored_lines():
+    """< 8 scored lines: the distribution is noise — no score-based drops."""
+    lines = [
+        f"[00:{10 + i * 5:02d}.00]<00:{10 + i * 5:02d}.00>слово <00:{11 + i * 5:02d}.00>ещё <00:{12 + i * 5:02d}.00>"
+        for i in range(4)
+    ]
+    body = "\n".join(lines)
+    filtered, dropped = drop_unreliable_aligned_lines(body, [-1.0, -1.0, -1.0, -9.0])
+    assert dropped == 0
+    assert filtered == body
+
+
+def test_drop_keeps_plain_and_none_scored_lines():
+    """Plain lines (no word tags) and None-scored lines always pass."""
+    body = "[00:10.00]plain line here\n[00:15.00]<00:15.00>a <00:15.40>b <00:15.80>"
+    filtered, dropped = drop_unreliable_aligned_lines(body, [None, None])
+    assert dropped == 0
+    assert filtered == body
