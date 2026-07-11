@@ -74,11 +74,16 @@ function resolveWords(
         : duration != null && duration > line.t
           ? duration
           : line.t + BREAK_LINE_S;
+  // No word may sing past the point the line stops being current: a trailing
+  // end tag (or a stray word tag) landing after the next line's start would
+  // leave the wipe mid-word when the next line takes over.
+  const cap = next != null ? Math.min(lineEnd, next.t) : lineEnd;
   return ws.map((w, i) => {
     const nextStart = i + 1 < ws.length ? ws[i + 1].t : lineEnd;
     const raw = w.d != null ? w.d : nextStart - w.t;
+    const capped = Math.min(raw, cap - w.t);
     // Clamp to a non-negative span; a degenerate/zero span fills instantly.
-    return { t: w.t, d: raw > 0 ? raw : 0, text: w.text };
+    return { t: w.t, d: capped > 0 ? capped : 0, text: w.text };
   });
 }
 

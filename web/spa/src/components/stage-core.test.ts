@@ -32,6 +32,25 @@ describe("timeLines", () => {
     expect(timeLines([longEnd, plain(3, "b")], null)[0].d).toBe(3);
   });
 
+  test("word spans are capped at the next line's start", () => {
+    // The end tag (8) lands after the next line starts (3): the last word's
+    // span is cut at 3 so the wipe completes before the line hands over.
+    const line: LyricLine = {
+      t: 0,
+      text: "a b",
+      end: 8,
+      words: [
+        { t: 0, d: 1, text: "a" },
+        { t: 1, d: 7, text: "b" }, // tag-derived span reaching past next.t
+      ],
+    };
+    const timed = timeLines([line, plain(3, "c")], null);
+    expect(timed[0].words).toEqual([
+      { t: 0, d: 1, text: "a" },
+      { t: 1, d: 2, text: "b" }, // capped: 3 (next line) - 1
+    ]);
+  });
+
   test("resolves the last word's null duration from the next line start", () => {
     const line: LyricLine = {
       t: 0,
