@@ -652,3 +652,29 @@ def test_in_progress_not_killed_by_queue_ceiling(settings, tmp_path, monkeypatch
     assert result.vast_instance_id == "runpod-rp-run"
     # A running job that completed must NOT have been cancelled.
     assert not [c for c in rec.calls if "/cancel/" in c[1]], "must not cancel a running job"
+
+
+def test_r2_prefix_unique_within_same_second(settings, tmp_path, monkeypatch):
+    """#250: two uploads in the same second must not share an R2 prefix —
+    a timestamp-only key let batch submits overwrite each other's audio."""
+    import karaoke.worker.runpod_client as rc
+
+    settings.r2_endpoint_url = "https://r2.example"
+    settings.r2_bucket = "b"
+    settings.r2_access_key_id = "ak"
+    settings.r2_secret_access_key = "sk"
+    calls: list = []
+    monkeypatch.setattr(
+        "karaoke.worker.r2_client.upload_file",
+        lambda path, **kw: calls.append(kw["key"]),
+    )
+    monkeypatch.setattr("karaoke.worker.r2_client.presign_get", lambda **kw: "https://get")
+    monkeypatch.setattr("karaoke.worker.r2_client.presign_put", lambda **kw: "https://put")
+    monkeypatch.setattr(rc.time, "time", lambda: 1_000_000.0)
+
+    client = rc.RunpodClient(settings)
+    mix = _mix_wav(tmp_path)
+    client._upload_to_r2(mix)
+    client._upload_to_r2(mix)
+    assert len(calls) == 2
+    assert calls[0] != calls[1]
