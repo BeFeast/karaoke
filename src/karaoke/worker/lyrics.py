@@ -316,8 +316,12 @@ def repair_aligned_lrc(body: str) -> str:
         if not gaps:
             out.append(raw)
             continue
-        gaps_sorted = sorted(gaps)
-        median_gap = max(gaps_sorted[len(gaps_sorted) // 2], 0.2)
+        # Reference gap: median of the gaps EXCLUDING the largest one — the
+        # absorbed-silence gap must not define its own threshold (a [5.0, 0.2]
+        # line would otherwise get median 5.0 and never repair). With no other
+        # gaps to learn from (two-word lines) assume a typical sung word.
+        others = sorted(gaps)[:-1]
+        median_gap = max(others[len(others) // 2] if others else 0.35, 0.2)
         threshold = max(2.0, 3.0 * median_gap)
         new_start = starts[0]
         if len(starts) >= 2 and starts[1] - starts[0] > threshold:
@@ -561,6 +565,42 @@ def merge_lrclib_word_tags(
     if synced_lrc.endswith("\n"):
         merged += "\n"
     return merged, True, eligible, matched_count
+
+
+def aligned_text_agreement(synced_lrc: str, aligned_lrc: str | None) -> tuple[int, int]:
+    """In-order TEXT agreement between curated lines and aligner output (#241).
+
+    Returns ``(agreed, eligible)``: ``eligible`` = single-tag non-empty
+    curated lines; ``agreed`` = how many find their aligner counterpart by
+    normalized text alone, walking both sides in order (longest common
+    subsequence-style greedy cursor, all timing ignored). This is the
+    fallback-gate signal: when curated TIMING misfits a different
+    performance, high text agreement proves the aligner still recognized and
+    timed the same LYRICS against the real audio.
+    """
+    if not aligned_lrc or not aligned_lrc.strip():
+        return 0, 0
+    aligner_norms = [al.norm for al in _parse_aligner_lines(aligned_lrc)]
+    agreed = 0
+    eligible = 0
+    cursor = 0
+    for raw in synced_lrc.splitlines():
+        tag = _LRC_TAG_CAP_RE.match(raw)
+        if tag is None:
+            continue
+        text = raw[tag.end() :]
+        if _LRC_TAG_CAP_RE.match(text):
+            continue  # multi-tag line — not in the eligible population
+        norm = " ".join(_LRC_WORD_TAG_CAP_RE.sub("", text).split())
+        if not norm:
+            continue
+        eligible += 1
+        for j in range(cursor, len(aligner_norms)):
+            if aligner_norms[j] == norm.casefold() or aligner_norms[j] == norm:
+                agreed += 1
+                cursor = j + 1
+                break
+    return agreed, eligible
 
 
 @dataclass(frozen=True, slots=True)

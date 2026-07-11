@@ -54,6 +54,7 @@ from karaoke.worker.lyrics import (
     SOURCE_WHISPER_ASR_SYNCED,
     LyricsResult,
     LyricsSource,
+    aligned_text_agreement,
     lrc_to_plain,
     merge_lrclib_word_tags,
     repair_aligned_lrc,
@@ -536,28 +537,35 @@ def _resolve_lyrics(
                     align_coverage_reject,
                     _ALIGN_COVERAGE_MIN_RATIO * 100,
                 )
-        if align_coverage_reject is not None and aligned:
-            # The curated TIMING does not fit this audio, but the aligner
-            # already timed the same TEXT against the actual vocal stem —
-            # a different performance/arrangement of the same song (#241:
-            # «Конь» TV cut runs +6…+22 s vs the studio LRC). Ship the
-            # aligned LRC (right text, measured timings) instead of falling
-            # to the ASR floor; require it to cover most of the record so a
-            # degenerate alignment cannot sneak through.
-            aligned_lines = sum(
-                1 for ln in aligned.splitlines() if LRC_TIMESTAMP_RE.match(ln)
-            )
-            if eligible > 0 and aligned_lines >= 0.5 * eligible:
-                lyrics_lrc.write_text(aligned, encoding="utf-8")
-                plain_text = lyrics.plain or lrc_to_plain(lyrics.synced_lrc)
-                lyrics_txt.write_text(plain_text, encoding="utf-8")
-                return {
-                    "lyrics_source": SOURCE_FORCED_ALIGNED,
-                    "synced": True,
-                    "instrumental": False,
-                    "lrc_written": True,
-                    "lyrics_align_reason": align_coverage_reject,
-                }
+        # The curated TIMING does not fit this audio, but the aligner already
+        # timed the same TEXT against the actual vocal stem — a different
+        # performance/arrangement of the same song (#241: «Конь» TV cut runs
+        # +6…+22 s vs the studio LRC). Ship the aligned LRC (right text,
+        # measured timings) instead of falling to the ASR floor. Gate on
+        # text_matched (in-order text agreement between the aligner output and
+        # the curated lines, drift ignored): a degenerate or wrong-text
+        # alignment cannot pass, and both ratio sides count the same lines.
+        agreed_n, agree_eligible = (
+            aligned_text_agreement(lyrics.synced_lrc, aligned)
+            if align_coverage_reject is not None
+            else (0, 0)
+        )
+        if (
+            align_coverage_reject is not None
+            and aligned
+            and agree_eligible > 0
+            and agreed_n >= 0.5 * agree_eligible
+        ):
+            lyrics_lrc.write_text(aligned, encoding="utf-8")
+            plain_text = lyrics.plain or lrc_to_plain(lyrics.synced_lrc)
+            lyrics_txt.write_text(plain_text, encoding="utf-8")
+            return {
+                "lyrics_source": SOURCE_FORCED_ALIGNED,
+                "synced": True,
+                "instrumental": False,
+                "lrc_written": True,
+                "lyrics_align_reason": align_coverage_reject,
+            }
         if align_coverage_reject is None:
             lyrics_lrc.write_text(merged_lrc, encoding="utf-8")
             # Also keep a plain-text export so the inline/share text path renders.
