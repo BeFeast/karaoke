@@ -814,3 +814,113 @@ async def test_run_real_job_force_aligns_rejected_text(tmp_path, monkeypatch):
         ).read_text(encoding="utf-8") == "right text one\nright text two"
     finally:
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# align-coverage gate (#237): curated text that barely aligns = wrong match
+# ---------------------------------------------------------------------------
+
+def _many_line_lrc(n: int) -> str:
+    return "\n".join(f"[{i:02d}:00.00]line number {i}" for i in range(n))
+
+
+def _aligned_covering(lines: str, upto: int) -> str:
+    """Enhanced-LRC aligner output word-matching only the first ``upto`` lines."""
+    out = []
+    for i, raw in enumerate(lines.splitlines()):
+        if i >= upto:
+            break
+        text = raw[raw.index("]") + 1 :]
+        words = text.split()
+        base = i * 60
+        tags = " ".join(f"<{base // 60:02d}:{(base % 60) + j:05.2f}>{w}" for j, w in enumerate(words))
+        out.append(f"[{base // 60:02d}:00.00]{tags} <{base // 60:02d}:59.00>")
+    return "\n".join(out)
+
+
+def test_low_align_coverage_rejects_synced_to_whisper_floor(tmp_path):
+    """4/12 (33%>x) — below 30%? use 3/12=25%: curated record rejected, ASR floor
+    ships, and metadata records the coverage rejection."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path, "asr words here")
+    synced = _many_line_lrc(12)
+    aligned = _aligned_covering(synced, 3)  # 3/12 = 25% < 30%
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=synced, plain=lrc_to_plain(synced), source="lrclib_get"),
+        exports,
+        whisper,
+        aligned_lrc_path=_aligned_file(tmp_path, aligned),
+    )
+    assert prov["lyrics_source"] == SOURCE_WHISPER_ASR
+    assert prov["lyrics_lrclib_rejected"].startswith("align_coverage_low (3/12)")
+    assert (exports / "lyrics.txt").read_text() == "asr words here"
+    assert not (exports / "lyrics.lrc").exists()
+
+
+def test_good_align_coverage_keeps_synced(tmp_path):
+    """9/12 = 75% coverage: curated record ships with word timing as before."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path)
+    synced = _many_line_lrc(12)
+    aligned = _aligned_covering(synced, 9)
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=synced, plain=lrc_to_plain(synced), source="lrclib_get"),
+        exports,
+        whisper,
+        aligned_lrc_path=_aligned_file(tmp_path, aligned),
+    )
+    assert prov["lyrics_source"] == SOURCE_LRCLIB_SYNCED
+    assert prov["lyrics_word_timing"] == SOURCE_FORCED_ALIGNED
+
+
+def test_small_records_skip_the_coverage_gate(tmp_path):
+    """eligible < 10: ratio is noise — record ships even with 0 merged lines."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path)
+    synced = _many_line_lrc(5)
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=synced, plain=lrc_to_plain(synced), source="lrclib_get"),
+        exports,
+        whisper,
+        aligned_lrc_path=_aligned_file(tmp_path, "[00:00.00]unrelated aligner text"),
+    )
+    assert prov["lyrics_source"] == SOURCE_LRCLIB_SYNCED
+
+
+def test_no_aligned_lrc_skips_the_coverage_gate(tmp_path):
+    """Alignment never ran: today's behavior — curated synced ships plain."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path)
+    synced = _many_line_lrc(12)
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=synced, plain=lrc_to_plain(synced), source="lrclib_get"),
+        exports,
+        whisper,
+    )
+    assert prov["lyrics_source"] == SOURCE_LRCLIB_SYNCED
+
+
+def test_plain_aligner_lines_count_as_matched_for_the_gate(tmp_path):
+    """Aligner lines that matched the text but carried no word tags (token
+    drift → plain line-level output) still prove the text fits the audio:
+    the record must NOT be coverage-rejected."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path)
+    synced = _many_line_lrc(12)
+    # Aligner echoes every line at the right time but WITHOUT word tags.
+    aligned = "\n".join(
+        f"[{i:02d}:00.50]line number {i}" for i in range(12)
+    )
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=synced, plain=lrc_to_plain(synced), source="lrclib_get"),
+        exports,
+        whisper,
+        aligned_lrc_path=_aligned_file(tmp_path, aligned),
+    )
+    assert prov["lyrics_source"] == SOURCE_LRCLIB_SYNCED
+    assert "lyrics_lrclib_rejected" not in prov

@@ -116,3 +116,49 @@ describe("detectTextDirection", () => {
     expect(block.split(/\r?\n/).map(detectTextDirection)).toEqual(["ltr", "rtl", "rtl"]);
   });
 });
+
+
+describe("parseLrc first-word line-start adjustment (#236)", () => {
+  test("pulls a word-timed line's start up to its earlier first word", () => {
+    const body = "[00:19.13]<00:18.92>When <00:19.12>you <00:19.26>were <00:20.68>";
+    const [line] = parseLrc(body);
+    expect(line.t).toBeCloseTo(18.92, 5);
+    expect(line.text).toBe("When you were");
+  });
+
+  test("keeps the tag when the first word starts at/after it", () => {
+    const body = "[00:10.00]<00:10.20>hello <00:11.00>world <00:12.00>";
+    const [line] = parseLrc(body);
+    expect(line.t).toBe(10);
+  });
+
+  test("ignores absurd drift (> 2 s) and keeps the curated tag", () => {
+    const body = "[00:30.00]<00:20.00>way <00:21.00>off <00:22.00>";
+    const [line] = parseLrc(body);
+    expect(line.t).toBe(30);
+  });
+
+  test("clamps the adjustment strictly after the previous line's start", () => {
+    const body = [
+      "[00:10.00]plain first line",
+      "[00:10.10]<00:09.50>early <00:11.00>word <00:12.00>",
+    ].join("\n");
+    const [a, b] = parseLrc(body);
+    expect(a.t).toBe(10);
+    // clamped to a.t + epsilon, not 9.5 — the previous line stays selectable
+    expect(b.t).toBeGreaterThan(a.t);
+    expect(b.t).toBeLessThan(10.1);
+  });
+
+  test("repeated-stamp copies: only the earliest copy is pulled to the word", () => {
+    const body = "[00:10.00][00:40.00]<00:09.60>chorus <00:11.00>line <00:12.00>";
+    const [a, b] = parseLrc(body);
+    expect(a.t).toBeCloseTo(9.6, 5);
+    expect(b.t).toBe(40); // later repeat keeps its curated stamp
+  });
+
+  test("leaves word-less lines untouched", () => {
+    const [line] = parseLrc("[00:05.00]no words here");
+    expect(line.t).toBe(5);
+  });
+});

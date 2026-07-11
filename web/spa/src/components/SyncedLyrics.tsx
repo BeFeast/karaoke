@@ -134,6 +134,26 @@ export function parseLrc(body: string): LyricLine[] {
     for (const t of stamps) lines.push({ t, text, words, end });
   }
   lines.sort((a, b) => a.t - b.t);
+  // Forced-aligned word timing regularly places the first word BEFORE the
+  // curated line tag (median ~0.3 s on real jobs) — the tag is when the line
+  // "belongs", the word tag is when the voice actually starts. Activating on
+  // the tag makes the highlight lag the vocal, so pull a word-timed line's
+  // start up to its first word (bounded: within 2 s, mirroring the server
+  // merge drift guard). Repeated-stamp copies share one words array, so only
+  // the earliest copy (the one the aligner actually timed) is adjusted. The
+  // start stays STRICTLY after the previous line's (small epsilon) so the
+  // previous line remains selectable by the last-start-≤-pos lookup.
+  const adjusted = new Set<LyricWord[]>();
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    const ws = ln.words;
+    if (!ws || ws.length === 0 || adjusted.has(ws)) continue;
+    adjusted.add(ws);
+    const w0 = ws[0].t;
+    if (w0 >= ln.t || ln.t - w0 > 2) continue;
+    const floor = i > 0 ? lines[i - 1].t + 0.01 : 0;
+    ln.t = Math.min(ln.t, Math.max(w0, floor));
+  }
   return lines;
 }
 
