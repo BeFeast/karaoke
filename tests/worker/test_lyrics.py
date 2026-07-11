@@ -1226,3 +1226,17 @@ def test_drop_keeps_plain_and_none_scored_lines():
     filtered, dropped = drop_unreliable_aligned_lines(body, [None, None])
     assert dropped == 0
     assert filtered == body
+
+
+def test_drop_score_guard_skips_plain_lines():
+    """Plain aligned lines (token-drift output, no word tags) are never
+    score-dropped — their positional timing is untrusted either way."""
+    tagged = [
+        f"[00:{10 + i * 5:02d}.00]<00:{10 + i * 5:02d}.00>слово <00:{11 + i * 5:02d}.00>ещё <00:{12 + i * 5:02d}.00>тут <00:{13 + i * 5:02d}.00>"
+        for i in range(8)
+    ]
+    body = "\n".join([*tagged, "[01:00.00]plain drifted line"])
+    scores = [-1.0] * 8 + [-9.0]  # outlier score belongs to the plain line
+    filtered, dropped = drop_unreliable_aligned_lines(body, scores)
+    assert dropped == 0
+    assert "plain drifted line" in filtered

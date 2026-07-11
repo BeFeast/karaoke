@@ -616,6 +616,11 @@ def drop_unreliable_aligned_lines(
         rest = raw[tag.end() :]
         word_tags = list(_LRC_WORD_TAG_CAP_RE.finditer(rest))
         text = _LRC_WORD_TAG_CAP_RE.sub("", rest).strip()
+        # Plain aligned lines (no word tags — token-drift output) carry no
+        # trustworthy positional timing to judge; both guards skip them.
+        if len(word_tags) < 2:
+            keep.append(raw)
+            continue
         # Pace over WORD STARTS (first→last), not the sung-end tag: crammed
         # lines pack all word starts into a fraction of a second while the
         # end tag absorbs the remaining silence (job 133: 6 word starts in
