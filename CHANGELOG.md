@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.37.0] - 2026-07-11
+
+_Bump: minor_
+
+- fix(worker): unique R2 key prefix — same-second jobs overwrote each other's audio (#250) (#251)
+
 ## [v0.36.0] - 2026-07-11
 
 _Bump: minor_
