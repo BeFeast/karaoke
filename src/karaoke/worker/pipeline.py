@@ -716,14 +716,17 @@ def _read_aligned_lrc(aligned_lrc_path: Path | None) -> str | None:
             scores = raw_scores
     except (OSError, ValueError):
         scores = None
-    # Drop crammed/unreliable lines FIRST (their bogus spans would poison the
-    # boundary repair's median), then repair CTC boundary absorption (#241).
+    # Repair CTC boundary absorption FIRST (#241): it is per-line, keeps the
+    # line count (scores stay index-aligned), and un-inflates the first-word
+    # span — otherwise absorbed leading silence masks a crammed line from the
+    # pace guard. Then drop unreliable lines (#244).
+    body = repair_aligned_lrc(body)
     body, dropped = drop_unreliable_aligned_lines(body, scores)
     if dropped:
         _log.info("dropped %d unreliable aligned line(s) (#244)", dropped)
     if not body.strip() or not LRC_TIMESTAMP_RE.search(body):
         return None
-    return repair_aligned_lrc(body)
+    return body
 
 
 def _read_whisper_segments(lyrics_json_path: Path | None) -> list[dict] | None:
