@@ -222,6 +222,131 @@ def test_synced_merges_aligner_word_tags(tmp_path):
     assert (exports / "lyrics.txt").read_text() == "hello world\nsecond line"
 
 
+# ---------------------------------------------------------------------------
+# word-merge coverage gate (#237): reject a wrong-text synced record that
+# slipped the duration gate but whose curated words the aligner could not fit.
+# ---------------------------------------------------------------------------
+def _lrc_ts(sec: float) -> str:
+    m, s = divmod(sec, 60)
+    return f"{int(m):02d}:{s:05.2f}"
+
+
+def _curated_lrc(n_lines: int) -> str:
+    """A curated LRCLIB synced LRC: ``n_lines`` single-tag, two-word lines."""
+    return "\n".join(f"[{_lrc_ts(10 + i)}]word{i}a word{i}b" for i in range(n_lines))
+
+
+def _aligned_for(n_merge: int) -> str:
+    """Force-aligner Enhanced LRC for the FIRST ``n_merge`` curated lines only
+    (the rest were dropped — low confidence / didn't fit the audio). Each entry's
+    line tag sits within the drift guard of its curated line so it merges."""
+    return "\n".join(
+        f"[{_lrc_ts(10 + i + 0.05)}]"
+        f"<{_lrc_ts(10 + i + 0.05)}>word{i}a "
+        f"<{_lrc_ts(10 + i + 0.5)}>word{i}b "
+        f"<{_lrc_ts(10 + i + 1.0)}>"
+        for i in range(n_merge)
+    )
+
+
+def test_synced_low_word_merge_coverage_rejected_to_whisper_floor(tmp_path):
+    """#237 acceptance: a synced LRCLIB record whose force-aligned word tags land
+    on only 4/34 lines is a wrong-text match that slipped the ±2s duration gate.
+    It is dropped in favor of the Whisper ASR floor, and the coverage rejection
+    is recorded in provenance — the curated studio text is never shipped."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path, text="real asr transcript")
+    lyrics_json = _whisper_json(tmp_path, SEGMENTS_JSON)
+    curated = _curated_lrc(34)
+    aligned = _aligned_file(tmp_path, body=_aligned_for(4))
+
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=curated, plain=lrc_to_plain(curated), source="lrclib_get"),
+        exports,
+        whisper,
+        aligned,
+        lyrics_json,
+    )
+
+    # Fell through to the Whisper floor (segment-timed), NOT lrclib_synced.
+    assert prov["lyrics_source"] == SOURCE_WHISPER_ASR_SYNCED
+    assert prov["synced"] is True
+    assert prov["lyrics_lrclib_rejected"] == "align_coverage_low (4/34)"
+    assert "lyrics_word_timing" not in prov
+    # The curated studio text was NOT shipped: lyrics.txt is the ASR transcript,
+    # and the LRC is the ASR-synced floor (curated words absent).
+    assert (exports / "lyrics.txt").read_text() == "real asr transcript"
+    floor_lrc = (exports / "lyrics.lrc").read_text()
+    assert "asr one" in floor_lrc and "word0a" not in floor_lrc
+
+
+def test_synced_adequate_word_merge_coverage_unchanged(tmp_path):
+    """Creep-class coverage (28/37 = 76%) stays ``lrclib_synced`` with word
+    timing — the gate must not fire on sparse-but-real alignments."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path)
+    curated = _curated_lrc(37)
+    aligned = _aligned_file(tmp_path, body=_aligned_for(28))
+
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=curated, plain=lrc_to_plain(curated), source="lrclib_get"),
+        exports,
+        whisper,
+        aligned,
+    )
+
+    assert prov["lyrics_source"] == SOURCE_LRCLIB_SYNCED
+    assert prov["lyrics_word_timing"] == SOURCE_FORCED_ALIGNED
+    assert "lyrics_lrclib_rejected" not in prov
+    assert (exports / "lyrics.txt").read_text() == lrc_to_plain(curated)
+
+
+def test_synced_few_candidates_below_eligibility_floor_unchanged(tmp_path):
+    """Under the eligibility floor (9 candidate lines) the coverage gate never
+    fires — a 1/9 alignment stays ``lrclib_synced`` (too few lines to call it a
+    mismatch)."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path)
+    curated = _curated_lrc(9)
+    aligned = _aligned_file(tmp_path, body=_aligned_for(1))
+
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=curated, plain=lrc_to_plain(curated), source="lrclib_get"),
+        exports,
+        whisper,
+        aligned,
+    )
+
+    assert prov["lyrics_source"] == SOURCE_LRCLIB_SYNCED
+    assert prov["lyrics_word_timing"] == SOURCE_FORCED_ALIGNED
+    assert "lyrics_lrclib_rejected" not in prov
+
+
+def test_synced_no_aligned_not_gated_regardless_of_length(tmp_path):
+    """No aligned LRC at all (alignment failed / old image) → the curated synced
+    record ships verbatim even with many lines: the gate needs an actual
+    alignment attempt to judge coverage (#237)."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path)
+    curated = _curated_lrc(34)
+
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=curated, plain=lrc_to_plain(curated), source="lrclib_get"),
+        exports,
+        whisper,
+        None,
+    )
+
+    assert prov["lyrics_source"] == SOURCE_LRCLIB_SYNCED
+    assert "lyrics_lrclib_rejected" not in prov
+    assert "lyrics_word_timing" not in prov  # no aligner → plain lines
+    assert (exports / "lyrics.lrc").read_text() == curated
+
+
 def test_plain_only_no_aligned_falls_back_to_plain(tmp_path):
     """Old image / alignment failed → no aligned LRC → plain-only (untimed)."""
     exports = tmp_path / "exports"

@@ -42,7 +42,7 @@ import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, NamedTuple
 
 import httpx
 
@@ -370,12 +370,34 @@ def _splice_word_tags(
     return "".join(parts)
 
 
+class WordMergeResult(NamedTuple):
+    """Outcome of :func:`merge_lrclib_word_tags` (#222, #237).
+
+    * ``merged_lrc`` — the LRC with aligner word ``<>`` tags spliced in, or the
+      ``synced_lrc`` byte-verbatim when nothing merged.
+    * ``merged_any`` — True when at least one line received word tags.
+    * ``eligible`` — single-tag, non-empty curated lines: the word-merge
+      *candidates* (multi-tag lines can never take word timing).
+    * ``merged`` — eligible lines that actually received word tags.
+
+    ``merged / eligible`` is the word-merge **coverage**: a low ratio over enough
+    eligible lines means the aligner (timing the actual audio) could not fit the
+    curated text — a wrong-text LRCLIB match that slipped the duration gate
+    (#237), not merely a sparse alignment.
+    """
+
+    merged_lrc: str
+    merged_any: bool
+    eligible: int
+    merged: int
+
+
 def merge_lrclib_word_tags(
     synced_lrc: str,
     aligned_lrc: str | None,
     *,
     drift_tolerance_s: float = _WORD_MERGE_DRIFT_S,
-) -> tuple[str, bool]:
+) -> WordMergeResult:
     """Overlay aligner word timings onto a curated LRCLIB synced LRC (#222).
 
     LRCLIB's synced LRC carries authoritative, human-curated line text + line
@@ -401,12 +423,14 @@ def merge_lrclib_word_tags(
     (``[t1][t2]text``) and bare line tags (instrumental breaks) pass through
     untouched.
 
-    Pure + total: any parse quirk leaves the affected line plain. Returns
-    ``(merged_lrc, merged_any)`` — when nothing merged, ``merged_lrc`` is
+    Pure + total: any parse quirk leaves the affected line plain. Returns a
+    :class:`WordMergeResult` — when nothing merged, ``merged_lrc`` is
     ``synced_lrc`` verbatim (byte-exact fallback) and ``merged_any`` is False.
+    ``eligible``/``merged`` report word-merge coverage for the match-quality
+    gate (#237).
     """
     if not aligned_lrc or not aligned_lrc.strip():
-        return synced_lrc, False
+        return WordMergeResult(synced_lrc, False, 0, 0)
     aligner = _parse_aligner_lines(aligned_lrc)
     raw_lines = synced_lrc.splitlines()
 
@@ -428,7 +452,8 @@ def merge_lrclib_word_tags(
 
     out: list[str] = []
     cursor = 0
-    merged_any = False
+    eligible = 0
+    merged = 0
     for i, raw in enumerate(raw_lines):
         tag, text, norm, times = parsed[i]
         # Lines without a tag or without text pass through and do not consume
@@ -436,6 +461,12 @@ def merge_lrclib_word_tags(
         if tag is None or not norm:
             out.append(raw)
             continue
+        # A single-tag, non-empty curated line is a word-merge *candidate*:
+        # multi-tag lines ([t1][t2]text) can never take word timing (ambiguous),
+        # so they are not counted. The share of candidates that actually merge
+        # is the match-quality signal the pipeline gates on (#237).
+        if len(times) == 1:
+            eligible += 1
         if cursor >= len(aligner) or aligner[cursor].norm != norm:
             out.append(raw)
             continue
@@ -463,16 +494,16 @@ def merge_lrclib_word_tags(
         words = re.findall(r"\S+", text)
         if len(times) == 1 and al.word_starts and len(al.word_starts) == len(words):
             out.append(_splice_word_tags(raw[: tag.end()], text, al.word_starts, al.end))
-            merged_any = True
+            merged += 1
             continue
         out.append(raw)
-    if not merged_any:
-        return synced_lrc, False
-    merged = "\n".join(out)
+    if not merged:
+        return WordMergeResult(synced_lrc, False, eligible, 0)
+    merged_lrc = "\n".join(out)
     # Preserve the source's final newline (byte-preserving outside merged lines).
     if synced_lrc.endswith("\n"):
-        merged += "\n"
-    return merged, True
+        merged_lrc += "\n"
+    return WordMergeResult(merged_lrc, True, eligible, merged)
 
 
 @dataclass(frozen=True, slots=True)

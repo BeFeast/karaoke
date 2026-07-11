@@ -439,6 +439,55 @@ async def _mark_failed(
 # ---------------------------------------------------------------------------
 # lyrics resolution (LRCLIB synced > LRCLIB plain > Whisper ASR)
 # ---------------------------------------------------------------------------
+# Word-merge coverage gate (#237). When the GPU force-aligner (timing the actual
+# audio) merges word tags onto only a small share of an LRCLIB synced record's
+# candidate lines, the curated text does not fit this performance — a wrong-text
+# match that slipped the ±2s duration gate (e.g. a TV fragment matched to a
+# same-length studio cut). Reject such a record and fall to the Whisper ASR floor
+# rather than shipping curated studio text over a different performance. The gate
+# only fires with enough candidates to be meaningful (a handful of eligible lines
+# can miss for benign reasons); sparse-but-real alignments stay well above it
+# (creep-class 28/37 = 76%).
+_WORD_MERGE_MIN_ELIGIBLE = 10
+_WORD_MERGE_MIN_COVERAGE = 0.3
+
+
+def _whisper_floor(
+    lyrics_txt: Path,
+    lyrics_lrc: Path,
+    whisper_lyrics_txt: Path,
+    whisper_lyrics_json: Path | None,
+    rejected: str | None,
+) -> dict[str, object]:
+    """Whisper ASR floor: keep the transcript, add an approximate segment-timed
+    LRC when the GPU job's ``lyrics.json`` is usable (#145). Tolerant: a
+    missing/unreadable lyrics.json or one that yields no timed lines degrades to
+    the untimed ASR floor. ``rejected`` records why an LRCLIB record was dropped
+    (duration hard-reject #148, or low word-merge coverage #237) for
+    ``metadata.json`` debuggability; ``None`` leaves the mapping shape untouched.
+    """
+    lyrics_txt.write_bytes(whisper_lyrics_txt.read_bytes())
+    asr_lrc = whisper_segments_to_lrc(_read_whisper_segments(whisper_lyrics_json))
+    if asr_lrc:
+        lyrics_lrc.write_text(asr_lrc, encoding="utf-8")
+        prov: dict[str, object] = {
+            "lyrics_source": SOURCE_WHISPER_ASR_SYNCED,
+            "synced": True,
+            "instrumental": False,
+            "lrc_written": True,
+        }
+    else:
+        prov = {
+            "lyrics_source": SOURCE_WHISPER_ASR,
+            "synced": False,
+            "instrumental": False,
+            "lrc_written": False,
+        }
+    if rejected:
+        prov["lyrics_lrclib_rejected"] = rejected
+    return prov
+
+
 def _resolve_lyrics(
     lyrics: LyricsResult,
     exports_dir: Path,
@@ -453,6 +502,11 @@ def _resolve_lyrics(
          The curated line text + line tags stay authoritative; when the GPU
          force-aligned the same text, its word ``<>`` tags are spliced into each
          line (#222) and ``"lyrics_word_timing": "forced_aligned"`` is recorded.
+         Exception (#237): when an aligned LRC *was* produced yet merged onto
+         under ``_WORD_MERGE_MIN_COVERAGE`` of ``_WORD_MERGE_MIN_ELIGIBLE``+
+         candidate lines, the record is a wrong-text match that slipped the
+         duration gate — it is dropped in favor of the Whisper floor (6), with
+         ``"lyrics_lrclib_rejected": "align_coverage_low (<merged>/<eligible>)"``.
       2. LRCLIB plain + force-aligned LRC → write the GPU-synthesized
          ``exports/lyrics.lrc`` (provenance ``forced_aligned``) + the LRCLIB
          plain text as ``lyrics.txt``.
@@ -490,12 +544,12 @@ def _resolve_lyrics(
         {"lyrics_source": str, "synced": bool, "instrumental": bool,
          "lrc_written": bool}
 
-    When the LRCLIB lookup *had* a record but dropped it (duration hard-reject,
-    #148) and no usable aligned LRC came back, the floor-branch mapping
-    additionally carries the reason under ``"lyrics_lrclib_rejected"`` for
-    ``metadata.json`` debuggability. The synced branch adds
-    ``"lyrics_word_timing": "forced_aligned"`` when the word-tag merge (#222)
-    landed on at least one line.
+    When the LRCLIB lookup *had* a record but dropped it — a duration hard-reject
+    (#148) with no usable aligned LRC, or a synced record whose word-merge
+    coverage was too low (#237) — the floor-branch mapping additionally carries
+    the reason under ``"lyrics_lrclib_rejected"`` for ``metadata.json``
+    debuggability. The synced branch adds ``"lyrics_word_timing": "forced_aligned"``
+    when the word-tag merge (#222) landed on at least one line.
     """
     lyrics_txt = exports_dir / "lyrics.txt"
     lyrics_lrc = exports_dir / "lyrics.lrc"
@@ -507,8 +561,27 @@ def _resolve_lyrics(
         # ``lrclib_synced``. Tolerant: a missing/garbage aligned LRC or any
         # unmergeable line degrades to the plain LRCLIB line exactly.
         aligned = _read_aligned_lrc(aligned_lrc_path)
-        merged_lrc, word_timing = merge_lrclib_word_tags(lyrics.synced_lrc, aligned)
-        lyrics_lrc.write_text(merged_lrc, encoding="utf-8")
+        merge = merge_lrclib_word_tags(lyrics.synced_lrc, aligned)
+        # #237: an aligned LRC that merged onto only a small share of many
+        # candidate lines is a wrong-text match that slipped the ±2s duration
+        # gate — the force-aligner (timing the real audio) could not fit the
+        # curated words. Drop the record and fall to the Whisper ASR floor
+        # rather than ship a different performance's studio text. Fires only
+        # when an aligned LRC was actually attempted and there were enough
+        # candidates to judge; sparse-but-real alignments stay well above it.
+        if (
+            aligned is not None
+            and merge.eligible >= _WORD_MERGE_MIN_ELIGIBLE
+            and merge.merged / merge.eligible < _WORD_MERGE_MIN_COVERAGE
+        ):
+            return _whisper_floor(
+                lyrics_txt,
+                lyrics_lrc,
+                whisper_lyrics_txt,
+                whisper_lyrics_json,
+                f"align_coverage_low ({merge.merged}/{merge.eligible})",
+            )
+        lyrics_lrc.write_text(merge.merged_lrc, encoding="utf-8")
         # Also keep a plain-text export so the inline/share text path renders.
         plain_text = lyrics.plain or lrc_to_plain(lyrics.synced_lrc)
         lyrics_txt.write_text(plain_text, encoding="utf-8")
@@ -518,7 +591,7 @@ def _resolve_lyrics(
             "instrumental": False,
             "lrc_written": True,
         }
-        if word_timing:
+        if merge.merged_any:
             prov["lyrics_word_timing"] = SOURCE_FORCED_ALIGNED
         return prov
 
@@ -574,30 +647,11 @@ def _resolve_lyrics(
                 "lyrics_align_reason": f"lrclib_{lyrics.rejected}",
             }
 
-    # LRCLIB miss → keep the Whisper transcript (the ASR floor). When the GPU
-    # job's segment timestamps are usable, also emit an approximate LRC so the
-    # floor still gets synced highlight (#145). Tolerant: a missing/unreadable
-    # lyrics.json or one that yields no timed lines degrades to untimed ASR.
-    lyrics_txt.write_bytes(whisper_lyrics_txt.read_bytes())
-    asr_lrc = whisper_segments_to_lrc(_read_whisper_segments(whisper_lyrics_json))
-    if asr_lrc:
-        lyrics_lrc.write_text(asr_lrc, encoding="utf-8")
-        prov = {
-            "lyrics_source": SOURCE_WHISPER_ASR_SYNCED,
-            "synced": True,
-            "instrumental": False,
-            "lrc_written": True,
-        }
-    else:
-        prov = {
-            "lyrics_source": SOURCE_WHISPER_ASR,
-            "synced": False,
-            "instrumental": False,
-            "lrc_written": False,
-        }
-    if lyrics.rejected:
-        prov["lyrics_lrclib_rejected"] = lyrics.rejected
-    return prov
+    # LRCLIB miss (or a duration-rejected record with no usable aligned text) →
+    # the Whisper ASR floor, carrying the rejection reason when there was one.
+    return _whisper_floor(
+        lyrics_txt, lyrics_lrc, whisper_lyrics_txt, whisper_lyrics_json, lyrics.rejected
+    )
 
 
 # Minimal ISO-639-1 → ISO-639-3 map for the languages we realistically see in
