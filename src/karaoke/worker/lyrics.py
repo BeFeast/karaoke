@@ -317,10 +317,18 @@ def _parse_aligner_lines(aligned_lrc: str) -> list[_AlignerLine]:
         word_starts: tuple[float, ...] = ()
         end: float | None = None
         # A well-formed Enhanced line ends with a bare ``<..>`` sung-end tag
-        # (nothing after it); the tags before it are the word starts.
+        # (nothing after it); the tags before it are the word starts. Times
+        # must be non-decreasing with the end at/after the last start —
+        # nonmonotonic tags would surface as negative word durations downstream.
         if len(word_tags) >= 2 and not body[word_tags[-1].end() :].strip():
-            word_starts = tuple(_tag_seconds(t) for t in word_tags[:-1])
-            end = _tag_seconds(word_tags[-1])
+            starts = tuple(_tag_seconds(t) for t in word_tags[:-1])
+            last_tag = _tag_seconds(word_tags[-1])
+            monotonic = all(a <= b for a, b in zip(starts, starts[1:], strict=False)) and (
+                not starts or last_tag >= starts[-1]
+            )
+            if monotonic:
+                word_starts = starts
+                end = last_tag
         parsed.append(
             _AlignerLine(start=_tag_seconds(tag), norm=norm, word_starts=word_starts, end=end)
         )
@@ -346,9 +354,14 @@ def _splice_word_tags(
         parts.append(_fmt_lrc_word_tag(word_starts[i]))
         parts.append(m.group())
         last = m.end()
-    parts.append(text[last:].rstrip())
+    # Keep the original trailing whitespace verbatim (byte-preserving contract);
+    # the sung-end tag goes after it, with a separating space only when the
+    # line doesn't already end in whitespace.
+    suffix = text[last:]
+    parts.append(suffix)
     if end is not None:
-        parts.append(f" {_fmt_lrc_word_tag(end)}")
+        sep = "" if suffix.endswith((" ", "\t")) else " "
+        parts.append(f"{sep}{_fmt_lrc_word_tag(end)}")
     return "".join(parts)
 
 
@@ -390,36 +403,71 @@ def merge_lrclib_word_tags(
     if not aligned_lrc or not aligned_lrc.strip():
         return synced_lrc, False
     aligner = _parse_aligner_lines(aligned_lrc)
+    raw_lines = synced_lrc.splitlines()
+
+    # Pre-parse every LRCLIB line once: (tag_match, text, norm, tag_times).
+    # tag_times holds ALL leading tag times (multi-tag lines have several).
+    parsed: list[tuple[re.Match[str] | None, str, str, list[float]]] = []
+    for raw in raw_lines:
+        tag = _LRC_TAG_CAP_RE.match(raw)
+        text = raw[tag.end() :] if tag is not None else ""
+        times: list[float] = []
+        rest = text
+        if tag is not None:
+            times.append(_tag_seconds(tag))
+            while (m := _LRC_TAG_CAP_RE.match(rest)) is not None:
+                times.append(_tag_seconds(m))
+                rest = rest[m.end() :]
+        norm = " ".join(_LRC_WORD_TAG_CAP_RE.sub("", rest).split())
+        parsed.append((tag, text, norm, times))
+
     out: list[str] = []
     cursor = 0
     merged_any = False
-    for raw in synced_lrc.splitlines():
-        tag = _LRC_TAG_CAP_RE.match(raw)
-        text = raw[tag.end() :] if tag is not None else ""
-        # Only single-tag, non-empty, text-only LRCLIB lines are merge targets.
-        # A line without a tag, a bare tag (empty text), or one carrying a
-        # further leading tag passes through unchanged and does not consume the
-        # aligner cursor (empty lines have no aligner counterpart either).
-        norm = " ".join(_LRC_WORD_TAG_CAP_RE.sub("", text).split())
-        if tag is None or not norm or _LRC_TAG_CAP_RE.match(text):
+    for i, raw in enumerate(raw_lines):
+        tag, text, norm, times = parsed[i]
+        # Lines without a tag or without text pass through and do not consume
+        # the aligner cursor — they had no aligner counterpart.
+        if tag is None or not norm:
             out.append(raw)
             continue
-        if cursor < len(aligner) and aligner[cursor].norm == norm:
-            al = aligner[cursor]
-            cursor += 1
-            words = re.findall(r"\S+", text)
-            if (
-                al.word_starts
-                and len(al.word_starts) == len(words)
-                and abs(al.start - _tag_seconds(tag)) <= drift_tolerance_s
-            ):
-                out.append(_splice_word_tags(raw[: tag.end()], text, al.word_starts, al.end))
-                merged_any = True
-                continue
+        if cursor >= len(aligner) or aligner[cursor].norm != norm:
+            out.append(raw)
+            continue
+        al = aligner[cursor]
+        drift_ok = any(abs(al.start - t) <= drift_tolerance_s for t in times)
+        # A text match outside tolerance can mean the aligner entry belongs to
+        # a LATER occurrence of a repeated line (this one was dropped, #149).
+        # Defer consuming it only when a later curated line with the same text
+        # sits within tolerance of the entry; otherwise consume it here as an
+        # ordinary drift-reject (line stays plain either way).
+        if not drift_ok:
+            defer = any(
+                p_norm == norm
+                and any(abs(al.start - t) <= drift_tolerance_s for t in p_times)
+                for _, _, p_norm, p_times in parsed[i + 1 :]
+            )
+            if not defer:
+                cursor += 1
+            out.append(raw)
+            continue
+        cursor += 1
+        # Multi-tag lines ([t1][t2]text) consume their aligner entry (their
+        # text was sent to the aligner) but stay plain — repeated-tag timing
+        # is ambiguous.
+        words = re.findall(r"\S+", text)
+        if len(times) == 1 and al.word_starts and len(al.word_starts) == len(words):
+            out.append(_splice_word_tags(raw[: tag.end()], text, al.word_starts, al.end))
+            merged_any = True
+            continue
         out.append(raw)
     if not merged_any:
         return synced_lrc, False
-    return "\n".join(out), True
+    merged = "\n".join(out)
+    # Preserve the source's final newline (byte-preserving outside merged lines).
+    if synced_lrc.endswith("\n"):
+        merged += "\n"
+    return merged, True
 
 
 @dataclass(frozen=True, slots=True)

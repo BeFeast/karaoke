@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from karaoke.worker.lyrics import (
+    LRC_WORD_TAG_RE,
     LyricsSource,
     lrc_to_plain,
     merge_lrclib_word_tags,
@@ -803,3 +804,71 @@ def test_merge_result_roundtrips_through_word_parser():
     assert line.text == "alpha beta gamma"
     assert [w.text for w in line.words] == ["alpha", "beta", "gamma"]
     assert line.end == 11.8
+
+
+def test_merge_multitag_line_consumes_aligner_entry_and_stays_plain():
+    """A multi-tag LRCLIB line ([t1][t2]chorus) stays plain, but its aligner
+    entry is consumed so the cursor does not wedge for following lines."""
+    synced = (
+        "[00:10.00][00:50.00]chorus line\n"
+        "[00:20.00]verse words"
+    )
+    aligned = (
+        "[00:10.02]<00:10.02>chorus <00:10.5>line <00:11.0>\n"
+        "[00:20.05]<00:20.05>verse <00:20.6>words <00:21.0>"
+    )
+    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    assert word_timing is True
+    lines = merged.split("\n")
+    assert lines[0] == "[00:10.00][00:50.00]chorus line"  # plain, untouched
+    assert lines[1].startswith("[00:20.00]<00:20.05>verse")  # cursor not wedged
+
+
+def test_merge_repeated_line_defers_entry_to_matching_occurrence():
+    """When the aligner dropped the FIRST occurrence of a repeated line but
+    kept the second, the single aligner entry (near the second tag) is not
+    burned on the first occurrence — the second occurrence merges."""
+    synced = "[00:10.00]chorus\n[00:30.00]chorus"
+    aligned = "[00:30.05]<00:30.05>chorus <00:31.0>"
+    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    assert word_timing is True
+    lines = merged.split("\n")
+    assert lines[0] == "[00:10.00]chorus"  # dropped occurrence stays plain
+    assert lines[1] == "[00:30.00]<00:30.05>chorus <00:31.00>"
+
+
+def test_merge_preserves_final_newline():
+    """A trailing newline on the LRCLIB body survives a successful merge."""
+    synced = "[00:10.00]alpha beta\n"
+    aligned = "[00:10.05]<00:10.05>alpha <00:10.6>beta <00:11.0>"
+    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    assert word_timing is True
+    assert merged.endswith("\n")
+    assert merged.rstrip("\n").startswith("[00:10.00]<00:10.05>alpha")
+
+
+def test_merge_preserves_trailing_whitespace_on_merged_line():
+    """Trailing spaces on a curated line survive the splice byte-for-byte
+    (the sung-end tag rides after them without adding a double space)."""
+    synced = "[00:10.00]alpha beta  "
+    aligned = "[00:10.05]<00:10.05>alpha <00:10.6>beta <00:11.0>"
+    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    assert word_timing is True
+    assert merged == "[00:10.00]<00:10.05>alpha <00:10.60>beta  <00:11.00>"
+    # stripping tags reproduces the curated line text byte-for-byte
+    stripped = LRC_WORD_TAG_RE.sub("", merged)[len("[00:10.00]"):]
+    assert stripped == "alpha beta  "
+
+
+def test_merge_nonmonotonic_aligner_tags_leave_line_plain():
+    """Aligner lines with decreasing word starts, or an end before the last
+    start, carry no usable word timing — the curated line stays plain instead
+    of producing negative word durations downstream."""
+    synced = "[00:10.00]alpha beta"
+    for aligned in (
+        "[00:10.05]<00:12.00>alpha <00:10.5>beta <00:13.0>",  # decreasing starts
+        "[00:10.05]<00:10.05>alpha <00:10.6>beta <00:10.2>",  # end < last start
+    ):
+        merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+        assert word_timing is False, aligned
+        assert merged == synced
