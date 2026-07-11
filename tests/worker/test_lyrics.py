@@ -935,7 +935,7 @@ def test_merge_splices_word_tags_keeps_lrclib_line_tags():
         "[00:12.30]<00:12.30>hello <00:12.90>world <00:13.40>\n"
         "[00:15.05]<00:15.05>second <00:15.60>line <00:16.10>"
     )
-    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
     assert word_timing is True
     assert merged == (
         "[00:12.34]<00:12.30>hello <00:12.90>world <00:13.40>\n"
@@ -951,7 +951,7 @@ def test_merge_line_text_byte_identical_to_lrclib():
         "[00:10.02]<00:10.02>keep <00:10.5>the <00:11.0>spacing <00:11.5>\n"
         "[00:20.01]<00:20.01>and <00:20.5>this <00:21.0>"
     )
-    merged, _ = merge_lrclib_word_tags(synced, aligned)
+    merged, _, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
     assert lrc_to_plain(merged) == lrc_to_plain(synced)
     assert "keep   the    spacing" in lrc_to_plain(merged)
 
@@ -964,7 +964,7 @@ def test_merge_drift_over_tolerance_leaves_line_plain():
         "[00:12.50]<00:12.50>alpha <00:13.0>beta <00:13.5>\n"  # drift 2.5 s > 2
         "[00:20.10]<00:20.10>gamma <00:20.6>delta <00:21.0>"   # drift 0.1 s
     )
-    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
     assert word_timing is True
     lines = merged.split("\n")
     assert lines[0] == "[00:10.00]alpha beta"  # plain — bad alignment rejected
@@ -975,7 +975,7 @@ def test_merge_drift_at_tolerance_boundary_merges():
     """Drift of exactly the tolerance (2 s) still merges (``<=`` boundary)."""
     synced = "[00:10.00]alpha beta"
     aligned = "[00:12.00]<00:12.00>alpha <00:12.5>beta <00:13.0>"
-    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
     assert word_timing is True
     assert merged == "[00:10.00]<00:12.00>alpha <00:12.50>beta <00:13.00>"
 
@@ -985,7 +985,7 @@ def test_merge_word_count_drift_leaves_line_plain():
     that line plain — no partial / misaligned tagging."""
     synced = "[00:10.00]one two three"
     aligned = "[00:10.00]<00:10.00>one <00:10.5>two <00:11.0>"  # 2 words vs 3
-    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
     assert word_timing is False
     assert merged == synced
 
@@ -1002,7 +1002,7 @@ def test_merge_tolerates_dropped_line_and_resyncs():
         "[00:10.02]<00:10.02>first <00:10.6>line <00:11.0>\n"
         "[00:30.05]<00:30.05>third <00:30.6>line <00:31.0>"
     )
-    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
     assert word_timing is True
     lines = merged.split("\n")
     assert lines[0].startswith("[00:10.00]<00:10.02>first")
@@ -1015,7 +1015,7 @@ def test_merge_plain_aligner_line_leaves_line_plain():
     matching LRCLIB line plain rather than inventing timing."""
     synced = "[00:10.00]tricky line here"
     aligned = "[00:10.02]tricky line here"  # matched text, but no <> tags
-    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
     assert word_timing is False
     assert merged == synced
 
@@ -1025,7 +1025,7 @@ def test_merge_no_aligned_returns_lrclib_verbatim():
     flag False. Never fatal."""
     synced = "[00:12.00]line one\n[00:15.50]line two"
     for aligned in (None, "", "   \n  "):
-        merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+        merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
         assert merged == synced
         assert word_timing is False
 
@@ -1035,7 +1035,7 @@ def test_merge_unmergeable_aligned_returns_lrclib_verbatim():
     returns the LRCLIB body byte-exact (trailing newline preserved)."""
     synced = "[00:12.00]line one\n[00:15.50]line two\n"
     aligned = "[00:40.00]<00:40.00>totally <00:41.0>different <00:42.0>"
-    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
     assert merged == synced  # byte-exact, including the trailing newline
     assert word_timing is False
 
@@ -1045,7 +1045,7 @@ def test_merge_passes_through_bare_tag_and_untagged_lines():
     untouched and do not consume the aligner cursor."""
     synced = "[00:05.00]\n[00:10.00]real words here\nno tag line"
     aligned = "[00:10.03]<00:10.03>real <00:10.5>words <00:11.0>here <00:11.5>"
-    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
     assert word_timing is True
     lines = merged.split("\n")
     assert lines[0] == "[00:05.00]"          # bare tag untouched
@@ -1060,7 +1060,7 @@ def test_merge_result_roundtrips_through_word_parser():
 
     synced = "[00:10.00]alpha beta gamma"
     aligned = "[00:10.05]<00:10.05>alpha <00:10.6>beta <00:11.2>gamma <00:11.8>"
-    merged, _ = merge_lrclib_word_tags(synced, aligned)
+    merged, _, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
     (line,) = _parse_lrc_lines(merged)
     assert line.t == 10.0  # curated LRCLIB line tag, not the aligner's 10.05
     assert line.text == "alpha beta gamma"
@@ -1079,7 +1079,7 @@ def test_merge_multitag_line_consumes_aligner_entry_and_stays_plain():
         "[00:10.02]<00:10.02>chorus <00:10.5>line <00:11.0>\n"
         "[00:20.05]<00:20.05>verse <00:20.6>words <00:21.0>"
     )
-    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
     assert word_timing is True
     lines = merged.split("\n")
     assert lines[0] == "[00:10.00][00:50.00]chorus line"  # plain, untouched
@@ -1092,7 +1092,7 @@ def test_merge_repeated_line_defers_entry_to_matching_occurrence():
     burned on the first occurrence — the second occurrence merges."""
     synced = "[00:10.00]chorus\n[00:30.00]chorus"
     aligned = "[00:30.05]<00:30.05>chorus <00:31.0>"
-    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
     assert word_timing is True
     lines = merged.split("\n")
     assert lines[0] == "[00:10.00]chorus"  # dropped occurrence stays plain
@@ -1103,7 +1103,7 @@ def test_merge_preserves_final_newline():
     """A trailing newline on the LRCLIB body survives a successful merge."""
     synced = "[00:10.00]alpha beta\n"
     aligned = "[00:10.05]<00:10.05>alpha <00:10.6>beta <00:11.0>"
-    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
     assert word_timing is True
     assert merged.endswith("\n")
     assert merged.rstrip("\n").startswith("[00:10.00]<00:10.05>alpha")
@@ -1114,7 +1114,7 @@ def test_merge_preserves_trailing_whitespace_on_merged_line():
     (the sung-end tag rides after them without adding a double space)."""
     synced = "[00:10.00]alpha beta  "
     aligned = "[00:10.05]<00:10.05>alpha <00:10.6>beta <00:11.0>"
-    merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+    merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
     assert word_timing is True
     assert merged == "[00:10.00]<00:10.05>alpha <00:10.60>beta  <00:11.00>"
     # stripping tags reproduces the curated line text byte-for-byte
@@ -1131,6 +1131,6 @@ def test_merge_nonmonotonic_aligner_tags_leave_line_plain():
         "[00:10.05]<00:12.00>alpha <00:10.5>beta <00:13.0>",  # decreasing starts
         "[00:10.05]<00:10.05>alpha <00:10.6>beta <00:10.2>",  # end < last start
     ):
-        merged, word_timing = merge_lrclib_word_tags(synced, aligned)
+        merged, word_timing, _elig, _merged = merge_lrclib_word_tags(synced, aligned)
         assert word_timing is False, aligned
         assert merged == synced

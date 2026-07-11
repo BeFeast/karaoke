@@ -64,6 +64,14 @@ _log = logging.getLogger(__name__)
 # Module-level LRCLIB client so its in-process cache survives across jobs.
 _LYRICS_SOURCE = LyricsSource()
 
+# Word-merge coverage gate (#237): when the force-aligner fit fewer than this
+# fraction of a curated record's lines (with at least this many candidate
+# lines, so the ratio is meaningful), the record's TEXT does not match the
+# audio — a different performance/edit that slipped the ±5 s duration gate —
+# and the whole record is rejected in favor of the Whisper ASR floor.
+_ALIGN_COVERAGE_MIN_RATIO = 0.3
+_ALIGN_COVERAGE_MIN_LINES = 10
+
 # yt-dlp player-client chain (mirrors scribe's downloader; android_vr is the
 # token-free workhorse, web clients need the EJS/deno JS solver in the image).
 _PLAYER_CLIENTS = "mweb,web_safari,android_vr,web_embedded"
@@ -500,6 +508,7 @@ def _resolve_lyrics(
     lyrics_txt = exports_dir / "lyrics.txt"
     lyrics_lrc = exports_dir / "lyrics.lrc"
 
+    align_coverage_reject: str | None = None
     if lyrics.synced_lrc:
         # Curated LRCLIB synced timing wins, but it is line-level only. Splice
         # the GPU force-aligner's word ``<>`` tags into each line (#222) while
@@ -507,22 +516,41 @@ def _resolve_lyrics(
         # ``lrclib_synced``. Tolerant: a missing/garbage aligned LRC or any
         # unmergeable line degrades to the plain LRCLIB line exactly.
         aligned = _read_aligned_lrc(aligned_lrc_path)
-        merged_lrc, word_timing = merge_lrclib_word_tags(lyrics.synced_lrc, aligned)
-        lyrics_lrc.write_text(merged_lrc, encoding="utf-8")
-        # Also keep a plain-text export so the inline/share text path renders.
-        plain_text = lyrics.plain or lrc_to_plain(lyrics.synced_lrc)
-        lyrics_txt.write_text(plain_text, encoding="utf-8")
-        prov: dict[str, object] = {
-            "lyrics_source": SOURCE_LRCLIB_SYNCED,
-            "synced": True,
-            "instrumental": False,
-            "lrc_written": True,
-        }
-        if word_timing:
-            prov["lyrics_word_timing"] = SOURCE_FORCED_ALIGNED
-        return prov
+        merged_lrc, word_timing, eligible, merged_n = merge_lrclib_word_tags(
+            lyrics.synced_lrc, aligned
+        )
+        # Match-quality gate (#237): the aligner tried to fit the curated text
+        # onto the actual vocal and almost nothing landed — the record is the
+        # wrong text for this audio (a different performance/edit that slipped
+        # the duration gate). Fall through to the Whisper ASR floor instead of
+        # shipping lyrics that do not match what is sung. Only when alignment
+        # actually ran (aligned present) and the record is big enough for the
+        # ratio to mean anything.
+        if aligned and eligible >= _ALIGN_COVERAGE_MIN_LINES:
+            coverage = merged_n / eligible
+            if coverage < _ALIGN_COVERAGE_MIN_RATIO:
+                align_coverage_reject = f"align_coverage_low ({merged_n}/{eligible})"
+                _log.warning(
+                    "rejecting lrclib_synced: word-merge coverage %s below %.0f%%",
+                    align_coverage_reject,
+                    _ALIGN_COVERAGE_MIN_RATIO * 100,
+                )
+        if align_coverage_reject is None:
+            lyrics_lrc.write_text(merged_lrc, encoding="utf-8")
+            # Also keep a plain-text export so the inline/share text path renders.
+            plain_text = lyrics.plain or lrc_to_plain(lyrics.synced_lrc)
+            lyrics_txt.write_text(plain_text, encoding="utf-8")
+            prov: dict[str, object] = {
+                "lyrics_source": SOURCE_LRCLIB_SYNCED,
+                "synced": True,
+                "instrumental": False,
+                "lrc_written": True,
+            }
+            if word_timing:
+                prov["lyrics_word_timing"] = SOURCE_FORCED_ALIGNED
+            return prov
 
-    if lyrics.plain:
+    if lyrics.plain and align_coverage_reject is None:
         # Always keep the LRCLIB plain text as the plain-text export.
         lyrics_txt.write_text(lyrics.plain, encoding="utf-8")
         # Promote to a synced export if the GPU force-aligned the plain text
@@ -597,6 +625,8 @@ def _resolve_lyrics(
         }
     if lyrics.rejected:
         prov["lyrics_lrclib_rejected"] = lyrics.rejected
+    elif align_coverage_reject:
+        prov["lyrics_lrclib_rejected"] = align_coverage_reject
     return prov
 
 
