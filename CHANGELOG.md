@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.36.0] - 2026-07-11
+
+_Bump: minor_
+
+- fix(gpu): VAD veto for force-aligned lines — chunked Silero VAD, per-word-span overlap (r9) (#247) (#248)
+
 ## [v0.35.0] - 2026-07-11
 
 _Bump: minor_
