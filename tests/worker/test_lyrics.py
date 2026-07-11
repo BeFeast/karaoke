@@ -16,7 +16,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from karaoke.worker.lyrics import LyricsSource, whisper_segments_to_lrc
+from karaoke.worker.lyrics import (
+    LyricsSource,
+    lrc_to_plain,
+    whisper_segments_to_lrc,
+)
 
 SYNCED_BODY = "[00:12.00]line one\n[00:15.50]line two"
 PLAIN_BODY = "line one\nline two"
@@ -474,3 +478,163 @@ def test_segments_to_lrc_empty_inputs():
     assert whisper_segments_to_lrc(None) == ""
     assert whisper_segments_to_lrc([]) == ""
     assert whisper_segments_to_lrc([{"start": 1.0, "text": "  "}]) == ""
+
+
+# ---------------------------------------------------------------------------
+# Enhanced LRC word tags + mega-segment splitting (#219)
+# ---------------------------------------------------------------------------
+def test_segments_to_lrc_emits_word_tags():
+    """A segment with per-word timings → one Enhanced-LRC line: inline
+    ``<start>word`` tags plus a trailing ``<end>`` sung-end tag. The
+    faster-whisper leading space in ``word`` is stripped."""
+    segments = [
+        {
+            "start": 12.0,
+            "end": 15.5,
+            "text": "hello world",
+            "words": [
+                {"start": 12.0, "end": 12.8, "word": " hello", "probability": 0.9},
+                {"start": 13.0, "end": 15.5, "word": " world", "probability": 0.8},
+            ],
+        }
+    ]
+    assert whisper_segments_to_lrc(segments) == (
+        "[00:12.00]<00:12.00>hello <00:13.00>world <00:15.50>"
+    )
+
+
+def test_segments_to_lrc_splits_mega_segment_on_word_gaps():
+    """A degenerate segment spanning 40 s → 190 s of four tight word clusters
+    separated by long silences splits into one line per cluster: each cluster is
+    < 12 s while the whole segment is > 12 s (bug 2)."""
+
+    def cluster(base: int) -> list[dict]:
+        # Four words 2 s apart, each 1.8 s long → 0.2 s intra-cluster gaps,
+        # a 7.8 s cluster span; the inter-cluster silences are > 1 s.
+        return [
+            {"start": base + 2 * i, "end": base + 2 * i + 1.8, "word": f" w{base}_{i}"}
+            for i in range(4)
+        ]
+
+    words = cluster(40) + cluster(90) + cluster(140) + cluster(182)
+    # Pin the reported 40 → 190 s span exactly at the edges.
+    words[0]["start"] = 40.0
+    words[-1]["end"] = 190.0
+    seg = {"start": 40.0, "end": 190.0, "text": "forty words", "words": words}
+
+    lines = whisper_segments_to_lrc([seg]).split("\n")
+    assert len(lines) == 4
+    # Each sub-line's line tag is its cluster's first-word start.
+    assert [ln[:10] for ln in lines] == [
+        "[00:40.00]",
+        "[01:30.00]",
+        "[02:20.00]",
+        "[03:02.00]",
+    ]
+    # First line carries word tags + the cluster's sung-end tag.
+    assert lines[0] == (
+        "[00:40.00]<00:40.00>w40_0 <00:42.00>w40_1 "
+        "<00:44.00>w40_2 <00:46.00>w40_3 <00:47.80>"
+    )
+    # Last line ends on the pinned 190 s (03:10.00) sung-end tag.
+    assert lines[3].endswith("<03:10.00>")
+
+
+def test_segments_to_lrc_long_segment_without_wide_gaps_stays_one_line():
+    """Over-long span but every inter-word gap < 1 s → nothing to split on, so a
+    single (long) Enhanced-LRC line is emitted (split precondition unmet)."""
+    words = [{"start": float(i), "end": i + 0.9, "word": f" x{i}"} for i in range(16)]
+    seg = {"start": 0.0, "end": 15.9, "text": "long", "words": words}
+
+    body = whisper_segments_to_lrc([seg])
+    assert "\n" not in body  # 15.9 s span, but no gap >= 1 s to break on
+    assert body.startswith("[00:00.00]<00:00.00>x0 ")
+    assert body.endswith("<00:15.90>")
+
+
+def test_segments_to_lrc_short_segment_not_split_despite_wide_gaps():
+    """A wide gap alone never splits: a <= 12 s segment stays one line even with
+    a multi-second inter-word silence."""
+    seg = {
+        "start": 0.0,
+        "end": 6.0,
+        "text": "a b",
+        "words": [
+            {"start": 0.0, "end": 1.0, "word": " a"},
+            {"start": 5.0, "end": 6.0, "word": " b"},  # 4 s gap, span only 6 s
+        ],
+    }
+    assert whisper_segments_to_lrc([seg]) == (
+        "[00:00.00]<00:00.00>a <00:05.00>b <00:06.00>"
+    )
+
+
+def test_segments_to_lrc_mixed_word_and_wordless_segments():
+    """Word-tagged and plain lines coexist in one body (mixed files are valid),
+    and plain-text derivation drops both tag kinds."""
+    segments = [
+        {"start": 0.0, "end": 2.0, "text": "no words here"},  # word-less → plain
+        {
+            "start": 10.0,
+            "end": 12.0,
+            "text": "with words",
+            "words": [
+                {"start": 10.0, "end": 10.5, "word": " with"},
+                {"start": 11.0, "end": 12.0, "word": " words"},
+            ],
+        },
+    ]
+    body = whisper_segments_to_lrc(segments)
+    assert body == (
+        "[00:00.00]no words here\n"
+        "[00:10.00]<00:10.00>with <00:11.00>words <00:12.00>"
+    )
+    assert lrc_to_plain(body) == "no words here\nwith words"
+
+
+def test_segments_to_lrc_malformed_words_fall_back_to_plain_line():
+    """Any malformed ``words`` entry demotes the whole segment to today's plain
+    line at ``seg["start"]`` rather than raising."""
+    bad_word_sets = [
+        [{"start": 5.0, "word": " a"}],                      # missing "end"
+        [{"start": "x", "end": 6.0, "word": " a"}],          # non-numeric start
+        [{"start": 5.0, "end": 6.0, "word": "   "}],         # empty word text
+        [{"start": 5.0, "end": 6.0, "word": " a"}, "nope"],  # non-dict entry
+        [],                                                   # empty words list
+        "not a list",                                        # words not a list
+    ]
+    for words in bad_word_sets:
+        seg = {"start": 5.0, "end": 6.0, "text": "fallback", "words": words}
+        assert whisper_segments_to_lrc([seg]) == "[00:05.00]fallback", words
+
+
+def test_segments_to_lrc_malformed_words_without_start_are_skipped():
+    """Malformed words demote to the word-less path, which then skips the
+    segment entirely when it also lacks a numeric ``start`` (today's rule)."""
+    seg = {"end": 6.0, "text": "gone", "words": [{"bad": 1}]}
+    assert whisper_segments_to_lrc([seg]) == ""
+
+
+def test_segments_to_lrc_word_tags_clamp_negative_times():
+    """Negative word/segment times clamp to zero in both line and word tags."""
+    seg = {
+        "start": -1.0,
+        "end": 2.0,
+        "text": "clamp",
+        "words": [
+            {"start": -0.5, "end": 0.5, "word": " clamp"},
+            {"start": 1.0, "end": 2.0, "word": " me"},
+        ],
+    }
+    assert whisper_segments_to_lrc([seg]) == (
+        "[00:00.00]<00:00.00>clamp <00:01.00>me <00:02.00>"
+    )
+
+
+def test_lrc_to_plain_strips_word_tags():
+    """``lrc_to_plain`` removes Enhanced-LRC ``<..>`` word tags as well as
+    ``[..]`` line tags, for both pure and mixed bodies."""
+    enhanced = "[00:12.00]<00:12.00>hello <00:13.00>world <00:15.50>"
+    assert lrc_to_plain(enhanced) == "hello world"
+    mixed = "[00:00.00]plain line\n" + enhanced
+    assert lrc_to_plain(mixed) == "plain line\nhello world"

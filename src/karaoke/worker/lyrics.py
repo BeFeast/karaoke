@@ -59,6 +59,16 @@ _DURATION_REJECT_S = 5
 # Matches an LRC line timestamp tag, e.g. "[01:23.45]" / "[01:23]", including
 # repeated tags on one line. Used to derive plain text from a synced LRC body.
 LRC_TIMESTAMP_RE = re.compile(r"\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]")
+# Matches an Enhanced-LRC inline *word* tag, e.g. "<01:23.45>" — same numeric
+# shape as the line tag but angle-bracketed. Stripped alongside line tags when
+# deriving plain text (a word-tagged line must reduce to just its words).
+LRC_WORD_TAG_RE = re.compile(r"<\d{1,2}:\d{2}(?:[.:]\d{1,3})?>")
+
+# Enhanced-LRC word-tag emission thresholds (#219). A segment whose words span
+# more than this is split into sub-lines at inter-word gaps (see
+# :func:`whisper_segments_to_lrc`); only gaps at least this wide are split on.
+_MAX_LINE_SPAN_S = 12.0
+_MIN_SPLIT_GAP_S = 1.0
 
 # Lyrics-source provenance values recorded in metadata.json.
 SOURCE_LRCLIB_SYNCED = "lrclib_synced"
@@ -76,48 +86,160 @@ SOURCE_INSTRUMENTAL = "instrumental"
 
 
 def whisper_segments_to_lrc(segments: list[dict[str, Any]] | None) -> str:
-    """Build an approximate line-level LRC from Whisper segment timestamps (#145).
+    """Build a line-level LRC from Whisper segment timestamps (#145, #219).
 
     ``segments`` is the ``"segments"`` list of the GPU job's ``lyrics.json``
-    (faster-whisper output): ``{"start": float, "end": float, "text": str, ...}``
-    per entry. One LRC line is emitted per segment, tagged ``[mm:ss.xx]`` with
-    the segment *start* time — approximate but good enough for synced highlight
-    on tracks where LRCLIB has nothing.
+    (faster-whisper output). Each entry is
+    ``{"start": float, "end": float, "text": str, "words": [...], ...}`` where
+    each word is ``{"start": float, "end": float, "word": str, ...}``.
 
-    Pure + tolerant by design: segments are sorted by start time (out-of-order
-    input yields stable output), entries that are not dicts, carry no numeric
-    ``start``, or have empty/whitespace text are skipped, and a negative start
-    clamps to zero. Returns ``""`` when nothing usable remains — the caller
-    then keeps the untimed ASR floor.
+    When a segment carries usable per-word timestamps we emit an **Enhanced
+    LRC** line — the line tag plus one inline ``<mm:ss.xx>`` start tag before
+    every word and one trailing ``<mm:ss.xx>`` sung-end tag::
+
+        [mm:ss.xx]<mm:ss.xx>word <mm:ss.xx>word … <mm:ss.xx>
+
+    so the SPA can wipe word-by-word instead of interpolating linearly (bug 1).
+    A degenerate mega-segment (faster-whisper occasionally fuses tens of
+    seconds into one segment) that spans more than ``_MAX_LINE_SPAN_S`` is
+    split into several lines at its largest inter-word gaps
+    (``>= _MIN_SPLIT_GAP_S``), greedily largest-first, until every sub-line is
+    short enough or no wide-enough gap remains (bug 2). Each sub-line's ``[..]``
+    tag is its first word's start.
+
+    A segment **without** usable words falls back to today's behavior: one
+    plain line (no ``<>`` tags) tagged ``[mm:ss.xx]`` with the segment *start* —
+    mixed word-tagged and plain lines in one body are valid by contract.
+
+    Pure + tolerant by design: emitted lines are sorted by start time
+    (out-of-order input yields stable output); entries that are not dicts or
+    have empty/whitespace text are skipped; a word-less segment with no numeric
+    ``start`` is skipped; malformed ``words`` (non-dict entry, missing keys,
+    non-numeric time, empty word text) demote the whole segment to the
+    word-less path rather than raising; negative times clamp to zero. Returns
+    ``""`` when nothing usable remains — the caller then keeps the untimed ASR
+    floor.
     """
-    timed: list[tuple[float, str]] = []
+    lines: list[tuple[float, str]] = []
     for seg in segments or []:
         if not isinstance(seg, dict):
             continue
         text = str(seg.get("text") or "").strip()
         if not text:
             continue
+        words = _parse_words(seg.get("words"))
+        if words is not None:
+            for group in _split_word_groups(words):
+                lines.append(_enhanced_line(group))
+            continue
         try:
             start = float(seg["start"])
         except (KeyError, TypeError, ValueError):
             continue
-        timed.append((max(start, 0.0), text))
-    timed.sort(key=lambda item: item[0])
-    return "\n".join(f"{_fmt_lrc_timestamp(start)}{text}" for start, text in timed)
+        start = max(start, 0.0)
+        lines.append((start, f"{_fmt_lrc_timestamp(start)}{text}"))
+    lines.sort(key=lambda item: item[0])
+    return "\n".join(body for _, body in lines)
 
 
-def _fmt_lrc_timestamp(seconds: float) -> str:
-    """Format ``seconds`` as an LRC ``[mm:ss.xx]`` timestamp tag."""
+def _parse_words(raw: Any) -> list[tuple[float, float, str]] | None:
+    """Validate a segment's ``words`` into ``(start, end, text)`` tuples.
+
+    Returns ``None`` — signalling the caller to fall back to the word-less
+    path — when ``raw`` is not a non-empty list or *any* entry is malformed
+    (not a dict, missing/non-numeric ``start``/``end``, or empty ``word`` text
+    once its faster-whisper leading space is stripped). All-or-nothing on
+    purpose: a partially-parsed segment would emit a line with holes.
+    """
+    if not isinstance(raw, list) or not raw:
+        return None
+    parsed: list[tuple[float, float, str]] = []
+    for word in raw:
+        if not isinstance(word, dict):
+            return None
+        try:
+            start = float(word["start"])
+            end = float(word["end"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        text = str(word.get("word") or "").strip()
+        if not text:
+            return None
+        parsed.append((start, end, text))
+    return parsed
+
+
+def _split_word_groups(
+    words: list[tuple[float, float, str]],
+) -> list[list[tuple[float, float, str]]]:
+    """Split ``words`` into sub-line groups on the widest inter-word gaps.
+
+    Only over-long groups (span ``> _MAX_LINE_SPAN_S``) are eligible; each pass
+    splits the single widest gap ``>= _MIN_SPLIT_GAP_S`` found across them,
+    greedily largest-first, until no eligible gap remains. Word order is
+    preserved, so the resulting groups stay in temporal order.
+    """
+    groups = [words]
+    while True:
+        best: tuple[float, int, int] | None = None  # (gap, group_index, word_index)
+        for gi, group in enumerate(groups):
+            if group[-1][1] - group[0][0] <= _MAX_LINE_SPAN_S:
+                continue
+            for wi in range(len(group) - 1):
+                gap = group[wi + 1][0] - group[wi][1]
+                if gap < _MIN_SPLIT_GAP_S:
+                    continue
+                if best is None or gap > best[0]:
+                    best = (gap, gi, wi)
+        if best is None:
+            break
+        _, gi, wi = best
+        group = groups[gi]
+        groups[gi : gi + 1] = [group[: wi + 1], group[wi + 1 :]]
+    return groups
+
+
+def _enhanced_line(group: list[tuple[float, float, str]]) -> tuple[float, str]:
+    """Render one Enhanced-LRC line from a word group → ``(line_start, body)``.
+
+    The line tag and the first word tag share the group's first-word start; a
+    trailing ``<..>`` end tag carries the last word's end time.
+    """
+    line_start = max(group[0][0], 0.0)
+    rendered = " ".join(
+        f"{_fmt_lrc_word_tag(start)}{text}" for start, _end, text in group
+    )
+    end_tag = _fmt_lrc_word_tag(group[-1][1])
+    return line_start, f"{_fmt_lrc_timestamp(line_start)}{rendered} {end_tag}"
+
+
+def _fmt_lrc_timestamp(seconds: float, open_b: str = "[", close_b: str = "]") -> str:
+    """Format ``seconds`` as an LRC timestamp tag ``mm:ss.xx`` (negatives clamp).
+
+    Defaults to a line tag ``[mm:ss.xx]``; pass ``"<", ">"`` for an Enhanced-LRC
+    inline word tag ``<mm:ss.xx>``. Reused for both so line and word tags stay
+    byte-identical in time formatting — only the surrounding brackets differ.
+    """
+    seconds = max(seconds, 0.0)
     minutes = int(seconds // 60)
     rem = seconds - minutes * 60
-    return f"[{minutes:02d}:{rem:05.2f}]"
+    return f"{open_b}{minutes:02d}:{rem:05.2f}{close_b}"
+
+
+def _fmt_lrc_word_tag(seconds: float) -> str:
+    """Format ``seconds`` as an Enhanced-LRC inline word tag ``<mm:ss.xx>``."""
+    return _fmt_lrc_timestamp(seconds, "<", ">")
 
 
 def lrc_to_plain(lrc: str) -> str:
-    """Strip ``[mm:ss.xx]`` timestamps from an LRC body, keeping non-empty lines."""
+    """Strip LRC timestamp tags from a body, keeping non-empty lines.
+
+    Removes both ``[mm:ss.xx]`` line tags and Enhanced-LRC ``<mm:ss.xx>`` inline
+    word tags (#219), so a word-tagged line reduces to just its words.
+    """
     out: list[str] = []
     for line in lrc.splitlines():
-        stripped = LRC_TIMESTAMP_RE.sub("", line).strip()
+        stripped = LRC_WORD_TAG_RE.sub("", LRC_TIMESTAMP_RE.sub("", line)).strip()
         if stripped:
             out.append(stripped)
     return "\n".join(out)
