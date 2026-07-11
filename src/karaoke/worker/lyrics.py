@@ -64,12 +64,23 @@ LRC_TIMESTAMP_RE = re.compile(r"\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]")
 # shape as the line tag but angle-bracketed. Stripped alongside line tags when
 # deriving plain text (a word-tagged line must reduce to just its words).
 LRC_WORD_TAG_RE = re.compile(r"<\d{1,2}:\d{2}(?:[.:]\d{1,3})?>")
+# Capturing variants of the line/word tag patterns, for reading a tag's time
+# (mm/ss/frac groups). Kept separate from the strip patterns above so those
+# stay bare non-capturing for ``re.sub`` speed.
+_LRC_TAG_CAP_RE = re.compile(r"\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]")
+_LRC_WORD_TAG_CAP_RE = re.compile(r"<(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?>")
 
 # Enhanced-LRC word-tag emission thresholds (#219). A segment whose words span
 # more than this is split into sub-lines at inter-word gaps (see
 # :func:`whisper_segments_to_lrc`); only gaps at least this wide are split on.
 _MAX_LINE_SPAN_S = 12.0
 _MIN_SPLIT_GAP_S = 1.0
+
+# Max drift (seconds) between an aligner line's start and the curated LRCLIB
+# line tag before we distrust the alignment and leave that line plain (#222).
+# A wider gap means the aligner squeezed the words somewhere they don't belong;
+# curated LRCLIB line timing must win over a bad word alignment.
+_WORD_MERGE_DRIFT_S = 2.0
 
 # Lyrics-source provenance values recorded in metadata.json.
 SOURCE_LRCLIB_SYNCED = "lrclib_synced"
@@ -250,6 +261,213 @@ def lrc_to_plain(lrc: str) -> str:
         if stripped:
             out.append(stripped)
     return "\n".join(out)
+
+
+def _tag_seconds(match: re.Match[str]) -> float:
+    """Convert a captured ``[..]``/``<..>`` timestamp tag to seconds.
+
+    Normalizes the fractional part regardless of 2- or 3-digit precision
+    (".45" -> 0.45s, ".456" -> 0.456s). Expects the capturing patterns
+    (:data:`_LRC_TAG_CAP_RE` / :data:`_LRC_WORD_TAG_CAP_RE`).
+    """
+    minutes = int(match.group(1))
+    seconds = int(match.group(2))
+    frac_raw = match.group(3) or "0"
+    frac = int(frac_raw) / (10 ** len(frac_raw))
+    return minutes * 60 + seconds + frac
+
+
+@dataclass(frozen=True, slots=True)
+class _AlignerLine:
+    """One parsed aligner Enhanced-LRC line, for the LRCLIB word-tag merge.
+
+    * ``start`` — the ``[..]`` line-tag time (== the first word start).
+    * ``norm`` — whitespace-normalized plain text, for order-preserving line
+      matching against the LRCLIB lines.
+    * ``word_starts`` — inline ``<..>`` word-start times, in order.
+    * ``end`` — the trailing ``<..>`` sung-end time, or ``None`` when the line
+      is not a well-formed Enhanced line (no usable word timing to merge).
+    """
+
+    start: float
+    norm: str
+    word_starts: tuple[float, ...]
+    end: float | None
+
+
+def _parse_aligner_lines(aligned_lrc: str) -> list[_AlignerLine]:
+    """Parse a GPU force-aligner Enhanced LRC into :class:`_AlignerLine` entries.
+
+    Only lines with a leading ``[..]`` line tag are kept, in file order (the
+    aligner emits input-line order, low-confidence lines dropped — #149). A line
+    is treated as carrying word timing only when it is a well-formed Enhanced
+    line: ``[start]<w0>w0 … <wN>wN <end>`` with a trailing *bare* end tag. Any
+    other shape parses with ``word_starts=()``/``end=None`` (no word timing).
+    """
+    parsed: list[_AlignerLine] = []
+    for raw in aligned_lrc.splitlines():
+        tag = _LRC_TAG_CAP_RE.match(raw)
+        if tag is None:
+            continue
+        body = raw[tag.end() :]
+        norm = " ".join(_LRC_WORD_TAG_CAP_RE.sub("", body).split())
+        if not norm:
+            continue
+        word_tags = list(_LRC_WORD_TAG_CAP_RE.finditer(body))
+        word_starts: tuple[float, ...] = ()
+        end: float | None = None
+        # A well-formed Enhanced line ends with a bare ``<..>`` sung-end tag
+        # (nothing after it); the tags before it are the word starts. Times
+        # must be non-decreasing with the end at/after the last start —
+        # nonmonotonic tags would surface as negative word durations downstream.
+        if len(word_tags) >= 2 and not body[word_tags[-1].end() :].strip():
+            starts = tuple(_tag_seconds(t) for t in word_tags[:-1])
+            last_tag = _tag_seconds(word_tags[-1])
+            monotonic = all(a <= b for a, b in zip(starts, starts[1:], strict=False)) and (
+                not starts or last_tag >= starts[-1]
+            )
+            if monotonic:
+                word_starts = starts
+                end = last_tag
+        parsed.append(
+            _AlignerLine(start=_tag_seconds(tag), norm=norm, word_starts=word_starts, end=end)
+        )
+    return parsed
+
+
+def _splice_word_tags(
+    prefix: str, text: str, word_starts: tuple[float, ...], end: float | None
+) -> str:
+    """Insert ``<..>`` word tags into ``text`` at word boundaries, byte-preserving.
+
+    ``prefix`` is the untouched LRCLIB ``[..]`` line tag; ``text`` is the rest of
+    the raw line verbatim. One ``<start>`` tag is inserted immediately before
+    each whitespace-delimited word (counts already checked equal by the caller),
+    the original inter-word whitespace is preserved exactly, and a trailing
+    ``<end>`` sung-end tag is appended — so stripping all tags reproduces the
+    LRCLIB line text byte-for-byte.
+    """
+    parts = [prefix]
+    last = 0
+    for i, m in enumerate(re.finditer(r"\S+", text)):
+        parts.append(text[last : m.start()])
+        parts.append(_fmt_lrc_word_tag(word_starts[i]))
+        parts.append(m.group())
+        last = m.end()
+    # Keep the original trailing whitespace verbatim (byte-preserving contract);
+    # the sung-end tag goes after it, with a separating space only when the
+    # line doesn't already end in whitespace.
+    suffix = text[last:]
+    parts.append(suffix)
+    if end is not None:
+        sep = "" if suffix.endswith((" ", "\t")) else " "
+        parts.append(f"{sep}{_fmt_lrc_word_tag(end)}")
+    return "".join(parts)
+
+
+def merge_lrclib_word_tags(
+    synced_lrc: str,
+    aligned_lrc: str | None,
+    *,
+    drift_tolerance_s: float = _WORD_MERGE_DRIFT_S,
+) -> tuple[str, bool]:
+    """Overlay aligner word timings onto a curated LRCLIB synced LRC (#222).
+
+    LRCLIB's synced LRC carries authoritative, human-curated line text + line
+    timestamps but no word timing. ``aligned_lrc`` is the GPU force-aligner's
+    Enhanced LRC for the *same* text (the coordinator sends
+    ``lrc_to_plain(synced_lrc)`` as the align text): line tags + inline
+    ``<mm:ss.xx>`` word tags, in input-line order, with low-confidence lines
+    dropped (#149).
+
+    We walk the LRCLIB lines and, for each, splice the matching aligner line's
+    word ``<>`` tags between the LRCLIB words — keeping the LRCLIB line tag and
+    text byte-for-byte. A line is left plain (LRCLIB verbatim) when:
+
+    * the aligner dropped it (no matching aligner line, in order), or
+    * the aligner emitted no word tags for it (token drift), or
+    * its word count differs from the aligner's (word-count drift), or
+    * the aligner start drifts more than ``drift_tolerance_s`` from the curated
+      LRCLIB line tag — a bad alignment must not fight curated timing.
+
+    Matching is by line order with a text guard: the aligner output is a strict
+    *subsequence* of the LRCLIB lines, so an unmatched LRCLIB line keeps the
+    aligner cursor for the next line (tolerating dropped lines). Multi-tag lines
+    (``[t1][t2]text``) and bare line tags (instrumental breaks) pass through
+    untouched.
+
+    Pure + total: any parse quirk leaves the affected line plain. Returns
+    ``(merged_lrc, merged_any)`` — when nothing merged, ``merged_lrc`` is
+    ``synced_lrc`` verbatim (byte-exact fallback) and ``merged_any`` is False.
+    """
+    if not aligned_lrc or not aligned_lrc.strip():
+        return synced_lrc, False
+    aligner = _parse_aligner_lines(aligned_lrc)
+    raw_lines = synced_lrc.splitlines()
+
+    # Pre-parse every LRCLIB line once: (tag_match, text, norm, tag_times).
+    # tag_times holds ALL leading tag times (multi-tag lines have several).
+    parsed: list[tuple[re.Match[str] | None, str, str, list[float]]] = []
+    for raw in raw_lines:
+        tag = _LRC_TAG_CAP_RE.match(raw)
+        text = raw[tag.end() :] if tag is not None else ""
+        times: list[float] = []
+        rest = text
+        if tag is not None:
+            times.append(_tag_seconds(tag))
+            while (m := _LRC_TAG_CAP_RE.match(rest)) is not None:
+                times.append(_tag_seconds(m))
+                rest = rest[m.end() :]
+        norm = " ".join(_LRC_WORD_TAG_CAP_RE.sub("", rest).split())
+        parsed.append((tag, text, norm, times))
+
+    out: list[str] = []
+    cursor = 0
+    merged_any = False
+    for i, raw in enumerate(raw_lines):
+        tag, text, norm, times = parsed[i]
+        # Lines without a tag or without text pass through and do not consume
+        # the aligner cursor — they had no aligner counterpart.
+        if tag is None or not norm:
+            out.append(raw)
+            continue
+        if cursor >= len(aligner) or aligner[cursor].norm != norm:
+            out.append(raw)
+            continue
+        al = aligner[cursor]
+        drift_ok = any(abs(al.start - t) <= drift_tolerance_s for t in times)
+        # A text match outside tolerance can mean the aligner entry belongs to
+        # a LATER occurrence of a repeated line (this one was dropped, #149).
+        # Defer consuming it only when a later curated line with the same text
+        # sits within tolerance of the entry; otherwise consume it here as an
+        # ordinary drift-reject (line stays plain either way).
+        if not drift_ok:
+            defer = any(
+                p_norm == norm
+                and any(abs(al.start - t) <= drift_tolerance_s for t in p_times)
+                for _, _, p_norm, p_times in parsed[i + 1 :]
+            )
+            if not defer:
+                cursor += 1
+            out.append(raw)
+            continue
+        cursor += 1
+        # Multi-tag lines ([t1][t2]text) consume their aligner entry (their
+        # text was sent to the aligner) but stay plain — repeated-tag timing
+        # is ambiguous.
+        words = re.findall(r"\S+", text)
+        if len(times) == 1 and al.word_starts and len(al.word_starts) == len(words):
+            out.append(_splice_word_tags(raw[: tag.end()], text, al.word_starts, al.end))
+            merged_any = True
+            continue
+        out.append(raw)
+    if not merged_any:
+        return synced_lrc, False
+    merged = "\n".join(out)
+    # Preserve the source's final newline (byte-preserving outside merged lines).
+    if synced_lrc.endswith("\n"):
+        merged += "\n"
+    return merged, True
 
 
 @dataclass(frozen=True, slots=True)

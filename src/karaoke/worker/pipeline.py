@@ -55,6 +55,7 @@ from karaoke.worker.lyrics import (
     LyricsResult,
     LyricsSource,
     lrc_to_plain,
+    merge_lrclib_word_tags,
     whisper_segments_to_lrc,
 )
 
@@ -449,6 +450,9 @@ def _resolve_lyrics(
 
     Precedence (highest first):
       1. LRCLIB synced        → write ``exports/lyrics.lrc`` (+ ``lyrics.txt``).
+         The curated line text + line tags stay authoritative; when the GPU
+         force-aligned the same text, its word ``<>`` tags are spliced into each
+         line (#222) and ``"lyrics_word_timing": "forced_aligned"`` is recorded.
       2. LRCLIB plain + force-aligned LRC → write the GPU-synthesized
          ``exports/lyrics.lrc`` (provenance ``forced_aligned``) + the LRCLIB
          plain text as ``lyrics.txt``.
@@ -467,12 +471,13 @@ def _resolve_lyrics(
          highlight.
 
     ``aligned_lrc_path`` is the optional GPU-produced force-aligned LRC (#55).
-    It is only consulted in the plain-only and rejected-text branches — synced
-    LRCLIB always wins, and we never force-align when there's nothing to align.
-    Known limitation of the rejected-text branch: the canonical text may carry
-    lines absent from this audio edit; the handler drops low-confidence lines
-    (per-line aligner scores), and a wholly-garbage alignment is rejected by
-    :func:`_read_aligned_lrc`, falling to the Whisper ASR floor.
+    In the synced branch it supplies word ``<>`` tags merged into the curated
+    LRCLIB lines (#222); in the plain-only and rejected-text branches it becomes
+    the synced export outright. Known limitation of the rejected-text branch:
+    the canonical text may carry lines absent from this audio edit; the handler
+    drops low-confidence lines (per-line aligner scores), and a wholly-garbage
+    alignment is rejected by :func:`_read_aligned_lrc`, falling to the Whisper
+    ASR floor.
 
     ``whisper_lyrics_json`` is the GPU job's faster-whisper ``lyrics.json``
     (segment timestamps). It is only consulted in the floor branch; a
@@ -488,22 +493,34 @@ def _resolve_lyrics(
     When the LRCLIB lookup *had* a record but dropped it (duration hard-reject,
     #148) and no usable aligned LRC came back, the floor-branch mapping
     additionally carries the reason under ``"lyrics_lrclib_rejected"`` for
-    ``metadata.json`` debuggability.
+    ``metadata.json`` debuggability. The synced branch adds
+    ``"lyrics_word_timing": "forced_aligned"`` when the word-tag merge (#222)
+    landed on at least one line.
     """
     lyrics_txt = exports_dir / "lyrics.txt"
     lyrics_lrc = exports_dir / "lyrics.lrc"
 
     if lyrics.synced_lrc:
-        lyrics_lrc.write_text(lyrics.synced_lrc, encoding="utf-8")
+        # Curated LRCLIB synced timing wins, but it is line-level only. Splice
+        # the GPU force-aligner's word ``<>`` tags into each line (#222) while
+        # keeping LRCLIB's line text + tags byte-identical; provenance stays
+        # ``lrclib_synced``. Tolerant: a missing/garbage aligned LRC or any
+        # unmergeable line degrades to the plain LRCLIB line exactly.
+        aligned = _read_aligned_lrc(aligned_lrc_path)
+        merged_lrc, word_timing = merge_lrclib_word_tags(lyrics.synced_lrc, aligned)
+        lyrics_lrc.write_text(merged_lrc, encoding="utf-8")
         # Also keep a plain-text export so the inline/share text path renders.
         plain_text = lyrics.plain or lrc_to_plain(lyrics.synced_lrc)
         lyrics_txt.write_text(plain_text, encoding="utf-8")
-        return {
+        prov: dict[str, object] = {
             "lyrics_source": SOURCE_LRCLIB_SYNCED,
             "synced": True,
             "instrumental": False,
             "lrc_written": True,
         }
+        if word_timing:
+            prov["lyrics_word_timing"] = SOURCE_FORCED_ALIGNED
+        return prov
 
     if lyrics.plain:
         # Always keep the LRCLIB plain text as the plain-text export.
@@ -565,7 +582,7 @@ def _resolve_lyrics(
     asr_lrc = whisper_segments_to_lrc(_read_whisper_segments(whisper_lyrics_json))
     if asr_lrc:
         lyrics_lrc.write_text(asr_lrc, encoding="utf-8")
-        prov: dict[str, object] = {
+        prov = {
             "lyrics_source": SOURCE_WHISPER_ASR_SYNCED,
             "synced": True,
             "instrumental": False,
@@ -761,15 +778,22 @@ async def run_real_job(
             album=source_meta.get("album"),
             duration=source_meta.get("duration"),
         )
-        # Force-align when LRCLIB returned plain text but NO synced LRC
-        # (synced already wins; instrumental/miss have nothing to align), or
-        # when the duration hard-reject (#148) salvaged the record's text
-        # (#149): the words fit, only the timings belonged to the wrong edit,
-        # so aligning them against OUR vocal stem yields right text + right
-        # timings.
+        # Send text to force-align inside the same GPU window whenever LRCLIB
+        # gave us words to time against OUR vocal stem:
+        #   * synced LRC (#222) — curated, but line-level only; align its own
+        #     text to obtain word timings we splice back in at finalize while
+        #     keeping the curated line text + tags authoritative;
+        #   * plain text with no synced LRC (#55) — the words fit but have no
+        #     timing;
+        #   * duration hard-reject (#148) salvaged text (#149) — the words fit,
+        #     only the timings belonged to the wrong edit.
+        # Instrumental / miss have nothing to align.
         align_text: str | None = None
         align_lang: str | None = None
-        if lyrics.plain and not lyrics.synced_lrc and not lyrics.instrumental:
+        if lyrics.synced_lrc:
+            align_text = lrc_to_plain(lyrics.synced_lrc)
+            align_lang = _align_lang(source_meta)
+        elif lyrics.plain and not lyrics.instrumental:
             align_text = lyrics.plain
             align_lang = _align_lang(source_meta)
         elif lyrics.rejected_text:
@@ -876,6 +900,11 @@ async def run_real_job(
         # only present when rejected LRCLIB text was successfully re-aligned.
         if lyrics_prov.get("lyrics_align_reason"):
             metadata["lyrics_align_reason"] = lyrics_prov["lyrics_align_reason"]
+        # Word timing spliced into the curated LRCLIB synced LRC (#222) — only
+        # present when the force-aligner merge added word tags to at least one
+        # line; provenance stays ``lrclib_synced``.
+        if lyrics_prov.get("lyrics_word_timing"):
+            metadata["lyrics_word_timing"] = lyrics_prov["lyrics_word_timing"]
         (exports_dir / "metadata.json").write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
         )
