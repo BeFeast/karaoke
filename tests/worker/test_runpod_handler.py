@@ -123,24 +123,48 @@ WORDS = [
 ]
 
 
+def test_aligned_lrc_emits_enhanced_word_tags():
+    """Enhanced LRC (#218): every kept line = ``[start]`` + ``<start>word`` per
+    word + one trailing ``<end>`` tag (last word's end). The low-confidence
+    middle line is dropped whole (line-level, #149) — no partial/stray tags."""
+    lrc = handler._word_timestamps_to_lrc(WORDS, TEXT, stride=STRIDE_MS)
+    assert lrc == (
+        "[00:01.00]<00:01.00>hello <00:01.60>there <00:02.00>\n"
+        "[00:40.00]<00:40.00>closing <00:40.60>words <00:41.00>"
+    )
+    # the absent canonical verse is gone as a whole line — not a stray tag.
+    assert "missing" not in lrc and "verse" not in lrc
+
+
 def test_aligned_lrc_drops_low_confidence_line():
     lrc = handler._word_timestamps_to_lrc(WORDS, TEXT, stride=STRIDE_MS)
-    assert lrc == "[00:01.00]hello there\n[00:40.00]closing words"
+    # two kept lines, middle (low-confidence) line dropped whole.
+    assert lrc.splitlines() == [
+        "[00:01.00]<00:01.00>hello <00:01.60>there <00:02.00>",
+        "[00:40.00]<00:40.00>closing <00:40.60>words <00:41.00>",
+    ]
 
 
 def test_aligned_lrc_without_stride_keeps_all_lines():
-    """No stride (caller didn't pass one) → no confidence check, pre-#149 shape."""
+    """No stride (caller didn't pass one) → no confidence check; all three lines
+    kept, each with Enhanced-LRC word tags + trailing end tag."""
     lrc = handler._word_timestamps_to_lrc(WORDS, TEXT)
     assert lrc == (
-        "[00:01.00]hello there\n[00:30.00]missing verse line\n[00:40.00]closing words"
+        "[00:01.00]<00:01.00>hello <00:01.60>there <00:02.00>\n"
+        "[00:30.00]<00:30.00>missing <00:30.02>verse <00:30.04>line <00:30.06>\n"
+        "[00:40.00]<00:40.00>closing <00:40.60>words <00:41.00>"
     )
 
 
 def test_aligned_lrc_missing_scores_never_drops():
-    """Old aligner output without ``score`` keys is never filtered."""
+    """Old aligner output without ``score`` keys is never filtered — the middle
+    line survives, carrying its per-word Enhanced-LRC tags."""
     words = [_wt(w["start"], w["end"]) for w in WORDS]
     lrc = handler._word_timestamps_to_lrc(words, TEXT, stride=STRIDE_MS)
-    assert "missing verse line" in lrc
+    assert (
+        "[00:30.00]<00:30.00>missing <00:30.02>verse <00:30.04>line <00:30.06>"
+        in lrc.splitlines()
+    )
 
 
 def test_aligned_lrc_all_lines_dropped_returns_empty():
@@ -159,10 +183,91 @@ def test_aligned_lrc_threshold_env_override(monkeypatch):
 
 
 def test_aligned_lrc_tokenization_drift_keeps_tail_lines():
-    """More text words than aligned timestamps: tail lines are kept, timed at
-    the end of the last aligned word (pre-#149 behavior preserved)."""
+    """More text words than aligned timestamps → a valid *mixed* Enhanced LRC:
+    the fully-aligned first line carries word tags, while the two tail lines
+    with no aligned words stay plain (no ``<>`` tags), timed at the end of the
+    last aligned word (pre-#149 tail behavior preserved). Consumers fall back to
+    a linear line wipe for the plain lines."""
     words = [_wt(1.0, 1.5, -10.0), _wt(1.6, 2.0, -8.0)]
     lrc = handler._word_timestamps_to_lrc(words, TEXT, stride=STRIDE_MS)
     assert lrc == (
-        "[00:01.00]hello there\n[00:02.00]missing verse line\n[00:02.00]closing words"
+        "[00:01.00]<00:01.00>hello <00:01.60>there <00:02.00>\n"
+        "[00:02.00]missing verse line\n"
+        "[00:02.00]closing words"
     )
+
+
+# ---------------------------------------------------------------------------
+# _transcribe: music-tuned faster-whisper kwargs (#218)
+# ---------------------------------------------------------------------------
+class _FakeWord:
+    def __init__(self, start, end, word, probability):
+        self.start = start
+        self.end = end
+        self.word = word
+        self.probability = probability
+
+
+class _FakeSegment:
+    def __init__(self, start, end, text, words=None):
+        self.start = start
+        self.end = end
+        self.text = text
+        self.words = words
+
+
+class _FakeInfo:
+    def __init__(self, language, language_probability, duration):
+        self.language = language
+        self.language_probability = language_probability
+        self.duration = duration
+
+
+class _RecordingWhisper:
+    """Stand-in for faster_whisper.WhisperModel: records transcribe() kwargs
+    and returns a minimal (segments_iter, info) pair."""
+
+    def __init__(self):
+        self.calls = []
+
+    def transcribe(self, audio, **kwargs):
+        self.calls.append((audio, kwargs))
+        seg = _FakeSegment(
+            0.0, 1.0, " hello", [_FakeWord(0.0, 0.5, "hello", 0.9)]
+        )
+        return iter([seg]), _FakeInfo("ru", 0.86, 1.0)
+
+
+def test_transcribe_passes_music_tuned_kwargs(monkeypatch, tmp_path):
+    """#218: repetition-collapse fix + music-tuned VAD / hallucination guards
+    are passed through to faster-whisper, and auto language detection is kept."""
+    fake = _RecordingWhisper()
+    monkeypatch.setattr(handler, "_get_whisper", lambda: fake)
+    wav = tmp_path / "vocals.wav"
+    wav.write_bytes(b"\x00")
+
+    lyrics_txt, lyrics_json = handler._transcribe(wav)
+
+    assert len(fake.calls) == 1
+    _, kwargs = fake.calls[0]
+    # the main fix: never condition on prior text (repetition-collapse).
+    assert kwargs["condition_on_previous_text"] is False
+    # kept knobs.
+    assert kwargs["beam_size"] == 5
+    assert kwargs["word_timestamps"] is True
+    # tuned VAD for long intra-line gaps on a separated vocal stem.
+    assert kwargs["vad_filter"] is True
+    assert kwargs["vad_parameters"]["min_silence_duration_ms"] == 500
+    assert kwargs["vad_parameters"]["speech_pad_ms"] == 400
+    # temperature fallback ladder + music hallucination guards.
+    assert kwargs["temperature"] == [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    assert kwargs["compression_ratio_threshold"] == 2.4
+    assert kwargs["log_prob_threshold"] == -1.0
+    assert kwargs["no_speech_threshold"] == 0.6
+    assert kwargs["hallucination_silence_threshold"] == 2.0
+    # no language pin → faster-whisper auto-detects (works per the evidence job).
+    assert "language" not in kwargs
+    # sane output shape passes through.
+    assert lyrics_txt == "hello"
+    assert lyrics_json["language"] == "ru"
+    assert lyrics_json["segments"][0]["words"][0]["word"] == "hello"

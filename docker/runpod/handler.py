@@ -238,13 +238,46 @@ def _run_separation(input_wav: Path, out_dir: Path) -> tuple[Path, Path]:
 
 
 def _transcribe(wav_path: Path) -> tuple[str, dict[str, Any]]:
-    """Run faster-whisper on `wav_path`. Returns (lyrics_txt, lyrics_json)."""
+    """Run faster-whisper on `wav_path`. Returns (lyrics_txt, lyrics_json).
+
+    Tuned for separated vocal stems carrying repetitive sung text (#218). The
+    key fix is ``condition_on_previous_text=False``: on a chorus repeated N times
+    the decoder otherwise degenerates and swallows whole repeats into one
+    mega-segment — classic Whisper repetition-collapse, matching a 203 s track
+    collapsing to a single 41→195 s segment on job
+    ``lSsLw_MlOPb6r3V4KUW_2ulW9pY-ir82``. Alongside it we:
+
+    - keep ``vad_filter=True`` but widen ``vad_parameters``: sung phrases have
+      long intra-line gaps, so the default VAD over-merges / drops voiced
+      regions on a BS-Roformer stem (breaths, separation artifacts).
+      ``min_silence_duration_ms=500`` + ``speech_pad_ms=400`` keeps phrase
+      boundaries without swallowing quiet vocals.
+    - add the faster-whisper default temperature-fallback ladder plus
+      music-tuned hallucination guards (``compression_ratio_threshold=2.4``,
+      ``log_prob_threshold=-1.0``, ``no_speech_threshold=0.6``,
+      ``hallucination_silence_threshold=2.0``) so a bad greedy decode retries at
+      a higher temperature instead of hallucinating a mega-segment.
+
+    ``beam_size=5``, ``word_timestamps=True`` and auto language detection are
+    kept unchanged — the latter correctly auto-detected ``ru`` (p=0.86) on the
+    evidence job; only the transcript collapsed.
+    """
     model = _get_whisper()
     segments_iter, info = model.transcribe(
         str(wav_path),
         beam_size=5,
-        vad_filter=True,
         word_timestamps=True,
+        condition_on_previous_text=False,
+        vad_filter=True,
+        vad_parameters=dict(
+            min_silence_duration_ms=500,
+            speech_pad_ms=400,
+        ),
+        temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+        compression_ratio_threshold=2.4,
+        log_prob_threshold=-1.0,
+        no_speech_threshold=0.6,
+        hallucination_silence_threshold=2.0,
     )
     segments: list[dict[str, Any]] = []
     text_lines: list[str] = []
@@ -313,13 +346,28 @@ def _align_dtype():
     return torch.float16 if _gpu_available() else torch.float32
 
 
-def _fmt_lrc_timestamp(seconds: float) -> str:
-    """Format ``seconds`` as an LRC ``[mm:ss.xx]`` timestamp tag."""
+def _fmt_lrc_time(seconds: float) -> str:
+    """Format ``seconds`` as a bare ``mm:ss.xx`` LRC time (2-digit centiseconds)."""
     if seconds < 0:
         seconds = 0.0
     minutes = int(seconds // 60)
     rem = seconds - minutes * 60
-    return f"[{minutes:02d}:{rem:05.2f}]"
+    return f"{minutes:02d}:{rem:05.2f}"
+
+
+def _fmt_lrc_timestamp(seconds: float) -> str:
+    """Format ``seconds`` as an LRC ``[mm:ss.xx]`` line-start tag."""
+    return f"[{_fmt_lrc_time(seconds)}]"
+
+
+def _fmt_lrc_word_tag(seconds: float) -> str:
+    """Format ``seconds`` as an Enhanced-LRC ``<mm:ss.xx>`` inline word tag.
+
+    Identical time shape to :func:`_fmt_lrc_timestamp`; only the delimiter
+    differs (``<>`` for inline word tags vs ``[]`` for the line-start tag), per
+    the shared Enhanced LRC contract (#218).
+    """
+    return f"<{_fmt_lrc_time(seconds)}>"
 
 
 def _force_align_to_lrc(
@@ -365,19 +413,32 @@ def _force_align_to_lrc(
 def _word_timestamps_to_lrc(
     word_timestamps: list[dict[str, Any]], text: str, stride: float | None = None
 ) -> str:
-    """Build a line-level LRC from ctc-forced-aligner word timestamps.
+    """Build an Enhanced LRC from ctc-forced-aligner word timestamps.
 
     ``word_timestamps`` is a list of ``{"text", "start", "end", "score", ...}``
     in the same order as the words in ``text``. We walk the original lines,
-    consuming one timestamp per word, and tag each non-empty line with the
-    start time of its first word.
+    consuming one timestamp per word, and emit an Enhanced LRC line carrying
+    word-level timing for the SPA's word highlight (#218)::
+
+        [mm:ss.xx]<mm:ss.xx>word <mm:ss.xx>word … <mm:ss.xx>
+
+    The leading ``[mm:ss.xx]`` line tag is the line start (first aligned word's
+    ``start``) — unchanged from the pre-word-tag output. Each word is then
+    prefixed with an inline ``<mm:ss.xx>`` start tag (its aligner ``start``),
+    and a single trailing ``<mm:ss.xx>`` after the last word carries the line's
+    sung end (last aligned word's ``end``). Consumers derive each word's
+    duration from the next word's start, else the trailing end tag. A line with
+    no aligned words at all stays plain (no ``<>`` tags) — a valid *mixed* file
+    per the shared Enhanced LRC contract; consumers fall back to a linear line
+    wipe for it.
 
     When ``stride`` (milliseconds per emission frame) is known, each line also
     gets a confidence check (#149): lines whose mean per-frame log-prob (summed
     word ``score`` over summed frame count) falls below
     ``_ALIGN_MIN_AVG_LOGPROB`` are dropped from the LRC — they are almost
     always canonical-text lines absent from this audio edit, which monotonic
-    CTC alignment squeezed somewhere they don't belong. Missing scores or an
+    CTC alignment squeezed somewhere they don't belong. The confidence math is
+    unchanged; only the kept lines now carry word tags. Missing scores or an
     unknown stride skip the check (never drop), so older aligner output shapes
     keep the pre-#149 behavior.
     """
@@ -392,18 +453,39 @@ def _word_timestamps_to_lrc(
         line_ts = word_timestamps[wi : wi + len(words)]
         wi += len(words)
         if not line_ts:
-            # Ran out of aligned words (tokenization drift): keep the line,
-            # timed at the end of the last aligned word.
+            # Ran out of aligned words (tokenization drift): keep the line
+            # plain (no word tags), timed at the end of the last aligned word.
+            # A plain line is a valid Enhanced-LRC line — consumers fall back
+            # to a linear line wipe for it.
             start = float(word_timestamps[-1].get("end") or 0.0) if n else 0.0
             out.append(f"{_fmt_lrc_timestamp(start)}{line.strip()}")
             continue
         if _line_below_confidence(line_ts, stride):
             LOG.info("dropping low-confidence aligned line: %r", line.strip())
             continue
-        # The start of this line = start of its first aligned word.
-        start = float(line_ts[0].get("start") or 0.0)
-        out.append(f"{_fmt_lrc_timestamp(start)}{line.strip()}")
+        out.append(_enhanced_lrc_line(words, line_ts))
     return "\n".join(out)
+
+
+def _enhanced_lrc_line(words: list[str], line_ts: list[dict[str, Any]]) -> str:
+    """Render one Enhanced-LRC line: ``[start]<start>word … <end>``.
+
+    ``line_ts`` holds one aligner word-timestamp per leading word; any words
+    beyond the available timestamps (rare intra-line tokenization drift) ride
+    untagged so no timing is invented. The line-start ``[..]`` tag is the first
+    aligned word's ``start``; the single trailing ``<..>`` tag is the last
+    aligned word's ``end`` (the line's sung end).
+    """
+    tokens: list[str] = []
+    for word, ts in zip(words, line_ts):
+        w_start = float(ts.get("start") or 0.0)
+        tokens.append(f"{_fmt_lrc_word_tag(w_start)}{word}")
+    # Words with no aligned timestamp (intra-line drift) ride untagged.
+    tokens.extend(words[len(line_ts):])
+    line_start = float(line_ts[0].get("start") or 0.0)
+    line_end = float(line_ts[-1].get("end") or 0.0)
+    tokens.append(_fmt_lrc_word_tag(line_end))
+    return f"{_fmt_lrc_timestamp(line_start)}{' '.join(tokens)}"
 
 
 def _line_below_confidence(

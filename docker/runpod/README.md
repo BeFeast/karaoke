@@ -95,7 +95,7 @@ free). Run from the repo root:
 docker buildx build \
   --builder karbuilder \
   --platform linux/amd64 \
-  -t ghcr.io/befeast/karaoke-runpod:cuda12.4-r6 \
+  -t ghcr.io/befeast/karaoke-runpod:cuda12.4-r7 \
   --push \
   docker/runpod/
 ```
@@ -132,11 +132,11 @@ RUNPOD_API_KEY=... uv run python scripts/runpod_provision.py
 
 The locked spec (image, GPU type pool, workers, timeouts, flashboot)
 lives in `TEMPLATE_SPEC` / `ENDPOINT_SPEC` inside the script — do not edit
-without flagging it on issue #33. To roll the endpoint onto the r5 image,
-bump `TEMPLATE_SPEC["imageName"]` to `…cuda12.4-r6` and re-run: the script
-detects the image change and flushes warm/standby workers (`workersMax`
-bounce to 0 → drain → restore) so the next job cold-pulls r5 instead of a
-stale r4 worker (#75). The script prints a final
+without flagging it on issue #33. To roll the endpoint onto a new image,
+bump `TEMPLATE_SPEC["imageName"]` (e.g. to `…cuda12.4-r7`) and re-run: the
+script detects the image change and flushes warm/standby workers
+(`workersMax` bounce to 0 → drain → restore) so the next job cold-pulls the
+new tag instead of a stale worker (#75). The script prints a final
 `RUNPOD_ENDPOINT_ID=<id>` line that the operator pipes into Infisical
 manually; the script never touches Infisical.
 
