@@ -1008,3 +1008,50 @@ def test_vad_trimmed_aligned_output_still_ships(tmp_path):
     )
     assert prov["lyrics_source"] == SOURCE_FORCED_ALIGNED
     assert prov["lyrics_align_reason"].startswith("align_coverage_low")
+
+
+def test_vad_trimmed_lyrics_txt_mirrors_trimmed_lrc(tmp_path):
+    """#253 review: lyrics.txt must mirror the trimmed LRC, not advertise the
+    full curated record whose lines the synced view no longer has."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path)
+    synced = _many_line_lrc(34)
+    import re as _re
+    drifted = _re.sub(
+        r"([<\[])(\d{2}):",
+        lambda m: f"{m.group(1)}{int(m.group(2)) + 50:02d}:",
+        _aligned_covering(synced, 18),
+    )
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=synced, plain=lrc_to_plain(synced), source="lrclib_get"),
+        exports,
+        whisper,
+        aligned_lrc_path=_aligned_file(tmp_path, drifted),
+    )
+    assert prov["lyrics_source"] == SOURCE_FORCED_ALIGNED
+    assert (exports / "lyrics.txt").read_text() == lrc_to_plain(
+        (exports / "lyrics.lrc").read_text()
+    )
+
+
+def test_tiny_faithful_excerpt_still_falls_to_floor(tmp_path):
+    """#253 review guard: 6 faithful lines of a 34-line record (< 25% kept)
+    must NOT override the ASR floor wholesale."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path, "asr words")
+    synced = _many_line_lrc(34)
+    import re as _re
+    drifted = _re.sub(
+        r"([<\[])(\d{2}):",
+        lambda m: f"{m.group(1)}{int(m.group(2)) + 50:02d}:",
+        _aligned_covering(synced, 6),
+    )
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=synced, plain=lrc_to_plain(synced), source="lrclib_get"),
+        exports,
+        whisper,
+        aligned_lrc_path=_aligned_file(tmp_path, drifted),
+    )
+    assert prov["lyrics_source"] == SOURCE_WHISPER_ASR

@@ -74,6 +74,10 @@ _LYRICS_SOURCE = LyricsSource()
 # and the whole record is rejected in favor of the Whisper ASR floor.
 _ALIGN_COVERAGE_MIN_RATIO = 0.3
 _ALIGN_COVERAGE_MIN_LINES = 10
+# The #253 fallback additionally requires the aligner to have kept at least
+# this fraction of the curated record: a tiny faithful excerpt (6 matching
+# lines of a 60-line song) must not override the ASR floor wholesale.
+_ALIGN_FALLBACK_MIN_KEPT_RATIO = 0.25
 
 # yt-dlp player-client chain (mirrors scribe's downloader; android_vr is the
 # token-free workhorse, web clients need the EJS/deno JS solver in the image).
@@ -560,11 +564,13 @@ def _resolve_lyrics(
             align_coverage_reject is not None
             and aligned
             and aligner_total >= 6
+            and aligner_total >= _ALIGN_FALLBACK_MIN_KEPT_RATIO * eligible
             and agreed_n >= 0.8 * aligner_total
         ):
+            # lyrics.txt mirrors the trimmed LRC — the curated full text would
+            # advertise lines the synced view (correctly) no longer has.
             lyrics_lrc.write_text(aligned, encoding="utf-8")
-            plain_text = lyrics.plain or lrc_to_plain(lyrics.synced_lrc)
-            lyrics_txt.write_text(plain_text, encoding="utf-8")
+            lyrics_txt.write_text(lrc_to_plain(aligned), encoding="utf-8")
             return {
                 "lyrics_source": SOURCE_FORCED_ALIGNED,
                 "synced": True,
