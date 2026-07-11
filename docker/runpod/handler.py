@@ -105,6 +105,11 @@ _ALIGN_MODEL_ID = "MahmoudAshraf/mms-300m-1130-forced-aligner"
 # lines on separated vocals average far above this. Conservative on purpose:
 # only clearly-garbage lines go; tune via env without an image rebuild.
 _ALIGN_MIN_AVG_LOGPROB = float(os.environ.get("KARAOKE_ALIGN_MIN_AVG_LOGPROB", "-5.0"))
+# Minimum fraction of an aligned line's window that must overlap Silero-VAD
+# voiced regions (#247). Lines below it were placed on instrumental audio.
+_ALIGN_MIN_VOICED_OVERLAP = float(
+    os.environ.get("KARAOKE_ALIGN_MIN_VOICED_OVERLAP", "0.35")
+)
 
 
 def _gpu_available() -> bool:
@@ -370,6 +375,55 @@ def _fmt_lrc_word_tag(seconds: float) -> str:
     return f"<{_fmt_lrc_time(seconds)}>"
 
 
+def _voiced_regions(wav_path: Path) -> list[tuple[float, float]] | None:
+    """Voiced (speech/singing) regions of ``wav_path`` via Silero VAD (#247).
+
+    Reuses the VAD that ships with faster-whisper (already in this image).
+    Returns ``[(start_s, end_s), ...]`` or ``None`` when VAD fails — callers
+    must treat ``None`` as "no veto" (never drop lines on a VAD failure).
+    """
+    try:
+        from faster_whisper.audio import decode_audio  # type: ignore
+        from faster_whisper.vad import (  # type: ignore
+            VadOptions,
+            get_speech_timestamps,
+        )
+
+        audio = decode_audio(str(wav_path), sampling_rate=16000)
+        # Chunk to 30 s windows: Silero's streaming state degrades over long
+        # music files (measured: whole-file VAD missed everything past ~60 s
+        # on a 203 s vocal stem; chunked found every sung region).
+        sr = 16000
+        chunk = 30 * sr
+        regions: list[tuple[float, float]] = []
+        opts = VadOptions(min_silence_duration_ms=500, speech_pad_ms=200)
+        for off in range(0, len(audio), chunk):
+            for ts in get_speech_timestamps(audio[off : off + chunk], opts):
+                regions.append(
+                    ((off + ts["start"]) / sr, (off + ts["end"]) / sr)
+                )
+        # Merge near-adjacent regions (chunk boundaries split them).
+        merged: list[list[float]] = []
+        for a, b in sorted(regions):
+            if merged and a - merged[-1][1] < 0.5:
+                merged[-1][1] = max(merged[-1][1], b)
+            else:
+                merged.append([a, b])
+        return [(a, b) for a, b in merged]
+    except Exception as exc:  # noqa: BLE001 — VAD is advisory, never fatal
+        LOG.warning("VAD failed (%s); skipping voiced-region veto", exc)
+        return None
+
+
+def _voiced_overlap(start: float, end: float, regions: list[tuple[float, float]]) -> float:
+    """Fraction of ``[start, end]`` covered by ``regions`` (0.0–1.0)."""
+    span = max(end - start, 1e-6)
+    covered = 0.0
+    for r0, r1 in regions:
+        covered += max(0.0, min(end, r1) - max(start, r0))
+    return covered / span
+
+
 def _force_align_to_lrc(
     vocals_wav: Path, text: str, language: str
 ) -> tuple[str, list[float | None]]:
@@ -409,11 +463,16 @@ def _force_align_to_lrc(
     spans = get_spans(tokens_starred, segments, blank_token)
     word_timestamps = postprocess_results(text_starred, spans, stride, scores)
 
-    return _word_timestamps_to_lrc(word_timestamps, text, stride=stride)
+    return _word_timestamps_to_lrc(
+        word_timestamps, text, stride=stride, voiced=_voiced_regions(vocals_wav)
+    )
 
 
 def _word_timestamps_to_lrc(
-    word_timestamps: list[dict[str, Any]], text: str, stride: float | None = None
+    word_timestamps: list[dict[str, Any]],
+    text: str,
+    stride: float | None = None,
+    voiced: list[tuple[float, float]] | None = None,
 ) -> tuple[str, list[float | None]]:
     """Build an Enhanced LRC from ctc-forced-aligner word timestamps.
 
@@ -489,6 +548,27 @@ def _word_timestamps_to_lrc(
         if _line_below_confidence(line_ts, stride):
             LOG.info("dropping low-confidence aligned line: %r", line.strip())
             continue
+        # VAD veto (#247): monotonic CTC MUST place every input line somewhere,
+        # so text absent from this audio edit lands on instrumental sections —
+        # with locally-plausible scores (band bleed). Overlap is measured over
+        # the individual WORD spans (sum covered / sum span), not the whole
+        # first-to-last window: a sung line with a long internal instrumental
+        # gap or an absorbed-silence first word must not dilute its own
+        # denominator. Timestamps here are seconds (postprocess_results
+        # converts frames via stride — same units the LRC tags are built from).
+        if voiced is not None:
+            total_span = 0.0
+            covered = 0.0
+            for ts in line_ts:
+                w0 = float(ts.get("start") or 0.0)
+                w1 = float(ts.get("end") or w0)
+                if w1 <= w0:
+                    continue
+                total_span += w1 - w0
+                covered += _voiced_overlap(w0, w1, voiced) * (w1 - w0)
+            if total_span > 0 and covered / total_span < _ALIGN_MIN_VOICED_OVERLAP:
+                LOG.info("VAD veto: aligned line not sung: %r", line.strip())
+                continue
         if emit_word_tags:
             out.append(_enhanced_lrc_line(words, line_ts))
         else:

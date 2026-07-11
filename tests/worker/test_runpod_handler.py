@@ -273,3 +273,43 @@ def test_transcribe_passes_music_tuned_kwargs(monkeypatch, tmp_path):
     assert lyrics_txt == "hello"
     assert lyrics_json["language"] == "ru"
     assert lyrics_json["segments"][0]["words"][0]["word"] == "hello"
+
+
+def test_vad_veto_drops_line_on_instrumental():
+    """#247: a line whose aligned window barely overlaps voiced audio is
+    dropped; lines inside voiced regions survive. VAD=None -> no veto."""
+    text = "sung line\nghost line"
+    words = [
+        _wt(1.0, 1.5, -0.4),
+        _wt(1.6, 2.0, -0.4),
+        _wt(30.0, 30.6, -0.5),
+        _wt(30.7, 31.2, -0.5),
+    ]
+    voiced = [(0.5, 3.0)]  # only the first window is sung
+    lrc, scores = handler._word_timestamps_to_lrc(
+        words, text, stride=STRIDE_MS, voiced=voiced
+    )
+    assert "sung line" in lrc.replace("<", " ").replace(">", " ") or "sung" in lrc
+    assert "ghost" not in lrc
+    assert len(scores) == 1
+    # no VAD info -> both lines kept
+    lrc2, _ = handler._word_timestamps_to_lrc(words, text, stride=STRIDE_MS, voiced=None)
+    assert "ghost" in lrc2
+
+
+def test_voiced_overlap_math():
+    regions = [(10.0, 20.0), (30.0, 35.0)]
+    assert handler._voiced_overlap(12.0, 18.0, regions) == 1.0
+    assert handler._voiced_overlap(0.0, 10.0, regions) == 0.0
+    assert abs(handler._voiced_overlap(15.0, 25.0, regions) - 0.5) < 1e-9
+
+
+def test_vad_veto_ignores_internal_instrumental_gap():
+    """A genuinely sung line with a long instrumental gap BETWEEN its words
+    (or an absorbed-silence span) is kept: overlap is per-word, so the gap
+    never enters the denominator."""
+    text = "gapped line"
+    words = [_wt(1.0, 1.5, -0.4), _wt(20.0, 20.5, -0.4)]  # 18.5 s apart
+    voiced = [(0.8, 1.7), (19.8, 20.7)]  # each word sits in voice
+    lrc, _ = handler._word_timestamps_to_lrc(words, text, stride=STRIDE_MS, voiced=voiced)
+    assert "gapped" in lrc
