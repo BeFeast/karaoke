@@ -35,6 +35,7 @@ import json
 import time
 import urllib.error
 import urllib.request
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -383,7 +384,10 @@ class RunpodClient:
             upload_file,
         )
 
-        prefix = f"jobs/{int(time.time())}-{mix_wav.stem}"
+        # uuid, NOT a timestamp: two jobs submitted within the same second
+        # collided on identical keys and each GPU job read the other's audio
+        # (#250 — live: a Russian track aligned against another job's vocals).
+        prefix = f"jobs/{int(time.time())}-{uuid.uuid4().hex[:12]}"
         input_key = f"{prefix}/mix.wav"
         output_keys = {
             "vocals": f"{prefix}/vocals.wav",
