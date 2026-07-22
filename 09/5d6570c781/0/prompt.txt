@@ -1,0 +1,607 @@
+You are the Maestro Supervisor LLM.
+
+You receive a redacted state packet for one Maestro project. Synthesize the state, but do not invent permissions or actions.
+
+Rules:
+- Return one JSON object only. Do not include Markdown, comments, or prose outside JSON.
+- recommended_action must be one of supervisor_policy.allowed_actions.
+- If recommended_action is in supervisor_policy.approval_required_actions, requires_approval must be true.
+- Do not request actions outside the packet policy.
+- Treat deterministic detector output as a guardrail. Do not recommend an action that conflicts with it.
+- Name the current project outcome in the summary or reasons. If you target an issue, explain why it advances that outcome.
+- Runtime/deploy checks are read-only recommendations in v1; do not claim Maestro changed production state.
+- The runtime will validate this JSON against policy before any action is recorded or executed.
+
+Required JSON shape:
+{
+  "summary": "one sentence",
+  "recommended_action": "one allowed action",
+  "target": {"issue": 0, "pr": 0, "session": ""},
+  "risk": "safe|mutating|approval_gated",
+  "confidence": 0.0,
+  "reasons": ["short reason"],
+  "requires_approval": false
+}
+
+State packet:
+{
+  "project_config": {
+    "repo": "BeFeast/karaoke",
+    "max_parallel": 2,
+    "max_retries_per_issue": 4,
+    "issue_labels": [
+      "maestro-ready"
+    ],
+    "exclude_labels": [
+      "blocked",
+      "wontfix",
+      "question",
+      "duplicate",
+      "invalid",
+      "epic"
+    ],
+    "merge_strategy": "sequential",
+    "review_gate": "greptile",
+    "outcome": {
+      "configured": true,
+      "goal": "karaoke ships small, reliable PRs against the maestro-ready issue queue; the per-job client-side cookie model holds; gated YouTube downloads keep working; RunPod stays within per-job + daily cost caps.",
+      "desired_outcome": "karaoke ships small, reliable PRs against the maestro-ready issue queue; the per-job client-side cookie model holds; gated YouTube downloads keep working; RunPod stays within per-job + daily cost caps.",
+      "runtime_target": "http://10.10.0.13:13140",
+      "runtime_url": "http://10.10.0.13:13140",
+      "runtime_host": "devbox LXC 111 — release-cut deploy: release-deploy.sh builds karaoke:X.Y.Z, retags karaoke:current, Dockhand recreate (docs/runbooks/release-rollback.md); deploy.sh start never builds",
+      "health_state": "healthy",
+      "health_checked_at": "2026-06-23T15:25:22Z",
+      "health_signal": "healthcheck_url",
+      "health_summary": "GET http://10.10.0.13:13140/health returned 200 OK",
+      "next_action": "Runtime outcome health is passing; continue normal supervisor policy.",
+      "source_repo_path": "/home/god/src/karaoke",
+      "deployment_status_command": "ssh devbox 'docker ps --filter name=karaoke --format \"{{.Names}} {{.Status}}\"'",
+      "deploy_status_command": "ssh devbox 'docker ps --filter name=karaoke --format \"{{.Names}} {{.Status}}\"'",
+      "healthcheck_url": "http://10.10.0.13:13140/health",
+      "pass_required_for_done": true,
+      "fail_requires_visible_work": true,
+      "merged_prs": 12,
+      "last_merge_at": "2026-06-20T10:55:41Z"
+    },
+    "auto_retry_review_feedback": true,
+    "auto_retry_rebase_conflicts": true,
+    "github_projects_enabled": false,
+    "missions_enabled": false,
+    "supervisor": {
+      "enabled": true,
+      "backend": "codex",
+      "dry_run": false
+    }
+  },
+  "supervisor_policy": {
+    "allowed_actions": [
+      "check_outcome_health",
+      "label_issue_ready",
+      "monitor_open_pr",
+      "none",
+      "notify_red",
+      "open_child_issue",
+      "preflight_failed",
+      "review_retry_exhausted",
+      "spawn_repair_worker",
+      "spawn_worker",
+      "wait_for_capacity",
+      "wait_for_ordered_queue",
+      "wait_for_running_worker",
+      "add_ready_label"
+    ],
+    "approval_required_actions": [
+      "delete_worktree",
+      "label_issue_ready",
+      "open_child_issue",
+      "review_retry_exhausted",
+      "spawn_repair_worker",
+      "spawn_worker",
+      "add_ready_label"
+    ]
+  },
+  "current_maestro_sessions": [
+    {
+      "name": "kar-46",
+      "issue": 169,
+      "title": "Android submitter app: share-target + WebView YouTube sign-in + per-job cookies (CI-built APK)",
+      "status": "done",
+      "branch": "feat/kar-46-169-android-submitter-app-share-target--webv",
+      "backend": "claude",
+      "last_notified_status": "no_pr_reconciled",
+      "started_at": "2026-06-12T00:51:36.851957731Z",
+      "finished_at": "2026-06-12T00:53:32.517859655Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "kar-47",
+      "issue": 169,
+      "title": "Android submitter app: share-target + WebView YouTube sign-in + per-job cookies (CI-built APK)",
+      "status": "done",
+      "pr": 171,
+      "branch": "feat/kar-47-169-android-submitter-app-share-target--webv",
+      "backend": "claude",
+      "last_notified_status": "review_retry_exhausted",
+      "started_at": "2026-06-12T00:55:33.503542639Z",
+      "finished_at": "2026-06-12T01:30:24.636079529Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z",
+      "previous_attempt_feedback_kind": "review_feedback"
+    },
+    {
+      "name": "kar-48",
+      "issue": 172,
+      "title": "feat(api+pipeline): audio-file upload — multipart POST /jobs/upload, ffprobe metadata, yt-dlp bypass",
+      "status": "done",
+      "branch": "feat/kar-48-172-featapipipeline-audio-file-upload--multi",
+      "backend": "claude",
+      "started_at": "2026-06-12T09:23:35.250911598Z",
+      "finished_at": "2026-06-12T09:25:32.656076224Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "kar-49",
+      "issue": 172,
+      "title": "feat(api+pipeline): audio-file upload — multipart POST /jobs/upload, ffprobe metadata, yt-dlp bypass",
+      "status": "done",
+      "branch": "feat/kar-49-172-featapipipeline-audio-file-upload--multi",
+      "backend": "claude",
+      "started_at": "2026-06-12T09:25:36.149769829Z",
+      "finished_at": "2026-06-12T09:27:32.608386093Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "kar-50",
+      "issue": 172,
+      "title": "feat(api+pipeline): audio-file upload — multipart POST /jobs/upload, ffprobe metadata, yt-dlp bypass",
+      "status": "done",
+      "branch": "feat/kar-50-172-featapipipeline-audio-file-upload--multi",
+      "backend": "claude",
+      "last_notified_status": "no_pr_reconciled",
+      "started_at": "2026-06-12T09:27:36.858885378Z",
+      "finished_at": "2026-06-12T09:29:32.662913047Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "kar-51",
+      "issue": 172,
+      "title": "feat(api+pipeline): audio-file upload — multipart POST /jobs/upload, ffprobe metadata, yt-dlp bypass",
+      "status": "done",
+      "pr": 174,
+      "branch": "feat/kar-51-172-featapipipeline-audio-file-upload--multi",
+      "backend": "claude",
+      "last_notified_status": "review_retry_exhausted",
+      "started_at": "2026-06-12T09:28:38.293379615Z",
+      "finished_at": "2026-06-12T10:08:30.847371008Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z",
+      "previous_attempt_feedback_kind": "review_feedback"
+    },
+    {
+      "name": "kar-52",
+      "issue": 173,
+      "title": "feat(spa): Booth upload affordance — Marquee-recipe file input wired to POST /jobs/upload",
+      "status": "done",
+      "pr": 175,
+      "branch": "feat/kar-52-173-featspa-booth-upload-affordance--marquee",
+      "backend": "claude",
+      "last_notified_status": "review_retry_exhausted",
+      "started_at": "2026-06-12T10:13:34.337400442Z",
+      "finished_at": "2026-06-12T10:32:28.612324772Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z",
+      "previous_attempt_feedback_kind": "review_feedback"
+    },
+    {
+      "name": "kar-53",
+      "issue": 177,
+      "title": "Extension: duplicate context-menu entries, self-submit guard, popup receipt/feed polish (+dismiss/delete), transparent scribe-style icons",
+      "status": "done",
+      "pr": 179,
+      "branch": "feat/kar-53-177-extension-duplicate-context-menu-entries",
+      "backend": "claude",
+      "started_at": "2026-06-12T16:01:48.985701027Z",
+      "finished_at": "2026-06-12T16:50:41.880159916Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z",
+      "previous_attempt_feedback_kind": "review_feedback"
+    },
+    {
+      "name": "kar-54",
+      "issue": 176,
+      "title": "Stage: active-lyric preview overflows under the console module (grid blowout)",
+      "status": "done",
+      "pr": 178,
+      "branch": "feat/kar-54-176-stage-active-lyric-preview-overflows-und",
+      "backend": "claude",
+      "started_at": "2026-06-12T16:01:50.590977464Z",
+      "finished_at": "2026-06-12T16:22:45.242909726Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "kar-55",
+      "issue": 180,
+      "title": "API: GET /preflight — offline yt-dlp extractor matching for URL support checks",
+      "status": "done",
+      "pr": 182,
+      "branch": "feat/kar-55-180-api-get-preflight--offline-yt-dlp-extrac",
+      "backend": "claude",
+      "last_notified_status": "review_retry_exhausted",
+      "started_at": "2026-06-12T16:25:55.193618569Z",
+      "finished_at": "2026-06-12T16:40:47.180504542Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z",
+      "previous_attempt_feedback_kind": "review_feedback"
+    },
+    {
+      "name": "kar-56",
+      "issue": 181,
+      "title": "Extension: preflight-driven toolbar UX — one-click for recognized extractors, confirm for generic, Open-booth on right-click",
+      "status": "done",
+      "pr": 183,
+      "branch": "feat/kar-56-181-extension-preflight-driven-toolbar-ux--o",
+      "backend": "claude",
+      "last_notified_status": "review_retry_exhausted",
+      "started_at": "2026-06-12T16:55:49.266224621Z",
+      "finished_at": "2026-06-12T17:20:42.824944686Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z",
+      "previous_attempt_feedback_kind": "review_feedback"
+    },
+    {
+      "name": "kar-57",
+      "issue": 184,
+      "title": "SPA mobile wave 1/4 — touch \u0026 viewport foundations + Stage page chrome at phone widths",
+      "status": "done",
+      "pr": 188,
+      "branch": "feat/kar-57-184-spa-mobile-wave-14--touch--viewport-foun",
+      "backend": "claude",
+      "started_at": "2026-06-12T18:30:16.833199537Z",
+      "finished_at": "2026-06-12T18:57:12.262450617Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "kar-58",
+      "issue": 185,
+      "title": "SPA mobile wave 2/4 — player console phone layout (thumb-zone rail, stacked transport)",
+      "status": "done",
+      "pr": 189,
+      "branch": "feat/kar-58-185-spa-mobile-wave-24--player-console-phone",
+      "backend": "claude",
+      "last_notified_status": "review_retry_exhausted",
+      "started_at": "2026-06-12T18:58:17.661323116Z",
+      "finished_at": "2026-06-12T19:37:11.189389673Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z",
+      "previous_attempt_feedback_kind": "review_feedback"
+    },
+    {
+      "name": "kar-59",
+      "issue": 186,
+      "title": "SPA mobile wave 3/4 — Booth phone layout (submit stack, two-line job rows)",
+      "status": "done",
+      "pr": 190,
+      "branch": "feat/kar-59-186-spa-mobile-wave-34--booth-phone-layout-s",
+      "backend": "claude",
+      "last_notified_status": "review_retry_exhausted",
+      "started_at": "2026-06-12T19:38:17.0824843Z",
+      "finished_at": "2026-06-12T20:01:18.136305532Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z",
+      "previous_attempt_feedback_kind": "review_feedback"
+    },
+    {
+      "name": "kar-60",
+      "issue": 187,
+      "title": "SPA mobile wave 4/4 — Settings + global mobile polish",
+      "status": "done",
+      "branch": "feat/kar-60-187-spa-mobile-wave-44--settings--global-mob",
+      "backend": "claude",
+      "started_at": "2026-06-12T20:02:16.847101949Z",
+      "finished_at": "2026-06-12T20:16:15.201579358Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "kar-61",
+      "issue": 187,
+      "title": "SPA mobile wave 4/4 — Settings + global mobile polish",
+      "status": "done",
+      "branch": "feat/kar-61-187-spa-mobile-wave-44--settings--global-mob",
+      "backend": "claude",
+      "started_at": "2026-06-12T20:16:19.111224672Z",
+      "finished_at": "2026-06-12T20:18:15.137270314Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "kar-62",
+      "issue": 187,
+      "title": "SPA mobile wave 4/4 — Settings + global mobile polish",
+      "status": "done",
+      "branch": "feat/kar-62-187-spa-mobile-wave-44--settings--global-mob",
+      "backend": "claude",
+      "started_at": "2026-06-12T20:18:18.973312622Z",
+      "finished_at": "2026-06-12T20:20:15.133655546Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "kar-63",
+      "issue": 187,
+      "title": "SPA mobile wave 4/4 — Settings + global mobile polish",
+      "status": "done",
+      "branch": "feat/kar-63-187-spa-mobile-wave-44--settings--global-mob",
+      "backend": "claude",
+      "last_notified_status": "no_pr_reconciled",
+      "started_at": "2026-06-12T20:20:19.353919374Z",
+      "finished_at": "2026-06-12T20:22:15.165922376Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "kar-64",
+      "issue": 187,
+      "title": "SPA mobile wave 4/4 — Settings + global mobile polish",
+      "status": "done",
+      "pr": 191,
+      "branch": "feat/kar-64-187-spa-mobile-wave-44--settings--global-mob",
+      "backend": "claude",
+      "started_at": "2026-06-12T20:32:53.524474844Z",
+      "finished_at": "2026-06-12T20:53:13.33256844Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "kar-69",
+      "issue": 192,
+      "title": "Extension: toolbar click silently auto-submits non-video YouTube pages (home/feed/channel/playlist) as a job",
+      "status": "done",
+      "pr": 195,
+      "branch": "feat/kar-69-192-extension-toolbar-click-silently-auto-su",
+      "backend": "claude",
+      "started_at": "2026-06-20T10:45:38.623410811Z",
+      "finished_at": "2026-06-20T10:59:20.953688956Z",
+      "last_output_changed_at": "0001-01-01T00:00:00Z"
+    }
+  ],
+  "ordered_queue_state": [],
+  "github_metadata": {
+    "open_issues": 0,
+    "open_pull_requests": 2,
+    "pull_requests": [
+      {
+        "number": 196,
+        "title": "chore(deps): bump the python-deps group across 1 directory with 7 updates",
+        "head_ref_name": "dependabot/pip/python-deps-498ca0d278",
+        "state": "OPEN",
+        "ci_status": "success",
+        "checks_excerpt": "lint-test\tsuccess\nmigrations\tsuccess\nandroid\tsuccess\nextension\tsuccess\nspa\tsuccess\nextension-version-guard\tsuccess\n"
+      },
+      {
+        "number": 193,
+        "title": "chore(deps): bump yt-dlp from 2026.3.17 to 2026.6.9 in the yt-dlp-stack group across 1 directory",
+        "head_ref_name": "dependabot/pip/yt-dlp-stack-2df9510ec6",
+        "state": "OPEN",
+        "ci_status": "failure",
+        "checks_excerpt": "extension\tsuccess\nspa\tsuccess\nandroid\tsuccess\nmigrations\tsuccess\nextension-version-guard\tsuccess\nlint-test\tfailure\n"
+      }
+    ]
+  },
+  "recent_worker_log_excerpts": [
+    {
+      "session": "kar-46",
+      "issue": 169,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-46\nFailed to authenticate. API Error: 401 Invalid authentication credentials"
+    },
+    {
+      "session": "kar-47",
+      "issue": 169,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-47\nEverything is green and the PR is up. Final summary:\n\n## PR #171 — Android submitter app (Refs #169 / #78)\n\n**https://github.com/BeFeast/karaoke/pull/171** — all five CI jobs pass: `lint-test`, `migrations`, `extension-version-guard`, `spa`, and the new **`android`** job (2m26s), whose every step succeeded — change detection, JDK 17, **Gradle wrapper validation**, unit tests + lint, `assembleDebug`, and the **`karaoke-submitter-debug-apk` artifact upload** (3.8 MB, 30-day retention). Only the external Greptile review is still pending.\n\n**What was built** (`mobile/android/`, AGP 8.7.3 / Kotlin 2.1.0 / Gradle 8.11.1 / minSdk 26 / SDK 35):\n- Share-target activity (first `http(s)` token from `EXTRA_TEXT`), submit receipt, last-5 owner-scoped mini-feed with share-link rows.\n- WebView YouTube sign-in with both fingerprint mitigations, plus the amendment-3 \"Paste cookies.txt\" fallback (validated exactly like the server, stored encrypted, takes precedence until cleared).\n- Pure-Kotlin port of `extension/chrome/cookies.js` — **41 JVM unit tests, 0 failures**, including the golden fixture test asserting byte-for-byte equality.\n- Settings (base URL + `ktx_` pass) in `EncryptedSharedPreferences`; value-free error discipline mirrored client-side (422 pydantic details surface `msg` only, never `input`).\n- `docs/mobile-android.md`, README pointer, and the per-job-cookies client-list mention (amendment 4).\n\n**Verification:** I bootstrapped a local JDK 17 + Android SDK 35 toolchain instead of iterating blind through CI, so the exact CI commands ran green locally first (lint 0 errors after one real fix — see below). Standard gate after rebasing onto the moved `origin/main`: `uv sync --frozen` ✓, `ruff` clean, `pytest -q` exit 0. The committed `gradle-wrapper.jar` sha256 matches Gradle's official checksum.\n\n**Two deviations worth knowing:**\n1. The amendment's `WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST` guard is `@RestrictTo(LIBRARY_GROUP)` in webkit 1.12.1 — a lint `RestrictedApi` **error**. I verified in the AAR that the setter itself is public and throws `UnsupportedOperationException` when unsupported, so the try/catch is the support check (noted in the PR body).\n2. Your global gitignore (`~/.config/git/ignore:419`) ignores `*.jar` and silently dropped the wrapper jar from staging; it's force-added and `mobile/android/.gitignore` now carries a `!gradle/wrapper/gradle-wrapper.jar` negation. Both gotchas are saved to memory.\n\nPer amendment 6, `android` is not in main's required checks — merge should key on **all** check runs (they all pass). Not merging per worker rules; operator verification steps (sideload, gated-video round-trip) are tracked on #78."
+    },
+    {
+      "session": "kar-48",
+      "issue": 172,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-48\nFailed to authenticate. API Error: 401 Invalid authentication credentials"
+    },
+    {
+      "session": "kar-49",
+      "issue": 172,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-49\nFailed to authenticate. API Error: 401 Invalid authentication credentials"
+    },
+    {
+      "session": "kar-50",
+      "issue": 172,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-50\nFailed to authenticate. API Error: 401 Invalid authentication credentials"
+    },
+    {
+      "session": "kar-51",
+      "issue": 172,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-51\nPR opened: **https://github.com/BeFeast/karaoke/pull/174** — issue #172 is implemented, verified, and ready for review. (The \"1 uncommitted change\" warning is just the untracked `.maestro/` pipeline dir, intentionally left out.)\n\n## What was built\n\n**`POST /jobs/upload`** (multipart `file` + optional `title`) → 201 `JobOut`, same four-layer auth as `POST /jobs`. Per the audit amendments:\n- **P2**: endpoint declares no body params — Content-Length fast 413 runs before `request.form()`; the byte-counting chunked copy (async reads + `to_thread` NFS writes, per P9) is the authoritative enforcement of the new `KARAOKE_MAX_UPLOAD_BYTES` cap (200 MiB default).\n- **P3**: stream to `.uploads/*.part` → mkdir → `os.replace` to `work/source.audio` → *then* insert the Job row; a forced insert failure rolls back the staged tree (test-covered). No orphan rows, no stray files in any failure mode.\n- Sentinel `source_url = \"upload://\u003csanitized name\u003e\"` (new pure module `karaoke/uploads.py`), zero migrations; `POST /jobs` 422s `upload://` URLs; share HTML renders the filename, never the sentinel.\n\n**Pipeline**: `upload://` jobs skip yt-dlp/cookies entirely, reuse `downloading` with note `reading uploaded audio`, get metadata from `_probe_upload_meta` (ffprobe through the existing `_run` seam — case-insensitive tags, stem fallback, malformed duration → `None`) feeding the unchanged `derive_metadata`/LRCLIB/#148 path. Missing/undecodable source → `failed` with stage_note `uploaded audio is missing or not decodable`, no retry.\n\n## Verification\n\n- Gate: rebased on `origin/main` (already at tip), `uv sync --frozen` ok, `ruff` clean, **full suite 384 passed** (33 new tests; ffprobe/ffmpeg fully mocked).\n- Live smoke against a real uvicorn: 201 with correct sentinel + staged bytes, 415 on `notes.txt`, 422 on `upload://` via `POST /jobs`, share `\u003ctitle\u003e` shows `upload_tone.mp3`.\n\nTwo things worth knowing:\n1. **Lockfile**: `uv add python-multipart` also reconciled pre-existing pyproject↔lock drift on `main` (cryptography 48.0.1, uvicorn 0.49.0, ruff 0.15.17 — the committed lock was stale against committed Dependabot pins; `uv lock --check` now passes). Called out in the PR body.\n2. **`.gitignore`**: the blanket `*.mp3` ignore would have eaten the committed fixture, so I added a `!tests/fixtures/*.mp3` negation.\n\nOperator/live verification (real tagged mp3 on devbox, CF edge 413) remains post-deploy per the issue and is not claimed in the PR."
+    },
+    {
+      "session": "kar-52",
+      "issue": 173,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-52\nГотово — PR открыт: **https://github.com/BeFeast/karaoke/pull/175** (`Refs #173`, без auto-close).\n\n**Что сделано** (только `web/spa/src`, ноль пересечений с backend-PR):\n\n- **`api.ts` → `uploadJob(file, title?)`** — `FormData` с `file` (+ trimmed `title`), POST на `/jobs/upload` через существующий `request\u003cT\u003e`; `Content-Type` нигде не выставляется, boundary ставит браузер. `JobOut` не тронут.\n- **`lib/source.ts` (новый, pure)** — `sourceDisplay()`: `upload://…` → `kind: \"upload\"` + label с отрезанным префиксом (имя хранится сервером как есть, без percent-encoding — декодирование не нужно); всё остальное → `kind: \"url\"`. Не бросает на пустоте/мусоре.\n- **Booth submit card** — кнопка `.m-btn ghost` «Upload audio» рядом с «Put it on stage» + скрытый file input (`.mp3,.m4a,.wav,.flac,.ogg`, без `audio/*` — поправка P8). Выбор файла грузит сразу; оба контрола disabled при «Uploading…»; 413/415 маппятся в короткие читаемые строки в существующей `submitError`-полосе; успех сбрасывает picker и идёт тем же receipt-путём, что URL-submit (`onUpload` в App.tsx, как `onCreate`).\n- **Upload-aware рендеринг** — title-фоллбэки в Booth показывают имя файла (никогда сырой sentinel); `↗` только для `kind === \"url\"`. Stage: ссылка «source: … ↗» для uploads становится plain-span с именем файла, «▶ original ↗» скрыт. В `stage-core`/`marks` потребителей `source_url` нет (проверил).\n- **Retry (P1 из аудита)** — новый `canRetryJob()` в `jobStatus.ts`: кнопка Retry отсутствует для `upload://`-jobs, плюс защитный guard в `App.tsx onRetry`, чтобы sentinel никогда не ушёл в `POST /jobs` (который его 422-ит).\n- **Тесты** — `source.test.ts`, `api.test.ts` (FormData-shape, trimmed title, отсутствие Content-Type), кейсы `canRetryJob` в `boothMeta.test.ts`.\n\n**Верификация** — критерии разблокировки держались до старта (prod `/health` → v0.23.0, probe `POST /jobs/upload` → 422, не 404). Гейт целиком зелёный: `bun install --frozen-lockfile` (package.json/bun.lock не тронуты) → `typecheck` → `bun test` 59 pass → все 5 design guards → `vite build`; со стороны Python: rebase на `origin/main`, `uv sync --frozen`, `ruff` clean, полный `pytest` — 384 теста, exit 0.\n\nLive-проверка аплоада на LAN до `completed` — операторский (non-gating) пункт после deploy, отмечен в PR. Merge и deploy не делаю, как и положено."
+    },
+    {
+      "session": "kar-53",
+      "issue": 177,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-53\nDone. **PR #179 is open with all CI checks green:** https://github.com/BeFeast/karaoke/pull/179\n\n## What was delivered (issue #177, all four operator reports)\n\n1. **Duplicate context-menu entries** — the two `chrome.contextMenus.create` calls are now one table-driven registration from `MENU_SPEC` in a new pure module `guard.js`: a single \"Submit video to Karaoke\" entry with merged `contexts: [\"page\",\"link\"]`. Registry invariants (unique ids/titles, no shared contexts, one entry covering page+link) are unit-tested.\n\n2. **Self-submit / junk-URL guard** — new pure predicate `submitRefusal(url, baseUrl)` fronts both submit paths (toolbar popup and context menu) before any job is minted. It refuses non-http(s) schemes and URLs whose host equals the configured base URL's host (the self-submit that minted doomed job #79). The popup shows the refusal as a friendly note; the context-menu path shows it as the notification text. Unit-tested exactly per the acceptance matrix (youtube → ok, booth URL → refused, `chrome://` → refused, plus LAN-port and lookalike-host edge cases).\n\n3. **Receipt \u0026 feed polish** — failed receipts show the status chip once plus one compact error line (curated `stage_note`, else the first line of the dump, length-capped — new pure `receipt.js`, unit-tested) with the full PipelineError dump behind a hover tooltip. The receipt card gained a ✕ that dismisses it locally (persisted on the session dedup record, so reopening keeps it hidden and the job rides the \"tonight\" feed instead). Each feed row gained a ✕ calling `DELETE /jobs/{id}` with an inline two-step \"sure?\" confirm; the existing `failed ↻` affordance is untouched.\n\n4. **Transparent icons** — `render-icons.mjs` now extracts the mic glyph verbatim from `mark.svg` (geometry untouched) and renders `karaoke-{16,32,48,128}.png` plateless: transparent RGBA background, accent capsule + stroke arc/stand only. Visually verified at 128px. The SPA favicon keeps the card and re-rendered byte-identical — zero `web/spa/**` changes.\n\nAlso: manifest bumped 0.4.1 → 0.4.2, and I added an `extension` CI job (`bun install --frozen-lockfile` + `bun test`) since the extension's unit tests previously never ran in CI — the issue's criteria are headed \"CI-provable\".\n\n## Verification\n\nLocal gate from the rebased worktree: `uv sync --frozen` ok, `ruff check` clean, full `pytest` **384 passed**, extension `bun test` **42 pass / 0 fail** from a clean `node_modules`. On the PR, all six checks pass: lint-test, migrations, extension, extension-version-guard, spa, android (Greptile review bot still pending — not a CI gate). The operator-side gates (reload unpacked, live menu/refusal/dismiss/delete/icon checks) are listed in the PR body and the README's updated Manual Verification steps. PR body uses `Refs #177` (non-auto-closing); merge and deploy are left to the supervisor."
+    },
+    {
+      "session": "kar-54",
+      "issue": 176,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-54\nDone — **PR #178 is open: https://github.com/BeFeast/karaoke/pull/178**\n\n## What the bug was\n\nThe Stage console view's active-lyric preview (`LiveLyricWipe` in `web/spa/src/player/KaraokePlayer.tsx`) uses the `.m-wipe` marquee recipe, which is a `white-space: nowrap` inline-block — it never shrinks below its content width. The flex column already had `min-width: 0`, so the column itself sized correctly, but the wipe span inside painted past the column edge with default visible overflow, running under the console module. Reproduced before fixing: at 1280px the 140-char line rendered 1209px wide, ending at x=1493 while the console card starts at x=742.\n\n## The fix (one file, 8 lines)\n\nI checked the design source as the issue instructed: `proto/stage.jsx:136-138` gives the console preview a single-line slot (`minHeight: 22` at size 17), so the answer is **single-line ellipsis**, not wrapping. The wipe span now carries `max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom` as an inline adaptation — `inline-block` stays so the wipe-fill percentage keeps mapping to the text width on short lines, `vertical-align: bottom` cancels the overflow-hidden baseline shift (row height is byte-identical, 25.5px before/after), and the byte-exact `MARQUEE RECIPES` CSS block is untouched.\n\n## Verification\n\n- **Runtime, measured not eyeballed:** mock `/share` API + vite dev + CDP-driven headless Chrome with a synthetic 140-char pt-BR line and real playback ticks. At 1024/1280/1440/1920 the wipe now ends exactly at its column edge — `overlapsCard: false` everywhere (was `true` everywhere before).\n- **Screenshots:** before/after at 1280px pushed to the orphan `assets/kar-176-screenshots` branch (repo convention) and embedded in the PR body.\n- **Gates:** `bun run typecheck` · `bun test src` (59 pass) · `bun run build` · all 5 design guards · `uv run --frozen ruff` · full `uv run --frozen pytest -q` (384 tests, exit 0) — all green.\n\nThe PR uses `Refs #176` (non-closing) since the operator's live eye-check with the real pt-BR track remains open per the issue's gate."
+    },
+    {
+      "session": "kar-55",
+      "issue": 180,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-55\nPR is open: **https://github.com/BeFeast/karaoke/pull/182** — the work is complete.\n\n## Summary\n\n**What was built** for issue #180:\n\n- **`src/karaoke/api/preflight.py`** — the offline matching core. The extractor list is built once at module import via `gen_extractor_classes()` (1,871 classes), followed by a warm-up sweep that precompiles every lazy extractor's URL regex. `match_url()` returns the first suitable extractor whose `ie_key() != \"Generic\"`. No network, no subprocess, no `YoutubeDL` instantiation anywhere.\n- **`GET /preflight` route** in `routes.py`, gated by the same `Depends(require_owner)` as `/jobs`, returning `{\"supported\", \"extractor\", \"generic_only\"}`. Read-only — no DB session beyond the auth dependency, no job rows.\n- **`tests/api/test_preflight.py`** — 8 tests covering all acceptance cases, plus a read-only check that `/jobs` stays empty after preflight calls.\n\n**Two findings worth knowing:** yt-dlp's Generic extractor pattern-matches nearly *any* string — including `not-a-url` and the empty string — so the endpoint validates http(s) URL syntax *before* consulting extractors; that's what makes the invalid-input → `generic_only: false` contract hold. And the first full extractor sweep costs ~350 ms in lazy regex compilation, which is why the warm-up runs at import — measured warm latency through a real app is **1.2–5.6 ms per request**, well under the 50 ms budget.\n\n**Verification gate (all green):** rebased on `origin/main`, `uv sync --frozen` ✅, `ruff check` clean ✅, full `pytest` suite **392 passed** ✅. No migration, no SPA/extension changes. The PR body uses `Refs #180` (non-auto-closing) since the extension consumer and runtime verification land separately; merge and deploy are left to the operator per repo rules."
+    },
+    {
+      "session": "kar-56",
+      "issue": 181,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-56\nCI watch is running in the background — I'll report the check results when they land. Meanwhile, here's where things stand:\n\n**Done so far:** Implemented #181 and opened [PR #183](https://github.com/BeFeast/karaoke/pull/183).\n\n- **New pure module `extension/chrome/preflight.js`** — `classifySubmit(url, baseHost, preflightResult)` returning `\"submit\" | \"confirm\" | \"refuse\"`, plus `fetchPreflight` (injectable fetch, 2 s AbortController timeout, returns `null` on any failure so infrastructure never hard-blocks).\n- **Service worker** — after the #177 local guard and the session dedup check, the toolbar submit now calls `GET /preflight`: dedicated extractor → submit immediately; generic-only → confirm response; nothing matched → message-only refusal; timeout/error → confirm fallback. `force: true` (Submit anyway) skips the check. The matched extractor is stored on the dedup record.\n- **Popup** — new confirm state with the operator-locked Russian note and a **Submit anyway** button; the receipt meta line now shows `Youtube ✓ · #\u003cid\u003e`; the static \"already submitted\" hint hides on states where nothing was submitted.\n- **Right-click on the toolbar icon** — `Open Karaoke booth` (`contexts: [\"action\"]`) registered via the existing single `MENU_SPEC`/`removeAll` path, opens `\u003cbase\u003e/app/`.\n- **Manifest** bumped 0.4.2 → 0.5.0; zero `web/spa/src/**` changes; README updated (behavior docs + manual-verification steps 13–14).\n\n**Verification (local gate, all green):** rebased on `origin/main`; `uv sync --frozen` OK; `ruff check` clean; full `pytest -q` — 392 tests, exit 0; `bun test` in `extension/chrome` — 63 pass / 0 fail, including the new `preflight.test.js` (all five classify branches + timeout fallback, mock-fetch matrix) and the new action-menu assertion in `guard.test.js`."
+    },
+    {
+      "session": "kar-57",
+      "issue": 184,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-57\nDone. **PR #188 is open: https://github.com/BeFeast/karaoke/pull/188** — issue #184 (SPA mobile wave 1/4) implemented in full, all gates green.\n\n**What changed** (7 files, +150/−39):\n- **`lib/layout.ts` (new):** `PHONE_QUERY`/`usePhoneLayout` moved verbatim out of Perf.tsx and exported, plus new `COARSE_QUERY`/`useCoarsePointer` with the same live-matchMedia pattern. The Perf.tsx diff is strictly an import swap (+1 import, −18 moved lines).\n- **`styles.css`:** the five `:hover` rules wrapped in `@media (hover: hover)` — `.m-btn:hover` kept in its original position inside the MARQUEE RECIPES block, because it precedes `.m-btn.ghost` at equal specificity and relocating it would have changed the ghost-button cascade; 44px coarse-pointer touch targets added in a marked sub-block inside RECIPES (guard 3 passes); block header comment amended per audit item V3; `.toast` now clears `env(safe-area-inset-bottom)`.\n- **`KaraokePlayer.tsx`:** touch devices see \"tap the wave to seek\" instead of the keyboard hint row, and the DROP caption loses the `· or \"V\"` suffix.\n- **`Stage.tsx` + `lib/source.ts`:** phone header row wraps (element order unchanged, desktop branch byte-identical), title 22px on phone, source line renders the new pure `compactUrlLabel()` single-line with ellipsis on both widths (full URL stays in the href), view toggle gets bigger touch padding.\n- **`index.html`:** verified it already has `viewport-fit=cover` — no change, stated in the PR body.\n\n**Verification:** full SPA CI gate green (typecheck, 64 bun tests including the new `compactUrlLabel` suite, all 5 design guards, build); ruff clean and full pytest suite exit 0; engine files and package.json have zero diff.\n\n**Evidence:** screenshots captured via `vite preview` + raw-CDP headless Chrome (no new deps) and published on the orphan `assets/kar-184-screenshots` branch. Two findings worth noting: raw CDP `Emulation.setTouchEmulationEnabled` does flip `(pointer: coarse)` (the issue's audit doubted this — verified in-page: coarse=true, hover=false, `.m-btn.sm` measured at 44px, zero horizontal overflow at 390px), and the 768px desktop shot is **byte-identical** (same SHA-256) to one captured from an origin/main build with the same harness — the strongest possible proof of the \"768px visually identical\" criterion.\n\nPer the issue's closure gate, #184 stays open after merge pending the operator's real-iPhone eye-check. I did not merge; the supervisor/operator handles merge and deploy."
+    },
+    {
+      "session": "kar-58",
+      "issue": 185,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-58\nDone — **PR #189 is open**: https://github.com/BeFeast/karaoke/pull/189 (`Refs #185`, non-auto-closing; the issue stays open for the iPhone eye-check closure gate).\n\n## What was implemented\n\n- **A. Shared BlendRail** — `BLEND_GRADIENT` (exact literal) and the phone blend rail moved from `Perf.tsx` into `stage-core.tsx` as `BlendRail`; the drag math extracted as pure `railPct()` in `engineMath.ts`, shared with Perf's `dragBlend`. Perf's phone rendering proven pixel-identical: the before/after 390px Perf PNGs are **byte-identical** (same SHA-256).\n- **B. Phone console** — the console row stacks via `usePhoneLayout()`; `PhoneConsoleModule` replaces the fader pod on phone only (BlendRail bound to VOX, INST not rendered, full-width 44px DROP with the same hold semantics + coarse-gated caption). The hold-V listener was extracted into a shared `useHoldVDuck` so a narrow desktop window keeps the shortcut its caption advertises.\n- **C.** DROP iOS long-press guards on both widths. **D.** Setlist dimmer hit zone 16→44px, thumb 18→26px/4px-border on phone. **E.** Play circle 40→48px on phone, no control removed. **F.** `waveHeight` option (72 on phone at mount, default 96) — `useKaraokePlayer.ts` carries only that option; `stemEngine.ts`/`ws.ts`/`api.ts` zero diff.\n\n## One scope addition worth knowing about\n\nAt 390px the setlist view was already broken on main: the nowrap `.m-wipe` current line forced the `.m-sign` to 445px and pushed the dimmer rail to x=485 — **fully off-screen**, which would have made the issue's new 44px hit zone unreachable and the closure gate unpassable. I applied the #176 console precedent, phone-gated: `minWidth: 0` on the sign + the ellipsis cap on the wipe (via a new opt-in `style` prop on `MWipe`, render-identical when omitted). Recorded as a deviation in code comments and the PR.\n\n## Verification\n\n- SPA gate green: typecheck, **69 bun tests** (incl. 5 new `railPct` cases), all 5 design guards, build. Python gate: ruff clean, full `pytest -q` exit 0 after rebase on current main.\n- Desktop byte-identical proof: 768px console and setlist PNGs from this branch and an origin/main build have **identical SHA-256** (plus matching sub-pixel rect probes).\n- 390px probes: play 48×48, DROP 308×44, BlendRail 308×28, zero faders, wave 72px, dimmer zone 44/thumb 26, no horizontal overflow, real `(pointer: coarse)` emulation asserted in-page. Screenshots published to the `assets/kar-185-screenshots` orphan branch and embedded in the PR."
+    },
+    {
+      "session": "kar-59",
+      "issue": 186,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-59\nDone. **PR [#190](https://github.com/BeFeast/karaoke/pull/190) is open with all CI green** — issue #186 (SPA mobile wave 3/4, Booth phone layout) is implemented end to end.\n\n## What changed\n\nOne file, `web/spa/src/components/Booth.tsx` (+115/−32), all behind the wave-1 `usePhoneLayout()` hook:\n\n- **Submit console** stacks on phone: full-width URL input (ported font/padding/size kept verbatim), then `Put it on stage` (`flex: 1`) + `Upload audio` side by side. Controls extracted to shared consts so the two layouts can't drift.\n- **CompactRow** goes two-line on phone: chip + ellipsized title, then meta (with `receipt: #…`) + right-aligned `↗ / ▸ Sing / ↻ Retry / ✕` (44px tall via wave-1 coarse sizing). The failed-error box spans the full card; **MDuetWave is not rendered on phone** (recorded adaptation — it starved the title at 390px).\n- **PStageRow** grid `58px 1fr auto` → `58px minmax(0, 1fr) auto` per audit amendment V2 (the #51-era overflow class).\n- **MarqueeTopBar** wraps on phone (same elements/order); Settings still renders fine.\n\n## Verification\n\n- SPA gate green locally and in CI: typecheck, 69 bun tests, all 5 design guards, build. Python gate: ruff clean, full `pytest -q` exit 0 after rebase on current main.\n- **390px (real `pointer: coarse` emulation):** `scrollWidth === innerWidth === 390` on the populated Booth, all four required states captured, per-card action inventory probed (each row keeps its full action set, zero sparkline SVGs).\n- **768px provably unchanged:** branch and origin/main captures are **byte-identical** (same SHA-256) — the strongest form of acceptance criterion 4.\n- Screenshots + `probes.json` live on the orphan `assets/kar-186-screenshots` branch and are embedded in the PR body, including a before/after pair showing main's 390px input crushed to one character.\n\nThe PR body uses non-auto-closing `Refs #186`; the issue stays open for the operator's real-iPhone eye-check per the closure gate. Merge and deploy are left to the supervisor."
+    },
+    {
+      "session": "kar-60",
+      "issue": 187,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-60\nYou've hit your session limit · resets 8:30pm (UTC)"
+    },
+    {
+      "session": "kar-61",
+      "issue": 187,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-61\nYou've hit your session limit · resets 8:30pm (UTC)"
+    },
+    {
+      "session": "kar-62",
+      "issue": 187,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-62\nYou've hit your session limit · resets 8:30pm (UTC)"
+    },
+    {
+      "session": "kar-63",
+      "issue": 187,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-63\nYou've hit your session limit · resets 8:30pm (UTC)"
+    },
+    {
+      "session": "kar-64",
+      "issue": 187,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /mnt/storage/worktrees/karaoke/kar-64\n`lint-test` is the only check still pending (it ran the same suite I already ran locally — full pytest exit 0, ruff clean). The background watcher will report when it lands.\n\n**Status summary while that finishes:**\n\nPR **https://github.com/BeFeast/karaoke/pull/191** is open for issue #187 (SPA mobile wave 4/4), branch rebased on `origin/main`, with `Refs #187` (non-auto-closing — the iPhone eye-check closure gate stays with the operator).\n\nWhat shipped (4 files, all in `web/spa`):\n- **SettingsPage** — mint row stacks behind `usePhoneLayout()` (full-width input, full-width centered button), container side padding 16 on phone; desktop DOM identical.\n- **SignInWall** — avatar gets a 44×44 coarse-pointer hit target via a transparent hit-area button (visual 30px circle and layout footprint unchanged); menu-item hover moved from inline `onMouseEnter/onMouseLeave` mutation to a `.signin-item` class behind `@media (hover: hover)` (iOS sticky-hover fix); outside-tap dismiss verified pre-existing per amendment V5 — no second listener.\n- **styles.css** — `.modal` width `min(420px, calc(100vw - 32px))` (16px side margins at 390); plus a 44px coarse floor for the modal's `.btn` actions, which the wave-1 rule (`.m-btn` only) had missed.\n- **vite.config.ts** — `/tokens` added to the dev/preview proxy (the one Settings route missing from the table).\n\nEvidence (orphan branch `assets/kar-187-screenshots`, embedded in the PR): Settings 390 before/after, mint reveal banner, trusted-LAN 403 hint, ConfirmDialog 390/768, avatar menu 390/768 with real-touch tap-to-open / inside-tap-stays / outside-tap-dismisses probes, and the whole-app 390 no-overflow sweep (Booth, Stage console, setlist, Settings, Perf — all `scrollWidth === 390`). Six SHA-256 byte-identical pairs prove desktop 768 and the Perf overlay (both widths) are pixel-unchanged vs main.\n\nVerification: `bun install --frozen-lockfile \u0026\u0026 typecheck \u0026\u0026 test (69) \u0026\u0026 guards (5/5) \u0026\u0026 build` green; `uv run --frozen ruff` clean; full `uv run --frozen pytest -q` exit 0; engine/API (`stemEngine.ts`, `useKaraokePlayer.ts`, `ws.ts`, `api.ts`) zero diff; zero new deps."
+    },
+    {
+      "session": "kar-69",
+      "issue": 192,
+      "status": "done",
+      "excerpt": "[maestro] worker worktree: /home/god/worktrees/karaoke/kar-69\nPR opened: **https://github.com/BeFeast/karaoke/pull/195**\n\n## Summary\n\nFixed #192 — the toolbar click was silently minting jobs from non-video YouTube container pages (home/feed/channel/playlist/search).\n\n**Root cause:** container `youtube:*` URLs match a dedicated extractor, so `GET /preflight` reported `supported=True`, and the extension mapped `supported` → `\"submit\"` with no confirm.\n\n**Fix — gate auto-submit on `single_media`:**\n- **`preflight.py`** — added `single_media: bool` to `PreflightResult`, set from `getattr(ie, \"_RETURN_TYPE\", None) == \"video\"` (conservative: only the literal `'video'` counts; `'any'`/`'playlist'`/`None` → not single-media).\n- **`routes.py`** — surfaced `single_media` in the `/preflight` response.\n- **`preflight.js`** — `classifySubmit()` returns `\"submit\"` only when `supported \u0026\u0026 single_media`; `supported \u0026\u0026 !single_media` → `\"confirm\"` with a new `CONFIRM_CONTAINER_MESSAGE`. `fetchPreflight()` defaults `single_media` to `false` when absent, so an older booth degrades to confirm, never a silent submit.\n- **`service_worker.js`** — surfaces the container confirm reason/message.\n- **`manifest.json`** — bumped `0.5.0 → 0.5.1`.\n\n**Fail-safe direction:** when in doubt, demote to confirm (one extra click). Watch URLs keep auto-submitting as before.\n\n**Verification gate (all green):**\n- `ruff check src tests` → All checks passed\n- `pytest -q` → **398 passed** (server tests assert the issue's exact extractor table against deployed yt-dlp `2026.3.17`)\n- `bun test` (extension) → **65 pass, 0 fail**\n\nPR body uses **`Refs #192`** (non-closing): the live operator-style smoke test requires loading the unpacked extension against a running booth, which I can't perform here — that's documented in the PR for the operator to confirm. No pipeline change was needed (`--no-playlist` already covers force-confirmed container URLs). The untracked `.maestro/` scaffolding was deliberately left out of the commit."
+    }
+  ],
+  "stuck_state_detector_outputs": [
+    {
+      "name": "deterministic_supervisor",
+      "status": "ok",
+      "recommended_action": "none",
+      "risk": "safe",
+      "confidence": 0.8,
+      "reasons": [
+        "State has 20 session(s)",
+        "0 active session(s) count against 2 max parallel slot(s)",
+        "Supervisor policy: mode=cautious; enabled=true; excluded_labels=blocked,wontfix,question,duplicate,invalid,epic,meta; safe_actions=add_ready_label,remove_ready_label,remove_blocked_label,add_issue_comment,merge_pr,close_issue; approval_required=delete_worktree",
+        "Outcome: karaoke ships small, reliable PRs against the maestro-ready issue queue; the per-job client-side cookie model holds; gated YouTube downloads keep working; RunPod stays within per-job + daily cost caps.; runtime target: http://10.10.0.13:13140",
+        "Checked 0 open issue(s)",
+        "No worker is running, no PR needs attention, and no eligible issue is ready",
+        "Policy rule: issue_labels"
+      ]
+    }
+  ],
+  "recent_supervisor_decisions": [
+    {
+      "created_at": "2026-06-23T15:10:22.894344414Z",
+      "summary": "Karaoke outcome is healthy for shipping small, reliable PRs while preserving per-job client-side cookies, gated YouTube downloads, and RunPod cost caps; there are no eligible maestro-ready issues, active sessions, queued items, or detector-approved interventions.",
+      "recommended_action": "none",
+      "target": {},
+      "risk": "safe",
+      "requires_approval": false,
+      "outcome": {
+        "configured": true,
+        "goal": "karaoke ships small, reliable PRs against the maestro-ready issue queue; the per-job client-side cookie model holds; gated YouTube downloads keep working; RunPod stays within per-job + daily cost caps.",
+        "desired_outcome": "karaoke ships small, reliable PRs against the maestro-ready issue queue; the per-job client-side cookie model holds; gated YouTube downloads keep working; RunPod stays within per-job + daily cost caps.",
+        "runtime_target": "http://10.10.0.13:13140",
+        "runtime_url": "http://10.10.0.13:13140",
+        "runtime_host": "devbox LXC 111 — release-cut deploy: release-deploy.sh builds karaoke:X.Y.Z, retags karaoke:current, Dockhand recreate (docs/runbooks/release-rollback.md); deploy.sh start never builds",
+        "health_state": "healthy",
+        "health_checked_at": "2026-06-23T15:10:22Z",
+        "health_signal": "healthcheck_url",
+        "health_summary": "GET http://10.10.0.13:13140/health returned 200 OK",
+        "next_action": "Runtime outcome health is passing; continue normal supervisor policy.",
+        "source_repo_path": "/home/god/src/karaoke",
+        "deployment_status_command": "ssh devbox 'docker ps --filter name=karaoke --format \"{{.Names}} {{.Status}}\"'",
+        "deploy_status_command": "ssh devbox 'docker ps --filter name=karaoke --format \"{{.Names}} {{.Status}}\"'",
+        "healthcheck_url": "http://10.10.0.13:13140/health",
+        "pass_required_for_done": true,
+        "fail_requires_visible_work": true,
+        "merged_prs": 12,
+        "last_merge_at": "2026-06-20T10:55:41Z"
+      }
+    },
+    {
+      "created_at": "2026-06-23T15:15:22.893468659Z",
+      "summary": "Karaoke outcome is healthy for shipping small, reliable PRs while preserving per-job client-side cookies, gated YouTube downloads, and RunPod cost caps; there are no eligible maestro-ready issues, active sessions, queued items, or detector-approved interventions.",
+      "recommended_action": "none",
+      "target": {},
+      "risk": "safe",
+      "requires_approval": false,
+      "outcome": {
+        "configured": true,
+        "goal": "karaoke ships small, reliable PRs against the maestro-ready issue queue; the per-job client-side cookie model holds; gated YouTube downloads keep working; RunPod stays within per-job + daily cost caps.",
+        "desired_outcome": "karaoke ships small, reliable PRs against the maestro-ready issue queue; the per-job client-side cookie model holds; gated YouTube downloads keep working; RunPod stays within per-job + daily cost caps.",
+        "runtime_target": "http://10.10.0.13:13140",
+        "runtime_url": "http://10.10.0.13:13140",
+        "runtime_host": "devbox LXC 111 — release-cut deploy: release-deploy.sh builds karaoke:X.Y.Z, retags karaoke:current, Dockhand recreate (docs/runbooks/release-rollback.md); deploy.sh start never builds",
+        "health_state": "healthy",
+        "health_checked_at": "2026-06-23T15:15:22Z",
+        "health_signal": "healthcheck_url",
+        "health_summary": "GET http://10.10.0.13:13140/health returned 200 OK",
+        "next_action": "Runtime outcome health is passing; continue normal supervisor policy.",
+        "source_repo_path": "/home/god/src/karaoke",
+        "deployment_status_command": "ssh devbox 'docker ps --filter name=karaoke --format \"{{.Names}} {{.Status}}\"'",
+        "deploy_status_command": "ssh devbox 'docker ps --filter name=karaoke --format \"{{.Names}} {{.Status}}\"'",
+        "healthcheck_url": "http://10.10.0.13:13140/health",
+        "pass_required_for_done": true,
+        "fail_requires_visible_work": true,
+        "merged_prs": 12,
+        "last_merge_at": "2026-06-20T10:55:41Z"
+      }
+    },
+    {
+      "created_at": "2026-06-23T15:20:22.893593814Z",
+      "summary": "Karaoke outcome is healthy for shipping small, reliable PRs while preserving per-job client-side cookies, gated YouTube downloads, and RunPod cost caps; there are no eligible maestro-ready issues, active sessions, queued items, or detector-approved interventions.",
+      "recommended_action": "none",
+      "target": {},
+      "risk": "safe",
+      "requires_approval": false,
+      "outcome": {
+        "configured": true,
+        "goal": "karaoke ships small, reliable PRs against the maestro-ready issue queue; the per-job client-side cookie model holds; gated YouTube downloads keep working; RunPod stays within per-job + daily cost caps.",
+        "desired_outcome": "karaoke ships small, reliable PRs against the maestro-ready issue queue; the per-job client-side cookie model holds; gated YouTube downloads keep working; RunPod stays within per-job + daily cost caps.",
+        "runtime_target": "http://10.10.0.13:13140",
+        "runtime_url": "http://10.10.0.13:13140",
+        "runtime_host": "devbox LXC 111 — release-cut deploy: release-deploy.sh builds karaoke:X.Y.Z, retags karaoke:current, Dockhand recreate (docs/runbooks/release-rollback.md); deploy.sh start never builds",
+        "health_state": "healthy",
+        "health_checked_at": "2026-06-23T15:20:22Z",
+        "health_signal": "healthcheck_url",
+        "health_summary": "GET http://10.10.0.13:13140/health returned 200 OK",
+        "next_action": "Runtime outcome health is passing; continue normal supervisor policy.",
+        "source_repo_path": "/home/god/src/karaoke",
+        "deployment_status_command": "ssh devbox 'docker ps --filter name=karaoke --format \"{{.Names}} {{.Status}}\"'",
+        "deploy_status_command": "ssh devbox 'docker ps --filter name=karaoke --format \"{{.Names}} {{.Status}}\"'",
+        "healthcheck_url": "http://10.10.0.13:13140/health",
+        "pass_required_for_done": true,
+        "fail_requires_visible_work": true,
+        "merged_prs": 12,
+        "last_merge_at": "2026-06-20T10:55:41Z"
+      }
+    }
+  ]
+}
