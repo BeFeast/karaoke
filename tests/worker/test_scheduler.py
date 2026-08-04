@@ -167,7 +167,7 @@ async def test_run_real_job_completes_with_mocked_gpu(factory, monkeypatch, tmp_
     monkeypatch.setattr(pipeline, "_wav_to_mp3", fake_wav_to_mp3)
 
     # Mock VastClient.run to return a result pointing at on-disk fakes.
-    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
         work_dir.mkdir(parents=True, exist_ok=True)
         voc = work_dir / "vocals.wav"
         inst = work_dir / "instrumental.wav"
@@ -269,7 +269,7 @@ async def test_run_real_job_prefers_lrclib_synced(factory, monkeypatch, tmp_path
     monkeypatch.setattr(pipeline, "_to_wav", fake_to_wav)
     monkeypatch.setattr(pipeline, "_wav_to_mp3", fake_wav_to_mp3)
 
-    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
         work_dir.mkdir(parents=True, exist_ok=True)
         voc = work_dir / "vocals.wav"
         inst = work_dir / "instrumental.wav"
@@ -373,7 +373,7 @@ async def test_run_real_job_forced_aligns_plain_only(factory, monkeypatch, tmp_p
     aligned = "[00:01.00]plain one\n[00:02.50]plain two"
     captured: dict = {}
 
-    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
         captured["align_text"] = align_text
         captured["align_lang"] = align_lang
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -453,7 +453,7 @@ async def test_run_real_job_plain_only_tolerates_no_aligned_lrc(
 
     captured: dict = {}
 
-    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
         captured["align_text"] = align_text
         work_dir.mkdir(parents=True, exist_ok=True)
         voc = work_dir / "vocals.wav"

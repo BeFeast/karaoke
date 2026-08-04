@@ -691,13 +691,56 @@ _ISO1_TO_ISO3 = {
 }
 
 
-def _align_lang(source_meta: dict) -> str:
+# Unicode-script → ISO-639-1 hint for scripts that map near-unambiguously to
+# one language in practice (Hebrew script ≈ Hebrew, etc.). Deliberately
+# excludes Cyrillic/Arabic/Han — each spans many languages, and Whisper's
+# auto-detect handles them well (ru detected at p=0.86 on live evidence);
+# forcing the wrong language is worse than not hinting (#260).
+_SCRIPT_LANG_RANGES: tuple[tuple[str, range], ...] = (
+    ("he", range(0x0590, 0x0600)),  # Hebrew
+    ("el", range(0x0370, 0x0400)),  # Greek + Coptic block
+    ("ko", range(0xAC00, 0xD7A4)),  # Hangul syllables
+    ("th", range(0x0E00, 0x0E80)),  # Thai
+    ("ka", range(0x10A0, 0x1100)),  # Georgian
+    ("hy", range(0x0530, 0x0590)),  # Armenian
+)
+
+
+def _script_lang_hint(*texts: str | None) -> str | None:
+    """ISO-639-1 language hint from the dominant Unicode script of ``texts``.
+
+    Whisper misdetected a Hebrew vocal stem as English at p=0.456 (#260, job
+    187) — but the video *title* was unambiguously Hebrew script. Returns a
+    hint only when one mapped script accounts for at least half of all
+    letters across the inputs, so a lone native-script credit inside an
+    otherwise-Latin title never flips the language.
+    """
+    counts: dict[str, int] = {}
+    total_letters = 0
+    for text in texts:
+        for ch in text or "":
+            if not ch.isalpha():
+                continue
+            total_letters += 1
+            cp = ord(ch)
+            for code, rng in _SCRIPT_LANG_RANGES:
+                if cp in rng:
+                    counts[code] = counts.get(code, 0) + 1
+                    break
+    if not counts:
+        return None
+    code, hits = max(counts.items(), key=lambda kv: kv[1])
+    return code if hits * 2 >= total_letters else None
+
+
+def _align_lang(source_meta: dict, hint: str | None = None) -> str:
     """Best-effort ISO-639-3 code for force-alignment from job metadata.
 
     Accepts either an ISO-639-1 (``"en"``) or already-639-3 (``"eng"``) value
-    under ``language``/``lang``; defaults to English when unknown/absent.
+    under ``language``/``lang``, then the caller-supplied script-derived
+    ``hint`` (#260); defaults to English when unknown/absent.
     """
-    raw = source_meta.get("language") or source_meta.get("lang")
+    raw = source_meta.get("language") or source_meta.get("lang") or hint
     code = str(raw or "").strip().lower()
     if len(code) == 3:
         return code
@@ -760,6 +803,37 @@ def _read_whisper_segments(lyrics_json_path: Path | None) -> list[dict] | None:
         return None
     segments = body.get("segments")
     return segments if isinstance(segments, list) else None
+
+
+def _read_whisper_language(
+    lyrics_json_path: Path | None,
+) -> tuple[str, float | None] | None:
+    """Read Whisper's detected ``(language, language_probability)`` from the
+    GPU job's ``lyrics.json`` (#260).
+
+    Tolerant like :func:`_read_whisper_segments`: any missing/unreadable/
+    malformed input returns ``None``. A misdetection (Hebrew decoded as
+    English at p=0.456, job 187) was invisible without shelling into the
+    artifact volume — persisting these two fields makes it diagnosable from
+    ``metadata.json``.
+    """
+    if lyrics_json_path is None:
+        return None
+    try:
+        body = json.loads(lyrics_json_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    language = str(body.get("language") or "").strip()
+    if not language:
+        return None
+    probability: float | None
+    try:
+        probability = round(float(body["language_probability"]), 3)
+    except (KeyError, TypeError, ValueError):
+        probability = None
+    return language, probability
 
 
 # ---------------------------------------------------------------------------
@@ -885,17 +959,25 @@ async def run_real_job(
         #   * duration hard-reject (#148) salvaged text (#149) — the words fit,
         #     only the timings belonged to the wrong edit.
         # Instrumental / miss have nothing to align.
+        # Language hint (#260): yt-dlp metadata never carries a language, so
+        # derive one from the dominant Unicode script of the title/artist/
+        # track. Feeds BOTH the whisper transcription (whisper_lang, ISO-639-1;
+        # r10+ handler — older images ignore the key) and the force-aligner
+        # (align_lang, ISO-639-3).
+        lang_hint = _script_lang_hint(
+            title, source_meta.get("artist"), source_meta.get("track")
+        )
         align_text: str | None = None
         align_lang: str | None = None
         if lyrics.synced_lrc:
             align_text = lrc_to_plain(lyrics.synced_lrc)
-            align_lang = _align_lang(source_meta)
+            align_lang = _align_lang(source_meta, hint=lang_hint)
         elif lyrics.plain and not lyrics.instrumental:
             align_text = lyrics.plain
-            align_lang = _align_lang(source_meta)
+            align_lang = _align_lang(source_meta, hint=lang_hint)
         elif lyrics.rejected_text:
             align_text = lyrics.rejected_text
-            align_lang = _align_lang(source_meta)
+            align_lang = _align_lang(source_meta, hint=lang_hint)
 
         # --- separating (provision + /demucs) -------------------------------
         if not await _set_stage(session_factory, job_id, JobStatus.separating, 45):
@@ -934,6 +1016,7 @@ async def run_real_job(
             work_dir,
             align_text=align_text,
             align_lang=align_lang,
+            whisper_lang=lang_hint,
         )
         # GPU window closed (the client destroyed the instance in its own
         # ``finally``): push the final cost, then the WS-only ``finalizing``
@@ -989,6 +1072,13 @@ async def run_real_job(
             "synced": lyrics_prov["synced"],
             "instrumental": lyrics_prov["instrumental"],
         }
+        # Whisper's detected language + confidence (#260) — only when the GPU
+        # returned a readable lyrics.json, so old images keep the shape stable.
+        whisper_language = _read_whisper_language(gpu.lyrics_json_path)
+        if whisper_language is not None:
+            metadata["whisper_language"] = whisper_language[0]
+            if whisper_language[1] is not None:
+                metadata["whisper_language_probability"] = whisper_language[1]
         # Why an LRCLIB record was dropped (duration hard-reject, #148) — only
         # present when it happened, so normal jobs keep a stable metadata shape.
         if lyrics_prov.get("lyrics_lrclib_rejected"):
@@ -1073,6 +1163,7 @@ async def _run_gpu_with_capacity_retry(
     *,
     align_text: str | None,
     align_lang: str | None,
+    whisper_lang: str | None = None,
 ):
     """Run the GPU stage, auto-retrying transient RunPod capacity stalls.
 
@@ -1105,6 +1196,7 @@ async def _run_gpu_with_capacity_retry(
                 functools.partial(
                     client.run, mix_wav, work_dir,
                     align_text=align_text, align_lang=align_lang,
+                    whisper_lang=whisper_lang,
                 )
             )
         except RunpodColdStartError as exc:

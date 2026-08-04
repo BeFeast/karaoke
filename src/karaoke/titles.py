@@ -58,6 +58,13 @@ _NOISE_WORDS: tuple[str, ...] = (
     "free dl",
     "lyrics on screen",
     "with lyrics",
+    # Hebrew upload noise (#260): "official clip", "with lyrics", "lyrics",
+    # "karaoke". Longer phrases must precede their substrings — the joined
+    # alternation is first-match ("עם מילים" before "מילים").
+    "קליפ רשמי",
+    "עם מילים",
+    "מילים",
+    "קריוקי",
     "color coded",
     "color coded lyrics",
     "monstercat release",
@@ -100,6 +107,18 @@ _BARE_PIPE_NOISE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Trailing bare dash-delimited noise tail, e.g. "Artist - Song - עם מילים HD"
+# or "Artist - Song - Lyrics HD" (#260). Stripped only when the remaining head
+# still contains a dash separator (see normalize_title) so a real track that is
+# literally a noise word — "עדן חסון - מילים", "אייל גולן - קריוקי" — keeps its
+# track segment.
+_TRAILING_DASH_NOISE_RE = re.compile(
+    rf"\s+[-‐‑־–—]\s*(?:(?:{_NOISE_PHRASE})[\s,/&|+]*)+$",
+    re.IGNORECASE,
+)
+# Any artist/track dash separator (mirrors the dash classes of _SPLIT_RES).
+_ANY_DASH_SEP_RE = re.compile(r"\s+[-‐‑־]\s+|\s*[–—]\s*")
+
 # Collapses leftover empty bracket pairs and repeated separators.
 _EMPTY_BRACKETS_RE = re.compile(r"[\(\[\{]\s*[\)\]\}]")
 _MULTISPACE_RE = re.compile(r"\s{2,}")
@@ -140,6 +159,12 @@ def normalize_title(raw: str | None) -> str:
     for _ in range(6):
         new = _NOISE_GROUP_RE.sub(" ", text)
         new = _BARE_PIPE_NOISE_RE.sub("", new)
+        # Drop a trailing dash-delimited noise-only segment, but only while an
+        # artist/track dash remains in the head — otherwise "Artist - מילים"
+        # (a song literally named after a noise word) would lose its track.
+        m = _TRAILING_DASH_NOISE_RE.search(new)
+        if m and _ANY_DASH_SEP_RE.search(new[: m.start()]):
+            new = new[: m.start()]
         new = _EMPTY_BRACKETS_RE.sub(" ", new)
         if new == text:
             break
@@ -154,14 +179,17 @@ def normalize_title(raw: str | None) -> str:
 # Artist / track splitting
 # ---------------------------------------------------------------------------
 
-# Separators between artist and title, in priority order. The hyphen variants
-# require surrounding whitespace so we never split a hyphenated word like
-# "Spider-Man"; the others (en/em dash, "–", "—") are split with optional
-# spacing because they are rarely used inside a word.
+# Separators between artist and title, in priority order. All dash classes
+# live in ONE alternation so the LEFTMOST dash wins regardless of class —
+# separate class-priority patterns mis-split mixed-dash titles like
+# "עדן בן זקן – כולם באילת - עם מילים" at the second dash (#260). The
+# hyphen-like variants (ASCII -, U+2010 ‐, U+2011 ‑, Hebrew maqaf ־) require
+# surrounding whitespace so we never split a hyphenated word like
+# "Spider-Man"; en/em dash split with optional spacing because they are
+# rarely used inside a word.
 _SPLIT_RES: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\s+[-]\s+"),     # "Artist - Title"
-    re.compile(r"\s*[–—]\s*"),    # "Artist – Title" / "Artist — Title"
-    re.compile(r"\s+[:]\s+"),     # "Artist : Title"
+    re.compile(r"\s+[-‐‑־]\s+|\s*[–—]\s*"),  # "Artist - Title" (any dash)
+    re.compile(r"\s+[:]\s+"),                # "Artist : Title"
 )
 
 
@@ -222,7 +250,7 @@ def parse_artist_track(title: str | None) -> ParsedTitle:
 # quotes): keep only the quoted phrase and drop the trailing upload chatter.
 # e.g. «Конь». Голубой Ургант. Фрагмент выпуска … → Конь
 _LEADING_QUOTED_RE = re.compile(
-    r'^\s*[«"“„‹‘]\s*(?P<inner>[^«»"“”„‹›‘’]+?)\s*[»"”“›’]'
+    r'^\s*[«"“„‹‘״]\s*(?P<inner>[^«»"“”„‹›‘’״]+?)\s*[»"”“›’״]'
 )
 
 # First sentence-terminating boundary: a "." followed by whitespace/end, "//",

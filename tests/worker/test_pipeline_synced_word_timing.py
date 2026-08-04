@@ -105,7 +105,7 @@ async def test_synced_job_sends_align_text_and_merges_word_timing(
 
     captured: dict[str, object] = {}
 
-    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
         # Record what the coordinator chose to align.
         captured["align_text"] = align_text
         captured["align_lang"] = align_lang
@@ -172,7 +172,7 @@ async def test_synced_job_without_aligned_lrc_stays_plain(factory, monkeypatch, 
     from karaoke.worker.runpod_client import RunpodClient
     from karaoke.worker.vast_client import GpuJobResult
 
-    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
         work_dir.mkdir(parents=True, exist_ok=True)
         voc = work_dir / "vocals.wav"
         inst = work_dir / "instrumental.wav"

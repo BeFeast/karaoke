@@ -242,7 +242,9 @@ def _run_separation(input_wav: Path, out_dir: Path) -> tuple[Path, Path]:
     return vocals, instrumental
 
 
-def _transcribe(wav_path: Path) -> tuple[str, dict[str, Any]]:
+def _transcribe(
+    wav_path: Path, language: str | None = None
+) -> tuple[str, dict[str, Any]]:
     """Run faster-whisper on `wav_path`. Returns (lyrics_txt, lyrics_json).
 
     Tuned for separated vocal stems carrying repetitive sung text (#218). The
@@ -263,13 +265,21 @@ def _transcribe(wav_path: Path) -> tuple[str, dict[str, Any]]:
       ``hallucination_silence_threshold=2.0``) so a bad greedy decode retries at
       a higher temperature instead of hallucinating a mega-segment.
 
-    ``beam_size=5``, ``word_timestamps=True`` and auto language detection are
-    kept unchanged — the latter correctly auto-detected ``ru`` (p=0.86) on the
-    evidence job; only the transcript collapsed.
+    ``beam_size=5`` and ``word_timestamps=True`` are kept unchanged.
+
+    Language (#260, r10): ``language`` (ISO-639-1) forces the decode language
+    when the coordinator supplies a hint — single-window auto-detect misread a
+    Hebrew stem as ``en`` at p=0.456 (an English adlib opened the track) and
+    decoded the whole song as transliterated-Latin gibberish. Without a hint,
+    ``language_detection_segments=4`` averages detection over several windows
+    so one anglophone intro can no longer lock the file (the earlier ``ru``
+    p=0.86 evidence job stays correct either way).
     """
     model = _get_whisper()
     segments_iter, info = model.transcribe(
         str(wav_path),
+        language=language,
+        language_detection_segments=4,
         beam_size=5,
         word_timestamps=True,
         condition_on_previous_text=False,
@@ -693,6 +703,14 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
     align_lang = job_input.get("align_lang") or "eng"  # ISO-639-3
     if not isinstance(align_lang, str):
         raise ValueError("align_lang must be a string")
+
+    # Optional Whisper decode-language hint (#260, r10), ISO-639-1 ("he").
+    # Absent/empty -> multi-segment auto-detect (see _transcribe).
+    whisper_lang = job_input.get("whisper_lang") or None
+    if whisper_lang is not None:
+        if not isinstance(whisper_lang, str):
+            raise ValueError("whisper_lang must be a string")
+        whisper_lang = whisper_lang.strip().lower() or None
     want_align = bool(align_text and align_text.strip()) and mode in ("demucs", "both")
 
     if audio_url:
@@ -762,7 +780,7 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         if mode in ("whisper", "both"):
             target = vocals_path if mode == "both" else in_wav
             assert target is not None
-            lyrics_txt, lyrics_json = _transcribe(target)
+            lyrics_txt, lyrics_json = _transcribe(target, language=whisper_lang)
             result["lyrics_txt"] = lyrics_txt
             result["lyrics_json"] = lyrics_json
 

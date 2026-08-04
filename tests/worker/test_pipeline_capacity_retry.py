@@ -126,7 +126,7 @@ async def test_capacity_stall_retries_then_completes(factory, monkeypatch, tmp_p
 
     calls = {"n": 0}
 
-    def flaky_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+    def flaky_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
         calls["n"] += 1
         if calls["n"] <= 2:
             raise RunpodCapacityError("runpod job stuck in queue — GPU capacity busy")
@@ -172,7 +172,7 @@ async def test_cold_start_wait_does_not_burn_capacity_retry(
 
     calls = {"n": 0}
 
-    def cold_then_ok(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+    def cold_then_ok(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RunpodColdStartError(
@@ -215,7 +215,7 @@ async def test_capacity_stall_exhausts_retries_then_fails(factory, monkeypatch, 
 
     calls = {"n": 0}
 
-    def always_busy(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+    def always_busy(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
         calls["n"] += 1
         raise RunpodCapacityError(
             "runpod job stuck in queue 480s > 480s — GPU capacity busy, retry shortly"
@@ -247,7 +247,7 @@ async def test_capacity_retry_disabled_fails_fast(factory, monkeypatch, tmp_path
 
     calls = {"n": 0}
 
-    def always_busy(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+    def always_busy(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
         calls["n"] += 1
         raise RunpodCapacityError("GPU capacity busy")
 
@@ -292,7 +292,7 @@ async def test_cancel_during_capacity_wait_stops_retry_and_keeps_cancelled(
 
     calls = {"n": 0}
 
-    def always_busy(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+    def always_busy(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
         calls["n"] += 1
         raise RunpodCapacityError("GPU capacity busy")
 

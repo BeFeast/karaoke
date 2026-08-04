@@ -612,6 +612,7 @@ class VastClient:
         *,
         align_text: str | None = None,
         align_lang: str | None = None,
+        whisper_lang: str | None = None,
     ) -> GpuJobResult:
         """Provision an instance and run /demucs then /whisper against it.
 
@@ -620,13 +621,14 @@ class VastClient:
         and /whisper transcribes the *vocals* stem. The instance is destroyed in
         ``finally`` no matter what.
 
-        ``align_text``/``align_lang`` are accepted for interface parity with the
-        RunPod worker (#55), but the vast.ai HTTP image (``/demucs`` + ``/whisper``)
-        does not implement force-alignment; they are ignored here and the result
-        carries no ``aligned_lrc_path``. vast.ai is the fallback runtime — RunPod
-        is the alignment-capable path.
+        ``align_text``/``align_lang``/``whisper_lang`` are accepted for
+        interface parity with the RunPod worker (#55/#260), but the vast.ai
+        HTTP image (``/demucs`` + ``/whisper``) implements neither
+        force-alignment nor a language hint; they are ignored here and the
+        result carries no ``aligned_lrc_path``. vast.ai is the fallback
+        runtime — RunPod is the alignment-capable path.
         """
-        _ = (align_text, align_lang)  # accepted, unused on the vast path
+        _ = (align_text, align_lang, whisper_lang)  # accepted, unused on vast
         api_key = self.settings.vast_api_key.strip()
         if not api_key:
             raise VastError("KARAOKE_VAST_API_KEY is not set")

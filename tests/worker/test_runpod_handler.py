@@ -267,12 +267,30 @@ def test_transcribe_passes_music_tuned_kwargs(monkeypatch, tmp_path):
     assert kwargs["log_prob_threshold"] == -1.0
     assert kwargs["no_speech_threshold"] == 0.6
     assert kwargs["hallucination_silence_threshold"] == 2.0
-    # no language pin → faster-whisper auto-detects (works per the evidence job).
-    assert "language" not in kwargs
+    # no hint → language=None keeps auto-detect, hardened over several
+    # windows so one anglophone adlib can't lock the whole file (#260).
+    assert kwargs["language"] is None
+    assert kwargs["language_detection_segments"] == 4
     # sane output shape passes through.
     assert lyrics_txt == "hello"
     assert lyrics_json["language"] == "ru"
     assert lyrics_json["segments"][0]["words"][0]["word"] == "hello"
+
+
+def test_transcribe_forces_hinted_language(monkeypatch, tmp_path):
+    """#260: a coordinator-supplied language hint (ISO-639-1) skips detection
+    and forces the decode language — the fix for a Hebrew stem misdetected as
+    ``en`` at p=0.456 and decoded as transliterated-Latin gibberish."""
+    fake = _RecordingWhisper()
+    monkeypatch.setattr(handler, "_get_whisper", lambda: fake)
+    wav = tmp_path / "vocals.wav"
+    wav.write_bytes(b"\x00")
+
+    handler._transcribe(wav, language="he")
+
+    assert len(fake.calls) == 1
+    _, kwargs = fake.calls[0]
+    assert kwargs["language"] == "he"
 
 
 def test_vad_veto_drops_line_on_instrumental():
