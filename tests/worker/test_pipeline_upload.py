@@ -119,7 +119,7 @@ def _patch_ffprobe(monkeypatch, stdout: str = FFPROBE_JSON) -> None:
 
 
 def _patch_gpu(monkeypatch) -> None:
-    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+    def fake_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
         work_dir.mkdir(parents=True, exist_ok=True)
         voc = work_dir / "vocals.wav"
         inst = work_dir / "instrumental.wav"

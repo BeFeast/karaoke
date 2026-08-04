@@ -283,6 +283,27 @@ def test_align_lang_maps_iso639():
     # Unknown / absent → English fallback.
     assert _align_lang({}) == "eng"
     assert _align_lang({"language": "??"}) == "eng"
+    # Script-derived hint (#260) fills in when metadata has no language …
+    assert _align_lang({}, hint="he") == "heb"
+    assert _align_lang({}, hint="ka") == "kat"
+    assert _align_lang({}, hint="hy") == "hye"
+    # … but explicit metadata still wins over the hint.
+    assert _align_lang({"language": "ru"}, hint="he") == "rus"
+
+
+def test_script_lang_hint_detects_dominant_script():
+    from karaoke.worker.pipeline import _script_lang_hint
+
+    # The job-#187 title: Hebrew letters dominate, "HD" doesn't matter.
+    assert _script_lang_hint("עדן בן זקן כולם באילת - עם מילים HD") == "he"
+    assert _script_lang_hint("עדן בן זקן", "כולם באילת", None) == "he"
+    assert _script_lang_hint("Καλοκαίρι στην Ελλάδα") == "el"
+    # Latin / Cyrillic / absent → no hint (auto-detect handles them).
+    assert _script_lang_hint("Rick Astley - Never Gonna Give You Up") is None
+    assert _script_lang_hint("Любэ - Конь") is None
+    assert _script_lang_hint(None, "", "12345") is None
+    # A lone native-script credit inside a Latin title must not flip it.
+    assert _script_lang_hint("Artist - Song (עם מילים) Official Remix Extended") is None
 
 
 # ---------------------------------------------------------------------------
@@ -633,7 +654,7 @@ async def test_run_real_job_writes_rejection_to_metadata(tmp_path, monkeypatch):
             LyricsSource(http=lambda method, url, params: script.pop(0)),
         )
 
-        def fake_gpu_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+        def fake_gpu_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
             work_dir.mkdir(parents=True, exist_ok=True)
             voc = work_dir / "vocals.wav"
             inst = work_dir / "instrumental.wav"
@@ -756,7 +777,7 @@ async def test_run_real_job_force_aligns_rejected_text(tmp_path, monkeypatch):
         ALIGNED_BODY = "[00:02.10]right text one\n[00:05.40]right text two"
         captured: dict[str, object] = {}
 
-        def fake_gpu_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None):
+        def fake_gpu_run(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
             captured["align_text"] = align_text
             captured["align_lang"] = align_lang
             work_dir.mkdir(parents=True, exist_ok=True)

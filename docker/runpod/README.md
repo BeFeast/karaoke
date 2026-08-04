@@ -22,7 +22,8 @@ RunPod posts a JSON job; the handler returns JSON.
   "audio_base64": "<base64-encoded WAV bytes>",
   "mode": "demucs" | "whisper" | "both",
   "align_text": "<plain lyrics to force-align>",
-  "align_lang": "eng"
+  "align_lang": "eng",
+  "whisper_lang": "he"
 }
 ```
 
@@ -42,6 +43,14 @@ force-aligns this plain-text against the vocal stem with
 is purely additive and **never fatal**: on failure (or with an old image
 that ignores the field) the handler simply omits `aligned_lrc`, and the
 coordinator falls back to the plain text / Whisper transcript.
+
+`whisper_lang` (optional, #260, r10+): ISO-639-1 code forcing the Whisper
+decode language. Absent → auto-detect, averaged over several windows
+(`language_detection_segments=4`) so one anglophone adlib at the start of a
+track can no longer lock the whole file to `en` (a Hebrew stem was decoded
+as transliterated-Latin gibberish at p=0.456). The coordinator derives the
+hint from the dominant Unicode script of the video title/artist/track.
+Old images ignore the key.
 
 ### Output
 

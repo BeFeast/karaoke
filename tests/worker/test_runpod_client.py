@@ -477,7 +477,38 @@ def test_no_align_text_means_no_aligned_path_and_no_payload_key(settings, tmp_pa
     payload = submit[2]["input"]
     assert "align_text" not in payload
     assert "align_lang" not in payload
+    assert "whisper_lang" not in payload
     assert result.aligned_lrc_path is None
+
+
+def test_whisper_lang_sent_independently_of_alignment(settings, tmp_path):
+    """#260: the whisper language hint rides the payload even with no
+    align_text — it matters exactly when LRCLIB missed and the ASR transcript
+    is the product."""
+    work = tmp_path / "work"
+    output = {
+        "vocals_b64": _b64(b"v"),
+        "instrumental_b64": _b64(b"i"),
+        "lyrics_txt": "עברית",
+        "lyrics_json": {},
+        "gpu_model": "L40",
+        "elapsed_s": 5.0,
+    }
+    rec = _Recorder([
+        {"expect_in": "/run", "code": 200, "body": {"id": "rp-lang"}},
+        {
+            "expect_in": "/status/rp-lang",
+            "code": 200,
+            "body": {"status": "COMPLETED", "executionTime": 5000, "output": output},
+        },
+    ])
+    client = RunpodClient(settings, http=rec)
+    client.run(_mix_wav(tmp_path), work, whisper_lang="he")
+
+    submit = next(c for c in rec.calls if "/run" in c[1] and c[2])
+    payload = submit[2]["input"]
+    assert payload["whisper_lang"] == "he"
+    assert "align_text" not in payload
 
 
 def test_old_image_ignores_align_text_no_aligned_lrc(settings, tmp_path):

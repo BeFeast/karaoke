@@ -892,7 +892,26 @@ class LyricsSource:
         # Requires a known audio duration (the gate is the only safety net here)
         # and is bounded to ≤ _MAX_LADDER_QUERIES extra HTTP calls.
         if duration is not None:
-            for variant in track_cleanup_variants(track)[:_MAX_LADDER_QUERIES]:
+            variants = track_cleanup_variants(track)
+            # Artist-free retry with the track itself (#260): LRCLIB search is
+            # conjunctive and stores many non-Latin artists under a LATIN
+            # artistName with a native-script trackName (e.g. "Eden Ben Zaken"
+            # / "כולם באילת"), so every artist-scoped rung above zeroes out on
+            # the native-script artist. Scoped tightly to that shape (#260
+            # review): only when an artist was present (otherwise _try_search
+            # already queried artist-free), only for a NON-LATIN track name
+            # (an artist-free duration-gated query for a common Latin title
+            # like "Home" invites another artist's lyrics), and never over a
+            # #148/#149 rejection — the salvaged text is the RIGHT song; a
+            # duration-coincident artist-free hit could be the wrong one.
+            if (
+                artist
+                and not (search_result is not None and search_result.rejected)
+                and any(ch.isalpha() and ord(ch) > 0x024F for ch in track)
+                and track.lower() not in {v.lower() for v in variants}
+            ):
+                variants.append(track)
+            for variant in variants[:_MAX_LADDER_QUERIES]:
                 laddered = self._try_search_q(variant, duration)
                 # An artist-free instrumental "match" is untrustworthy — the
                 # only evidence is duration, and marking a lyrical track

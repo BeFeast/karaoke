@@ -187,14 +187,17 @@ class RunpodClient:
         *,
         align_text: str | None = None,
         align_lang: str | None = None,
+        whisper_lang: str | None = None,
     ) -> GpuJobResult:
         """Submit one job and pull back the artifacts.
 
         ``align_text`` (#55): when set, the handler force-aligns this plain
         text against the separated vocal stem and returns a synced LRC in
-        ``aligned_lrc``. ``align_lang`` is an ISO-639-3 code. Both are passed
-        through verbatim; the handler ignores them if it predates the feature,
-        so this is safe against an old image (we just get no ``aligned_lrc``).
+        ``aligned_lrc``. ``align_lang`` is an ISO-639-3 code. ``whisper_lang``
+        (#260) is an ISO-639-1 hint forcing the Whisper transcription language
+        (r10+ handler; auto-detect misread Hebrew as English). All are passed
+        through verbatim; the handler ignores keys it predates, so each is
+        safe against an old image (we just get the old behavior).
         """
         api_key = self.settings.runpod_api_key.strip()
         endpoint_id = self.settings.runpod_endpoint_id.strip()
@@ -235,6 +238,10 @@ class RunpodClient:
             run_input["align_text"] = align_text
             if align_lang and align_lang.strip():
                 run_input["align_lang"] = align_lang
+        # Whisper language hint (#260): independent of alignment — it applies
+        # exactly when LRCLIB missed and the ASR transcript IS the product.
+        if whisper_lang and whisper_lang.strip():
+            run_input["whisper_lang"] = whisper_lang.strip()
 
         run_url = f"{RUNPOD_REST}/{endpoint_id}/run"
         cancel_url_tpl = f"{RUNPOD_REST}/{endpoint_id}/cancel/{{id}}"
