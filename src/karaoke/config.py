@@ -103,6 +103,16 @@ class Settings(BaseSettings):
     # No trailing slash — the pipeline normalizes it regardless.
     pot_provider_base_url: str = "http://karaoke-pot:4416"
 
+    # ---- yt-dlp player-client chain override (issue #258) ----
+    # Comma-separated ``youtube:player_client`` chain forced on every YouTube
+    # invocation. Empty (the default) trusts yt-dlp's own client selection,
+    # which tracks YouTube churn with each yt-dlp release. The June 2026
+    # forced chain "mweb,web_safari,android_vr,web_embedded" started 403-ing
+    # label content in August 2026 while the same yt-dlp's defaults worked —
+    # keep this empty unless YouTube breaks the defaults and a temporary
+    # emergency pin is needed (KARAOKE_YTDLP_PLAYER_CLIENTS).
+    ytdlp_player_clients: str = ""
+
     # ---- yt-dlp anti-bot: EJS JS-challenge solver (issue #68) ----
     # YouTube's n-sig / signature challenge is now solved by an external
     # JavaScript "EJS" solver distribution run under a JS runtime (deno ships
