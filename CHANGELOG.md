@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.38.0] - 2026-08-04
+
+_Bump: minor_
+
+- fix(download): drop stale forced player-client chain, bump yt-dlp to 2026.7.4 (#259)
+
 ## [v0.37.1] - 2026-07-11
 
 _Bump: patch_
