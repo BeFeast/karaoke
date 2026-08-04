@@ -31,19 +31,29 @@ def _settings(**overrides) -> config.Settings:
     return config.Settings(**overrides)
 
 
-def test_extractor_args_always_sets_player_client_when_no_pot():
+def test_extractor_args_default_trusts_ytdlp_client_selection():
+    # No forced player-client chain by default (#258): a hardcoded chain goes
+    # stale and 403s while yt-dlp's own selection keeps working.
     s = _settings(pot_provider_base_url="")
+    assert _ytdlp_extractor_args(s) == []
+
+
+def test_extractor_args_forced_player_clients_when_configured():
+    s = _settings(pot_provider_base_url="", ytdlp_player_clients="tv,web_safari")
     args = _ytdlp_extractor_args(s)
-    assert args == ["--extractor-args", f"youtube:player_client={pipeline._PLAYER_CLIENTS}"]
+    assert args == ["--extractor-args", "youtube:player_client=tv,web_safari"]
 
 
 def test_extractor_args_adds_bgutil_base_url_as_separate_flag():
-    s = _settings(pot_provider_base_url="http://karaoke-pot:4416")
+    s = _settings(
+        pot_provider_base_url="http://karaoke-pot:4416",
+        ytdlp_player_clients="tv,web_safari",
+    )
     args = _ytdlp_extractor_args(s)
     # Two distinct --extractor-args flags: different yt-dlp namespaces can't be
     # merged into one string.
     assert args == [
-        "--extractor-args", f"youtube:player_client={pipeline._PLAYER_CLIENTS}",
+        "--extractor-args", "youtube:player_client=tv,web_safari",
         "--extractor-args", "youtubepot-bgutilhttp:base_url=http://karaoke-pot:4416",
     ]
     assert args.count("--extractor-args") == 2
@@ -256,4 +266,5 @@ def test_download_passes_pot_extractor_args_to_ytdlp(tmp_path, monkeypatch):
     pipeline._download_audio("https://yt/x", dest, _settings())
     cmd = rec.calls[0]
     assert "youtubepot-bgutilhttp:base_url=http://karaoke-pot:4416" in cmd
-    assert f"youtube:player_client={pipeline._PLAYER_CLIENTS}" in cmd
+    # Default settings do not force a player-client chain (#258).
+    assert not any("youtube:player_client=" in str(part) for part in cmd)

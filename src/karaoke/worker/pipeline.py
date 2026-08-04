@@ -79,10 +79,6 @@ _ALIGN_COVERAGE_MIN_LINES = 10
 # lines of a 60-line song) must not override the ASR floor wholesale.
 _ALIGN_FALLBACK_MIN_KEPT_RATIO = 0.25
 
-# yt-dlp player-client chain (mirrors scribe's downloader; android_vr is the
-# token-free workhorse, web clients need the EJS/deno JS solver in the image).
-_PLAYER_CLIENTS = "mweb,web_safari,android_vr,web_embedded"
-
 # YouTube soft-ban / bot-check fingerprints. When yt-dlp prints one of these we
 # back off and retry rather than failing immediately — the devbox residential
 # IP gets transiently flagged under load and recovers after a short cooldown.
@@ -136,16 +132,23 @@ def _pot_base_url(settings) -> str:
 def _ytdlp_extractor_args(settings) -> list[str]:
     """Build the ``--extractor-args`` flags for a yt-dlp invocation.
 
-    Always sets the ``youtube`` player-client chain. When a bgutil PO-token
-    provider base URL is configured, also points the ``bgutil-ytdlp-pot-provider``
-    plugin at it via its own extractor-args namespace
-    (``youtubepot-bgutilhttp:base_url``). These are *different* namespaces, so
-    yt-dlp needs two separate ``--extractor-args`` flags — they cannot be merged
-    into one (issue #68). The default ``http://karaoke-pot:4416`` matches the
-    documented sidecar; pointing at a dead/absent provider degrades gracefully
-    (the plugin just fails to fetch a token), so this is safe in dev/CI too.
+    The ``youtube`` player-client chain is forced only when
+    ``ytdlp_player_clients`` is set; the empty default trusts yt-dlp's own
+    client selection, which tracks YouTube churn with every release (a stale
+    forced chain is exactly what 403'd label content in issue #258). When a
+    bgutil PO-token provider base URL is configured, also points the
+    ``bgutil-ytdlp-pot-provider`` plugin at it via its own extractor-args
+    namespace (``youtubepot-bgutilhttp:base_url``). These are *different*
+    namespaces, so yt-dlp needs two separate ``--extractor-args`` flags — they
+    cannot be merged into one (issue #68). The default
+    ``http://karaoke-pot:4416`` matches the documented sidecar; pointing at a
+    dead/absent provider degrades gracefully (the plugin just fails to fetch a
+    token), so this is safe in dev/CI too.
     """
-    args = ["--extractor-args", f"youtube:player_client={_PLAYER_CLIENTS}"]
+    args: list[str] = []
+    clients = str(getattr(settings, "ytdlp_player_clients", "") or "").strip() if settings else ""
+    if clients:
+        args += ["--extractor-args", f"youtube:player_client={clients}"]
     base_url = _pot_base_url(settings)
     if base_url:
         args += ["--extractor-args", f"youtubepot-bgutilhttp:base_url={base_url}"]

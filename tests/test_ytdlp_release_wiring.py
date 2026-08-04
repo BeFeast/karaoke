@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_ytdlp_stack_is_exactly_pinned():
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
     deps = set(pyproject["project"]["dependencies"])
-    assert "yt-dlp==2026.3.17" in deps
+    assert "yt-dlp==2026.7.4" in deps
     assert "yt-dlp-ejs==0.8.0" in deps
     assert not any(dep.startswith("yt-dlp>=") for dep in deps)
 
