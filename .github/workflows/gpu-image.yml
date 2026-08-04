@@ -34,15 +34,23 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      # GITHUB_TOKEN cannot push: the pre-existing karaoke-runpod package
+      # (created by user PAT pushes) never granted this repo's Actions write
+      # access, and GitHub has no API for that grant (UI-only). GHCR_TOKEN is
+      # an operator PAT with write:packages.
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
+      # Registry-backed buildkit cache (#263): a handler-only tag bump reuses
+      # every heavy layer (~9.4GB ingress otherwise) and pushes ~25KB.
       - uses: docker/build-push-action@v6
         with:
           context: docker/runpod
           platforms: linux/amd64
           push: true
           tags: ghcr.io/befeast/karaoke-runpod:${{ inputs.tag }}
+          cache-from: type=registry,ref=ghcr.io/befeast/karaoke-runpod:buildcache
+          cache-to: type=registry,ref=ghcr.io/befeast/karaoke-runpod:buildcache,mode=max
