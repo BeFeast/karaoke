@@ -687,7 +687,7 @@ _ISO1_TO_ISO3 = {
     "ja": "jpn", "ko": "kor", "zh": "zho", "ar": "ara", "he": "heb",
     "tr": "tur", "hi": "hin", "sv": "swe", "fi": "fin", "no": "nor",
     "cs": "ces", "el": "ell", "ro": "ron", "hu": "hun", "id": "ind",
-    "vi": "vie", "th": "tha",
+    "vi": "vie", "th": "tha", "ka": "kat", "hy": "hye",
 }
 
 
@@ -960,11 +960,17 @@ async def run_real_job(
         #     only the timings belonged to the wrong edit.
         # Instrumental / miss have nothing to align.
         # Language hint (#260): yt-dlp metadata never carries a language, so
-        # derive one from the dominant Unicode script of the title/artist/
-        # track. Feeds BOTH the whisper transcription (whisper_lang, ISO-639-1;
-        # r10+ handler — older images ignore the key) and the force-aligner
-        # (align_lang, ISO-639-3).
-        lang_hint = _script_lang_hint(
+        # derive one from the dominant Unicode script of the metadata. The
+        # TRACK name alone is tried first — it is the best proxy for the sung
+        # language and catches the LRCLIB curation shape "Latin artist +
+        # native-script track" ("Eden Ben Zaken - כולם באילת") that the full
+        # title dilutes below the majority threshold. Feeds BOTH the whisper
+        # transcription (whisper_lang, ISO-639-1; r10+ handler, which lets a
+        # CONFIDENT auto-detection override the hint — translated-lyrics
+        # uploads carry a native-script title over foreign-language audio;
+        # older images ignore the key) and the force-aligner (align_lang,
+        # ISO-639-3).
+        lang_hint = _script_lang_hint(source_meta.get("track")) or _script_lang_hint(
             title, source_meta.get("artist"), source_meta.get("track")
         )
         align_text: str | None = None

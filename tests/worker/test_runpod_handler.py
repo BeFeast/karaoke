@@ -226,11 +226,14 @@ class _FakeInfo:
 
 
 class _RecordingWhisper:
-    """Stand-in for faster_whisper.WhisperModel: records transcribe() kwargs
-    and returns a minimal (segments_iter, info) pair."""
+    """Stand-in for faster_whisper.WhisperModel: records transcribe() /
+    detect_language() calls and returns minimal shapes. ``detect`` configures
+    the probe result — a (language, probability) pair or an Exception."""
 
-    def __init__(self):
+    def __init__(self, detect=("en", 0.3)):
         self.calls = []
+        self.detect_calls = []
+        self._detect = detect
 
     def transcribe(self, audio, **kwargs):
         self.calls.append((audio, kwargs))
@@ -238,6 +241,13 @@ class _RecordingWhisper:
             0.0, 1.0, " hello", [_FakeWord(0.0, 0.5, "hello", 0.9)]
         )
         return iter([seg]), _FakeInfo("ru", 0.86, 1.0)
+
+    def detect_language(self, audio, **kwargs):
+        self.detect_calls.append((audio, kwargs))
+        if isinstance(self._detect, Exception):
+            raise self._detect
+        lang, prob = self._detect
+        return lang, prob, [(lang, prob)]
 
 
 def test_transcribe_passes_music_tuned_kwargs(monkeypatch, tmp_path):
@@ -268,29 +278,90 @@ def test_transcribe_passes_music_tuned_kwargs(monkeypatch, tmp_path):
     assert kwargs["no_speech_threshold"] == 0.6
     assert kwargs["hallucination_silence_threshold"] == 2.0
     # no hint → language=None keeps auto-detect, hardened over several
-    # windows so one anglophone adlib can't lock the whole file (#260).
+    # windows so one anglophone adlib can't lock the whole file (#260) —
+    # and no detection probe runs.
     assert kwargs["language"] is None
     assert kwargs["language_detection_segments"] == 4
+    assert fake.detect_calls == []
     # sane output shape passes through.
     assert lyrics_txt == "hello"
     assert lyrics_json["language"] == "ru"
     assert lyrics_json["segments"][0]["words"][0]["word"] == "hello"
 
 
-def test_transcribe_forces_hinted_language(monkeypatch, tmp_path):
-    """#260: a coordinator-supplied language hint (ISO-639-1) skips detection
-    and forces the decode language — the fix for a Hebrew stem misdetected as
-    ``en`` at p=0.456 and decoded as transliterated-Latin gibberish."""
-    fake = _RecordingWhisper()
+def test_transcribe_hint_wins_on_low_confidence_detection(monkeypatch, tmp_path):
+    """#260: with a hint and a LOW-confidence probe (the job-187 shape:
+    ``en`` at p<0.6), the hint decides — the fix for a Hebrew stem decoded as
+    transliterated-Latin gibberish."""
+    fake = _RecordingWhisper(detect=("en", 0.456))
     monkeypatch.setattr(handler, "_get_whisper", lambda: fake)
     wav = tmp_path / "vocals.wav"
     wav.write_bytes(b"\x00")
 
     handler._transcribe(wav, language="he")
 
+    assert len(fake.detect_calls) == 1
+    _, probe_kwargs = fake.detect_calls[0]
+    assert probe_kwargs["language_detection_segments"] == 4
     assert len(fake.calls) == 1
     _, kwargs = fake.calls[0]
     assert kwargs["language"] == "he"
+
+
+def test_transcribe_confident_detection_overrides_hint(monkeypatch, tmp_path):
+    """#260 review: the hint comes from the TITLE script; a translated-lyrics
+    upload (native-script title over foreign audio) must not be forced into
+    the title's language when the audio clearly says otherwise."""
+    fake = _RecordingWhisper(detect=("en", 0.92))
+    monkeypatch.setattr(handler, "_get_whisper", lambda: fake)
+    wav = tmp_path / "vocals.wav"
+    wav.write_bytes(b"\x00")
+
+    handler._transcribe(wav, language="he")
+
+    _, kwargs = fake.calls[0]
+    assert kwargs["language"] == "en"
+
+
+def test_transcribe_probe_failure_keeps_hint(monkeypatch, tmp_path):
+    """The detection probe is best-effort — an error keeps the hint."""
+    fake = _RecordingWhisper(detect=RuntimeError("no cuda"))
+    monkeypatch.setattr(handler, "_get_whisper", lambda: fake)
+    wav = tmp_path / "vocals.wav"
+    wav.write_bytes(b"\x00")
+
+    handler._transcribe(wav, language="he")
+
+    _, kwargs = fake.calls[0]
+    assert kwargs["language"] == "he"
+
+
+def test_handler_event_passes_whisper_lang_to_transcribe(monkeypatch):
+    """End-to-end payload wiring (#260): the ``whisper_lang`` key of
+    ``event["input"]`` reaches ``_transcribe(language=...)`` — pinning the key
+    name the coordinator's runpod_client sends."""
+    import base64 as _b64
+
+    recorded = {}
+
+    def fake_transcribe(target, language=None):
+        recorded["language"] = language
+        return "txt", {"language": language or "xx", "segments": []}
+
+    monkeypatch.setattr(handler, "_transcribe", fake_transcribe)
+    monkeypatch.setattr(handler, "_gpu_model_name", lambda: "cpu")
+
+    out = handler.handler(
+        {
+            "input": {
+                "audio_base64": _b64.b64encode(b"RIFFxxxx").decode(),
+                "mode": "whisper",
+                "whisper_lang": "he",
+            }
+        }
+    )
+    assert recorded["language"] == "he"
+    assert out["lyrics_txt"] == "txt"
 
 
 def test_vad_veto_drops_line_on_instrumental():

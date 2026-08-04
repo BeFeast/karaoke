@@ -111,9 +111,19 @@ _BARE_PIPE_NOISE_RE = re.compile(
 # or "Artist - Song - Lyrics HD" (#260). Stripped only when the remaining head
 # still contains a dash separator (see normalize_title) so a real track that is
 # literally a noise word — "עדן חסון - מילים", "אייל גולן - קריוקי" — keeps its
-# track segment.
+# track segment. Construction constraints (review of #260):
+#   * the phrase loop is an ATOMIC group `(?>…)` — the noise alternation is
+#     overlapping ("lyric"/"lyric video"/…), and a backtrackable nested
+#     quantifier over it is exponential (a ~300-char crafted title froze the
+#     event loop for a minute; titles are user-controlled and length-uncapped);
+#   * each phrase must end at a separator or the end of the string, so two
+#     noise words fused inside one real word ("Audiovisual" = audio+visual)
+#     never chain into a false noise tail;
+#   * the separator class includes the dash characters so any depth of stacked
+#     noise tails ("… - Lyrics - Lyrics") strips in ONE match — keeping
+#     normalize_title idempotent within its bounded loop.
 _TRAILING_DASH_NOISE_RE = re.compile(
-    rf"\s+[-‐‑־–—]\s*(?:(?:{_NOISE_PHRASE})[\s,/&|+]*)+$",
+    rf"\s+[-‐‑־–—]\s*(?>(?:{_NOISE_PHRASE})(?:[\s,/&|+‐‑־–—-]+|$))+$",
     re.IGNORECASE,
 )
 # Any artist/track dash separator (mirrors the dash classes of _SPLIT_RES).
@@ -179,17 +189,20 @@ def normalize_title(raw: str | None) -> str:
 # Artist / track splitting
 # ---------------------------------------------------------------------------
 
-# Separators between artist and title, in priority order. All dash classes
-# live in ONE alternation so the LEFTMOST dash wins regardless of class —
-# separate class-priority patterns mis-split mixed-dash titles like
-# "עדן בן זקן – כולם באילת - עם מילים" at the second dash (#260). The
-# hyphen-like variants (ASCII -, U+2010 ‐, U+2011 ‑, Hebrew maqaf ־) require
-# surrounding whitespace so we never split a hyphenated word like
-# "Spider-Man"; en/em dash split with optional spacing because they are
-# rarely used inside a word.
+# Separators between artist and title, in priority order. All SPACED dash
+# classes live in ONE alternation so the LEFTMOST spaced dash wins regardless
+# of class — separate class-priority patterns mis-split mixed-dash titles like
+# "עדן בן זקן – כולם באילת - עם מילים" at the second dash (#260). Every dash
+# in that first pattern (ASCII -, U+2010 ‐, U+2011 ‑, Hebrew maqaf ־, en/em
+# dash) requires surrounding whitespace so we never split a dash-joined word —
+# "Spider-Man", "Jay–Z", year ranges "1971–1996". An UNSPACED en/em dash is
+# only a last-resort separator ("Artist–Title" with no spaced dash anywhere),
+# kept as a lower-priority fallback exactly so an in-word en dash can never
+# shadow a later spaced separator.
 _SPLIT_RES: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\s+[-‐‑־]\s+|\s*[–—]\s*"),  # "Artist - Title" (any dash)
-    re.compile(r"\s+[:]\s+"),                # "Artist : Title"
+    re.compile(r"\s+[-‐‑־–—]\s+"),  # "Artist - Title" (any spaced dash)
+    re.compile(r"\s*[–—]\s*"),      # "Artist–Title" (unspaced en/em dash)
+    re.compile(r"\s+[:]\s+"),       # "Artist : Title"
 )
 
 
@@ -249,8 +262,11 @@ def parse_artist_track(title: str | None) -> ParsedTitle:
 # A track that OPENS with a quoted phrase (guillemets / straight / curly / low
 # quotes): keep only the quoted phrase and drop the trailing upload chatter.
 # e.g. «Конь». Голубой Ургант. Фрагмент выпуска … → Конь
+# NOTE: Hebrew gershayim ״ is deliberately NOT a quote class here — it doubles
+# as the in-word acronym marker (צה״ל), so treating it as a closing quote
+# truncates quoted heads at the first acronym (#260 review).
 _LEADING_QUOTED_RE = re.compile(
-    r'^\s*[«"“„‹‘״]\s*(?P<inner>[^«»"“”„‹›‘’״]+?)\s*[»"”“›’״]'
+    r'^\s*[«"“„‹‘]\s*(?P<inner>[^«»"“”„‹›‘’]+?)\s*[»"”“›’]'
 )
 
 # First sentence-terminating boundary: a "." followed by whitespace/end, "//",

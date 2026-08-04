@@ -242,6 +242,12 @@ def _run_separation(input_wav: Path, out_dir: Path) -> tuple[Path, Path]:
     return vocals, instrumental
 
 
+# A multi-segment language detection at or above this probability is trusted
+# over the coordinator's title-script hint (#260): the hint exists to break
+# LOW-confidence misdetection ties, not to overrule clear audio evidence.
+_LANG_DETECT_TRUST_P = 0.6
+
+
 def _transcribe(
     wav_path: Path, language: str | None = None
 ) -> tuple[str, dict[str, Any]]:
@@ -267,15 +273,31 @@ def _transcribe(
 
     ``beam_size=5`` and ``word_timestamps=True`` are kept unchanged.
 
-    Language (#260, r10): ``language`` (ISO-639-1) forces the decode language
-    when the coordinator supplies a hint — single-window auto-detect misread a
+    Language (#260, r10): ``language`` (ISO-639-1) is a coordinator-supplied
+    HINT, not an unconditional override — single-window auto-detect misread a
     Hebrew stem as ``en`` at p=0.456 (an English adlib opened the track) and
-    decoded the whole song as transliterated-Latin gibberish. Without a hint,
+    decoded the whole song as transliterated-Latin gibberish, but the hint is
+    derived from the video TITLE script, and a translated-lyrics upload
+    (native-script title over foreign-language audio) would be equally wrong
+    in the other direction. So: a multi-segment ``detect_language`` probe runs
+    first, and a CONFIDENT detection (p >= 0.6) wins over the hint; the hint
+    decides only the low-confidence case. Without a hint,
     ``language_detection_segments=4`` averages detection over several windows
     so one anglophone intro can no longer lock the file (the earlier ``ru``
     p=0.86 evidence job stays correct either way).
     """
     model = _get_whisper()
+    if language:
+        try:
+            detected, prob, _ = model.detect_language(
+                str(wav_path),
+                vad_filter=True,
+                language_detection_segments=4,
+            )
+        except Exception:  # detection probe is best-effort; keep the hint
+            detected, prob = None, 0.0
+        if detected and prob >= _LANG_DETECT_TRUST_P:
+            language = detected
     segments_iter, info = model.transcribe(
         str(wav_path),
         language=language,

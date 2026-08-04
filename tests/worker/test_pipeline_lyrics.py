@@ -285,6 +285,8 @@ def test_align_lang_maps_iso639():
     assert _align_lang({"language": "??"}) == "eng"
     # Script-derived hint (#260) fills in when metadata has no language …
     assert _align_lang({}, hint="he") == "heb"
+    assert _align_lang({}, hint="ka") == "kat"
+    assert _align_lang({}, hint="hy") == "hye"
     # … but explicit metadata still wins over the hint.
     assert _align_lang({"language": "ru"}, hint="he") == "rus"
 
@@ -645,8 +647,6 @@ async def test_run_real_job_writes_rejection_to_metadata(tmp_path, monkeypatch):
                     }
                 ],
             ),
-            # #260 raw-track artist-free fallback query: misses.
-            (200, []),
         ]
         monkeypatch.setattr(
             pipeline,
@@ -767,8 +767,6 @@ async def test_run_real_job_force_aligns_rejected_text(tmp_path, monkeypatch):
                     }
                 ],
             ),
-            # #260 raw-track artist-free fallback query: misses.
-            (200, []),
         ]
         monkeypatch.setattr(
             pipeline,

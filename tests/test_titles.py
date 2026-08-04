@@ -75,6 +75,16 @@ from karaoke.titles import (
         ("עדן חסון - מילים", "עדן חסון - מילים"),
         ("אייל גולן - קריוקי", "אייל גולן - קריוקי"),
         ("עדן בן זקן כולם באילת - עם מילים HD", "עדן בן זקן כולם באילת - עם מילים HD"),
+        # two noise words fused inside ONE real word must not chain (#260 review)
+        ("Artist - Song - Audiovisual", "Artist - Song - Audiovisual"),
+        # stacked noise tails strip in one pass (idempotent within the loop cap)
+        ("A - B" + " - Lyrics" * 7, "A - B"),
+        # pathological crafted tail: must terminate fast (atomic group) and
+        # stay untouched — the trailing X breaks the noise chain
+        (
+            "Artist - Song - " + "lyric video " * 30 + "X",
+            "Artist - Song - " + "lyric video " * 30 + "X",
+        ),
     ],
 )
 def test_normalize_title(raw, expected):
@@ -128,6 +138,10 @@ def test_normalize_idempotent():
         # a track literally named a noise word keeps its track segment
         ("עדן חסון - מילים", "עדן חסון", "מילים"),
         ("אייל גולן - קריוקי", "אייל גולן", "קריוקי"),
+        # an unspaced en dash inside a token is NOT a separator (#260 review) …
+        ("Jay–Z - 99 Problems", "Jay–Z", "99 Problems"),
+        # … but stays the last-resort separator when nothing is spaced
+        ("Daft Punk–Get Lucky", "Daft Punk", "Get Lucky"),
     ],
 )
 def test_parse_artist_track(title, artist, track):

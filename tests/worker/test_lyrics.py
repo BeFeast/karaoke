@@ -171,9 +171,9 @@ def test_no_match_returns_empty():
     rec = _Recorder([
         {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
         {"expect_in": "/api/search", "code": 200, "body": []},
-        _RAW_TRACK_MISS,
     ])
     src = LyricsSource(http=rec)
+    # Latin track -> the #260 raw-track rung does NOT fire (see its guard).
     result = src.fetch(artist="Artist", track="Song", duration=200)
 
     assert result.found is False
@@ -273,8 +273,9 @@ def _search_script(candidates: list[dict]) -> list[dict]:
     ]
 
 
-# The #260 raw-track artist-free fallback query that follows a rejected /
-# missed artist-scoped search — scripted as a miss in the tests below.
+# The #260 raw-track artist-free fallback query — fires only for a NON-LATIN
+# track name after a clean artist-scoped miss (never over a #148 rejection) —
+# scripted as a miss in the tests below.
 _RAW_TRACK_MISS = {"expect_in": "/api/search", "code": 200, "body": []}
 
 
@@ -290,7 +291,7 @@ def test_search_rejects_best_candidate_on_duration_mismatch():
             "syncedLyrics": SYNCED_BODY,
             "plainLyrics": PLAIN_BODY,
         },
-    ]) + [_RAW_TRACK_MISS])
+    ]))
     src = LyricsSource(http=rec)
     result = src.fetch(artist="Artist", track="Song", duration=229)
 
@@ -307,7 +308,7 @@ def test_search_reject_drops_instrumental_flag_too():
     """A wrong-edit record's ``instrumental`` flag must not silence lyrics."""
     rec = _Recorder(_search_script([
         {"trackName": "Song", "duration": 400, "instrumental": True},
-    ]) + [_RAW_TRACK_MISS])
+    ]))
     src = LyricsSource(http=rec)
     result = src.fetch(artist="Artist", track="Song", duration=229)
 
@@ -371,7 +372,7 @@ def test_reject_salvages_plain_text_as_is():
             "syncedLyrics": SYNCED_BODY,
             "plainLyrics": "  line one\nline two  ",
         },
-    ]) + [_RAW_TRACK_MISS])
+    ]))
     result = LyricsSource(http=rec).fetch(artist="Artist", track="Song", duration=229)
 
     assert result.rejected == "duration_mismatch (28s)"
@@ -386,7 +387,7 @@ def test_reject_salvages_synced_only_with_timestamps_stripped():
     the timings belong to the wrong edit; only the words are worth keeping."""
     rec = _Recorder(_search_script([
         {"trackName": "Song", "duration": 257, "syncedLyrics": SYNCED_BODY},
-    ]) + [_RAW_TRACK_MISS])
+    ]))
     result = LyricsSource(http=rec).fetch(artist="Artist", track="Song", duration=229)
 
     assert result.rejected == "duration_mismatch (28s)"
@@ -399,7 +400,7 @@ def test_reject_without_text_salvages_nothing():
     to salvage — ``rejected_text`` stays None and the floor applies."""
     rec = _Recorder(_search_script([
         {"trackName": "Song", "duration": 400, "instrumental": True},
-    ]) + [_RAW_TRACK_MISS])
+    ]))
     result = LyricsSource(http=rec).fetch(artist="Artist", track="Song", duration=229)
 
     assert result.rejected == "duration_mismatch (171s)"
@@ -657,12 +658,11 @@ def test_ladder_miss_falls_through_to_floor():
 
 
 def test_ladder_is_bounded_and_queries_each_variant():
-    """A track yielding two cleaned variants issues one artist-free query each,
-    then the #260 raw-track fallback — capped at _MAX_LADDER_QUERIES extra
-    HTTP calls, in ladder order (cleaned variants first)."""
+    """A track yielding two cleaned variants issues one artist-free query each —
+    ≤ _MAX_LADDER_QUERIES extra HTTP calls, in ladder order. A Latin track
+    does NOT get the #260 raw-track fallback appended."""
     rec = _Recorder([
         {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
-        {"expect_in": "/api/search", "code": 200, "body": []},
         {"expect_in": "/api/search", "code": 200, "body": []},
         {"expect_in": "/api/search", "code": 200, "body": []},
         {"expect_in": "/api/search", "code": 200, "body": []},
@@ -672,11 +672,7 @@ def test_ladder_is_bounded_and_queries_each_variant():
 
     assert result.found is False
     ladder_calls = [c[2] for c in rec.calls if c[2] and "q" in c[2]]
-    assert ladder_calls == [
-        {"q": "Song. Extra"},
-        {"q": "Song"},
-        {"q": "«Song. Extra». Tail"},
-    ]
+    assert ladder_calls == [{"q": "Song. Extra"}, {"q": "Song"}]
     assert len(ladder_calls) <= _MAX_LADDER_QUERIES
 
 
@@ -707,6 +703,28 @@ def test_cross_script_artist_resolves_via_raw_track_fallback():
     assert result.match_variant == "כולם באילת"
     assert rec.calls[-1][2] == {"q": "כולם באילת"}
     assert len(rec.calls) == 3
+
+
+def test_raw_track_fallback_never_shadows_rejection():
+    """A #148 duration-reject salvaged the RIGHT song's text — the #260
+    raw-track rung must not run after it: a duration-coincident artist-free
+    hit could attach the WRONG song's lyrics over the salvage."""
+    wrong_edit = {
+        "trackName": "כולם באילת",
+        "artistName": "Eden Ben Zaken",
+        "duration": 400,
+        "plainLyrics": PLAIN_BODY,
+    }
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": [wrong_edit]},
+    ])
+    src = LyricsSource(http=rec)
+    result = src.fetch(artist="עדן בן זקן", track="כולם באילת", duration=199)
+
+    assert result.rejected is not None
+    assert result.rejected_text == PLAIN_BODY
+    assert len(rec.calls) == 2  # no raw-track query after the rejection
 
 
 def test_raw_track_fallback_skipped_without_artist():
