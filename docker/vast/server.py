@@ -16,7 +16,6 @@ import io
 import json
 import logging
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,7 +23,6 @@ import threading
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Optional
 
 LOG = logging.getLogger("karaoke-vast")
 logging.basicConfig(
@@ -68,7 +66,7 @@ def _get_whisper():
     return _WHISPER_MODEL
 
 
-def _parse_multipart(rfile, content_type: str, content_length: int) -> Optional[bytes]:
+def _parse_multipart(rfile, content_type: str, content_length: int) -> bytes | None:
     """Minimal multipart/form-data parser — extracts the first file part body."""
     if not content_type or "multipart/form-data" not in content_type:
         return None
@@ -205,7 +203,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- handlers ----------------------------------------------------------
 
-    def _read_file(self) -> Optional[bytes]:
+    def _read_file(self) -> bytes | None:
         ctype = self.headers.get("Content-Type", "")
         clen = int(self.headers.get("Content-Length", "0") or 0)
         if clen <= 0:
@@ -220,24 +218,23 @@ class Handler(BaseHTTPRequestHandler):
         if not data:
             self._send_json(400, {"error": "empty body / no file"})
             return
-        with _GPU_LOCK:
-            with tempfile.TemporaryDirectory(prefix="kar-demucs-") as tmp:
-                tmp_path = Path(tmp)
-                in_wav = tmp_path / "input.wav"
-                in_wav.write_bytes(data)
-                out_dir = tmp_path / "out"
-                try:
-                    vocals, instrumental = _run_demucs(in_wav, out_dir)
-                except Exception as exc:  # noqa: BLE001
-                    LOG.exception("demucs failed")
-                    self._send_json(500, {"error": str(exc)})
-                    return
-                payload = _zip_files(
-                    [
-                        ("vocals.wav", vocals),
-                        ("instrumental.wav", instrumental),
-                    ]
-                )
+        with _GPU_LOCK, tempfile.TemporaryDirectory(prefix="kar-demucs-") as tmp:
+            tmp_path = Path(tmp)
+            in_wav = tmp_path / "input.wav"
+            in_wav.write_bytes(data)
+            out_dir = tmp_path / "out"
+            try:
+                vocals, instrumental = _run_demucs(in_wav, out_dir)
+            except Exception as exc:  # noqa: BLE001
+                LOG.exception("demucs failed")
+                self._send_json(500, {"error": str(exc)})
+                return
+            payload = _zip_files(
+                [
+                    ("vocals.wav", vocals),
+                    ("instrumental.wav", instrumental),
+                ]
+            )
         self._send_zip(payload, "demucs.zip")
 
     def _handle_whisper(self) -> None:
@@ -245,50 +242,49 @@ class Handler(BaseHTTPRequestHandler):
         if not data:
             self._send_json(400, {"error": "empty body / no file"})
             return
-        with _GPU_LOCK:
-            with tempfile.TemporaryDirectory(prefix="kar-whisper-") as tmp:
-                tmp_path = Path(tmp)
-                in_wav = tmp_path / "input.wav"
-                in_wav.write_bytes(data)
-                try:
-                    model = _get_whisper()
-                    segments_iter, info = model.transcribe(
-                        str(in_wav),
-                        beam_size=5,
-                        vad_filter=True,
-                        word_timestamps=True,
-                    )
-                    segments = []
-                    text_lines: list[str] = []
-                    for seg in segments_iter:
-                        seg_dict = {
-                            "start": seg.start,
-                            "end": seg.end,
-                            "text": seg.text,
-                        }
-                        if seg.words:
-                            seg_dict["words"] = [
-                                {
-                                    "start": w.start,
-                                    "end": w.end,
-                                    "word": w.word,
-                                    "probability": w.probability,
-                                }
-                                for w in seg.words
-                            ]
-                        segments.append(seg_dict)
-                        if seg.text:
-                            text_lines.append(seg.text.strip())
-                    lyrics_json = {
-                        "language": info.language,
-                        "language_probability": info.language_probability,
-                        "duration": info.duration,
-                        "segments": segments,
+        with _GPU_LOCK, tempfile.TemporaryDirectory(prefix="kar-whisper-") as tmp:
+            tmp_path = Path(tmp)
+            in_wav = tmp_path / "input.wav"
+            in_wav.write_bytes(data)
+            try:
+                model = _get_whisper()
+                segments_iter, info = model.transcribe(
+                    str(in_wav),
+                    beam_size=5,
+                    vad_filter=True,
+                    word_timestamps=True,
+                )
+                segments = []
+                text_lines: list[str] = []
+                for seg in segments_iter:
+                    seg_dict = {
+                        "start": seg.start,
+                        "end": seg.end,
+                        "text": seg.text,
                     }
-                except Exception as exc:  # noqa: BLE001
-                    LOG.exception("whisper failed")
-                    self._send_json(500, {"error": str(exc)})
-                    return
+                    if seg.words:
+                        seg_dict["words"] = [
+                            {
+                                "start": w.start,
+                                "end": w.end,
+                                "word": w.word,
+                                "probability": w.probability,
+                            }
+                            for w in seg.words
+                        ]
+                    segments.append(seg_dict)
+                    if seg.text:
+                        text_lines.append(seg.text.strip())
+                lyrics_json = {
+                    "language": info.language,
+                    "language_probability": info.language_probability,
+                    "duration": info.duration,
+                    "segments": segments,
+                }
+            except Exception as exc:  # noqa: BLE001
+                LOG.exception("whisper failed")
+                self._send_json(500, {"error": str(exc)})
+                return
         body = _zip_bytes(
             [
                 ("lyrics.txt", "\n".join(text_lines).encode("utf-8")),

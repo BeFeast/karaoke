@@ -620,7 +620,7 @@ def _enhanced_lrc_line(words: list[str], line_ts: list[dict[str, Any]]) -> str:
     aligned word's ``end`` (the line's sung end).
     """
     tokens: list[str] = []
-    for word, ts in zip(words, line_ts):
+    for word, ts in zip(words, line_ts, strict=False):
         w_start = float(ts.get("start") or 0.0)
         tokens.append(f"{_fmt_lrc_word_tag(w_start)}{word}")
     # Words with no aligned timestamp (intra-line drift) ride untagged.
