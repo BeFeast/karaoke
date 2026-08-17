@@ -186,7 +186,7 @@ jobs:
         run: ./gradlew --no-daemon assembleDebug
       - name: Upload APK artifact
         if: steps.filter.outputs.android == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: karaoke-submitter-debug-apk
           path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
