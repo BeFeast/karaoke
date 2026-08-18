@@ -308,3 +308,96 @@ async def test_cancel_during_capacity_wait_stops_retry_and_keeps_cancelled(
     async with factory() as session:
         job = await session.get(Job, job_id)
         assert job.status == JobStatus.cancelled, "must NOT be flipped to failed"
+
+
+@pytest.mark.asyncio
+async def test_endpoint_paused_retries_then_completes(factory, monkeypatch, tmp_path):
+    """#265: /run rejected with 409 ENDPOINT_PAUSED (warm-worker flush window)
+    must ride the capacity ladder — backoff, re-submit, complete — instead of
+    failing the job like the Aug 10-14 canaries did. The stage note names the
+    paused condition while we wait."""
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.worker.runpod_client import RunpodEndpointPausedError
+
+    delays: list[float] = []
+    _patch_pipeline_io(pipeline, monkeypatch, delays)
+
+    job_id = await _make_job(factory)
+
+    notes: list[str] = []
+
+    async def note_capturing_asleep(seconds: float) -> None:
+        delays.append(seconds)
+        async with factory() as session:
+            job = await session.get(Job, job_id)
+            notes.append(job.stage_note or "")
+
+    monkeypatch.setattr(pipeline, "_asleep", note_capturing_asleep)
+
+    calls = {"n": 0}
+
+    def paused_then_ok(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise RunpodEndpointPausedError(
+                "runpod /run rejected: HTTP 409 ENDPOINT_PAUSED (workersMax=0)"
+            )
+        return _gpu_result(work_dir)
+
+    from karaoke.worker.runpod_client import RunpodClient
+
+    monkeypatch.setattr(RunpodClient, "run", paused_then_ok)
+
+    await pipeline.run_real_job(
+        factory, job_id, _runpod_settings(tmp_path, runpod_capacity_retries=5)
+    )
+
+    assert calls["n"] == 3, "re-submitted twice through the pause window, then ok"
+    assert delays == [20.0, 40.0], "existing capped-exponential capacity backoff"
+    assert all("paused" in n for n in notes), "stage note must name the pause"
+    async with factory() as session:
+        job = await session.get(Job, job_id)
+        assert job.status == JobStatus.completed
+        assert job.progress == 100
+        assert (job.error or "") == ""
+
+
+@pytest.mark.asyncio
+async def test_endpoint_paused_exhausts_budget_fails_with_unpause_hint(
+    factory, monkeypatch, tmp_path
+):
+    """#265/#279: an endpoint that STAYS paused (e.g. a died flush never
+    restored workersMax) exhausts the bounded capacity budget and fails with
+    a job error naming the paused condition and how to unpause."""
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.worker.runpod_client import RunpodEndpointPausedError
+
+    delays: list[float] = []
+    _patch_pipeline_io(pipeline, monkeypatch, delays)
+
+    calls = {"n": 0}
+
+    def always_paused(self, mix_wav, work_dir: Path, *, align_text=None, align_lang=None, whisper_lang=None):
+        calls["n"] += 1
+        raise RunpodEndpointPausedError(
+            "runpod /run rejected: HTTP 409 ENDPOINT_PAUSED (workersMax=0) "
+            "— the endpoint is paused; unpause it by setting Max Workers > 0 "
+            "in the RunPod console"
+        )
+
+    from karaoke.worker.runpod_client import RunpodClient
+
+    monkeypatch.setattr(RunpodClient, "run", always_paused)
+
+    job_id = await _make_job(factory)
+    await pipeline.run_real_job(
+        factory, job_id, _runpod_settings(tmp_path, runpod_capacity_retries=2)
+    )
+
+    assert calls["n"] == 3, "initial attempt + 2 retries, bounded — never infinite"
+    assert delays == [20.0, 40.0]
+    async with factory() as session:
+        job = await session.get(Job, job_id)
+        assert job.status == JobStatus.failed
+        assert "ENDPOINT_PAUSED" in (job.error or "")
+        assert "Max Workers" in (job.error or ""), "error must say how to unpause"
