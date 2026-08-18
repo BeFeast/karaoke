@@ -19,8 +19,10 @@ import pytest
 from karaoke.config import Settings
 from karaoke.worker.runpod_client import (
     RunpodBudgetError,
+    RunpodCapacityError,
     RunpodClient,
     RunpodColdStartError,
+    RunpodEndpointPausedError,
     RunpodError,
     RunpodFailedError,
     RunpodTimeoutError,
@@ -709,3 +711,54 @@ def test_r2_prefix_unique_within_same_second(settings, tmp_path, monkeypatch):
     client._upload_to_r2(mix)
     assert len(calls) == 2
     assert calls[0] != calls[1]
+
+
+# ---------------------------------------------------------------------------
+# 409 ENDPOINT_PAUSED is retryable, not fatal (#265)
+# ---------------------------------------------------------------------------
+def test_run_409_paused_raises_capacity_style_error(settings, tmp_path):
+    """/run returning HTTP 409 endpoint-paused must raise the retryable
+    RunpodEndpointPausedError (a RunpodCapacityError → capacity-retry ladder),
+    with an actionable message, and must not POST /cancel (no job exists)."""
+    rec = _Recorder([
+        {
+            "expect_in": "/run",
+            "code": 409,
+            "body": {
+                "error": "Endpoint is paused (max_workers is 0). "
+                "Please resume the endpoint to accept requests."
+            },
+        },
+    ])
+    client = RunpodClient(settings, http=rec)
+    with pytest.raises(RunpodEndpointPausedError) as exc_info:
+        client.run(_mix_wav(tmp_path), tmp_path / "work")
+    assert isinstance(exc_info.value, RunpodCapacityError), (
+        "must ride the coordinator's capacity-retry ladder"
+    )
+    msg = str(exc_info.value)
+    assert "ENDPOINT_PAUSED" in msg
+    assert "paused" in msg
+    assert "Max Workers" in msg, "message must say how to unpause"
+    assert len(rec.calls) == 1, "no job was created — nothing to cancel"
+
+
+def test_run_409_with_empty_body_treated_as_paused(settings, tmp_path):
+    """A 409 whose body was empty/non-JSON still classifies as paused —
+    /run has no other known 409 and the submit is idempotent."""
+    rec = _Recorder([{"expect_in": "/run", "code": 409, "body": {}}])
+    client = RunpodClient(settings, http=rec)
+    with pytest.raises(RunpodEndpointPausedError):
+        client.run(_mix_wav(tmp_path), tmp_path / "work")
+
+
+def test_run_non_409_submit_error_stays_fatal(settings, tmp_path):
+    """Other /run failures (e.g. HTTP 500) keep the legacy fatal RunpodError —
+    they must NOT be classified as retryable capacity errors."""
+    rec = _Recorder([
+        {"expect_in": "/run", "code": 500, "body": {"error": "boom"}},
+    ])
+    client = RunpodClient(settings, http=rec)
+    with pytest.raises(RunpodError) as exc_info:
+        client.run(_mix_wav(tmp_path), tmp_path / "work")
+    assert not isinstance(exc_info.value, RunpodCapacityError)
