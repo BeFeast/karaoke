@@ -21,7 +21,7 @@ jobs:
   build-push:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The image is ~7GB compressed / >15GB in layers; stock runners have
       # ~14GB free on /. Drop the big preinstalled toolchains first. The
