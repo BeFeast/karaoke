@@ -79,6 +79,18 @@ class RunpodColdStartError(RunpodCapacityError):
         self.workers_initializing = workers_initializing
 
 
+class RunpodEndpointPausedError(RunpodCapacityError):
+    """``/run`` returned HTTP 409 endpoint-paused (workersMax=0).
+
+    This happens when a job is dispatched during the ``runpod_provision.py``
+    warm-worker flush window (workersMax bounced 0 -> drain -> restore), which
+    self-heals in seconds-to-minutes — or when the endpoint was left paused
+    (incident #279). No RunPod job was created and no cost was incurred, so
+    re-submitting is idempotent. Subclasses ``RunpodCapacityError`` so the
+    coordinator's existing capacity-retry ladder backs off and re-submits
+    instead of failing the job (#265)."""
+
+
 # ---------------------------------------------------------------------------
 # tiny http helper (urllib only — no extra runtime dep). Inject for tests.
 # ---------------------------------------------------------------------------
@@ -106,6 +118,22 @@ def _http(
         except Exception:  # pragma: no cover - non-JSON error body
             payload = {}
         return exc.code, payload
+
+
+def _is_endpoint_paused(code: int, body: dict) -> bool:
+    """True when a ``/run`` response means "endpoint is paused" (workersMax=0).
+
+    RunPod signals this as HTTP 409 with an error body like
+    ``{"error": "Endpoint is paused (max_workers is 0) ..."}`` (canary jobs
+    Aug 10-14) — match "paused" case-insensitively anywhere in the body.
+    A 409 with an empty/non-JSON body is treated as paused too: /run has no
+    other known 409, and misclassifying a real conflict merely retries an
+    idempotent, cost-free submit."""
+    if code != 409:
+        return False
+    if not body:
+        return True
+    return "paused" in json.dumps(body).lower()
 
 
 def _extract_workers_initializing(body: dict) -> int:
@@ -265,6 +293,19 @@ class RunpodClient:
                 timeout=request_timeout,
             )
             if code not in (200, 201) or not body.get("id"):
+                if _is_endpoint_paused(code, body):
+                    # #265: dispatched into the warm-worker flush window (or a
+                    # stuck-paused endpoint, #279). No job was created, no cost
+                    # incurred — retryable via the capacity ladder.
+                    raise RunpodEndpointPausedError(
+                        f"runpod /run rejected: HTTP 409 ENDPOINT_PAUSED "
+                        f"(workersMax=0) body={body!r} — the endpoint is "
+                        f"paused; a provisioning flush self-heals in minutes, "
+                        f"but if it stays paused, unpause it by setting "
+                        f"Max Workers > 0 in the RunPod console (or PATCH "
+                        f"/v1/endpoints/{endpoint_id} workersMax, as "
+                        f"scripts/runpod_provision.py does)"
+                    )
                 raise RunpodError(
                     f"runpod /run failed: HTTP {code} body={body!r}"
                 )
