@@ -1181,7 +1181,11 @@ async def _run_gpu_with_capacity_retry(
     fail the job. Any other error (real GPU failure, budget, wall backstop)
     is NOT retried. Honours user cancellation while we wait between attempts.
     """
-    from karaoke.worker.runpod_client import RunpodCapacityError, RunpodColdStartError
+    from karaoke.worker.runpod_client import (
+        RunpodCapacityError,
+        RunpodColdStartError,
+        RunpodEndpointPausedError,
+    )
 
     retries = max(0, int(getattr(settings, "runpod_capacity_retries", 0) or 0))
     attempt = 0
@@ -1236,6 +1240,13 @@ async def _run_gpu_with_capacity_retry(
             await _asleep(delay)
             continue
         except RunpodCapacityError as exc:
+            # ENDPOINT_PAUSED (#265) rides the same bounded budget as a
+            # capacity stall, but the logs / stage note must name the
+            # condition so a stuck-paused endpoint (#279) is diagnosable.
+            paused = isinstance(exc, RunpodEndpointPausedError)
+            condition = (
+                "endpoint paused (workersMax=0)" if paused else "capacity busy"
+            )
             if attempt >= retries:
                 # Out of retries — surface the capacity error so the job
                 # fails with a clear, actionable message (Retry still works).
@@ -1248,13 +1259,17 @@ async def _run_gpu_with_capacity_retry(
                     JobStatus.failed,
                 }:
                     raise
-                job.stage_note = None
+                job.stage_note = (
+                    "GPU endpoint paused -- waiting for it to resume"
+                    if paused
+                    else None
+                )
                 await session.commit()
             delay = _capacity_backoff(attempt)
             _log.warning(
-                "RunPod GPU capacity busy for job %s (attempt %d/%d): %s; "
+                "RunPod GPU %s for job %s (attempt %d/%d): %s; "
                 "backing off %.0fs then re-submitting",
-                job_id, attempt + 1, retries + 1, exc, delay,
+                condition, job_id, attempt + 1, retries + 1, exc, delay,
             )
             attempt += 1
             await _asleep(delay)
