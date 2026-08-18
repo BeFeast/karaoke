@@ -402,3 +402,93 @@ def test_vad_veto_ignores_internal_instrumental_gap():
     voiced = [(0.8, 1.7), (19.8, 20.7)]  # each word sits in voice
     lrc, _ = handler._word_timestamps_to_lrc(words, text, stride=STRIDE_MS, voiced=voiced)
     assert "gapped" in lrc
+
+
+# ---------------------------------------------------------------------------
+# CPU-only image selfcheck (#279): the CI boot-verify entrypoint. Heavy-dep
+# imports are exercised with stdlib stand-ins; model-artifact checks run
+# against tmp_path fixtures with the size floors monkeypatched small.
+
+
+def _selfcheck_env(tmp_path, monkeypatch, *, sep_bytes=64, whisper_bytes=64, align_bytes=64):
+    """Build a fake baked-image layout and point the handler at it.
+
+    Returns the paths so individual tests can delete/truncate them.
+    """
+    # Imports: stdlib modules stand in for the heavy deps.
+    monkeypatch.setattr(handler, "_SELFCHECK_IMPORTS", ("json", "os.path"))
+    # Tiny size floors so fixtures stay bytes, not gigabytes.
+    monkeypatch.setattr(handler, "_SELFCHECK_MIN_SEP_BYTES", 16)
+    monkeypatch.setattr(handler, "_SELFCHECK_MIN_WHISPER_BYTES", 16)
+    monkeypatch.setattr(handler, "_SELFCHECK_MIN_ALIGN_BYTES", 16)
+
+    sep_dir = tmp_path / "sep-models"
+    sep_dir.mkdir()
+    ckpt = sep_dir / "model.ckpt"
+    ckpt.write_bytes(b"\x00" * sep_bytes)
+    monkeypatch.setattr(handler, "_SEP_MODEL_DIR", str(sep_dir))
+    monkeypatch.setattr(handler, "_SEP_MODEL", "model.ckpt")
+
+    hub = tmp_path / "hf" / "hub"
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+    # faster_whisper is not installed in the test env, so _selfcheck_whisper_dirs
+    # falls back to the models--*whisper* glob — exercise that branch.
+    whisper_bin = (
+        hub / "models--Systran--faster-whisper-large-v3-turbo" / "snapshots" / "abc" / "model.bin"
+    )
+    whisper_bin.parent.mkdir(parents=True)
+    whisper_bin.write_bytes(b"\x00" * whisper_bytes)
+
+    align_repo = "models--" + handler._ALIGN_MODEL_ID.replace("/", "--")
+    align_weights = hub / align_repo / "snapshots" / "def" / "model.safetensors"
+    align_weights.parent.mkdir(parents=True)
+    align_weights.write_bytes(b"\x00" * align_bytes)
+
+    return ckpt, whisper_bin, align_weights
+
+
+def test_selfcheck_ok(tmp_path, monkeypatch, capsys):
+    _selfcheck_env(tmp_path, monkeypatch)
+    assert handler._selfcheck() == 0
+    out = capsys.readouterr().out
+    assert "selfcheck: OK" in out
+    assert "import json ok" in out
+
+
+def test_selfcheck_fails_on_missing_separator_ckpt(tmp_path, monkeypatch, capsys):
+    ckpt, _, _ = _selfcheck_env(tmp_path, monkeypatch)
+    ckpt.unlink()
+    assert handler._selfcheck() == 1
+    out = capsys.readouterr().out
+    assert "separator checkpoint: missing" in out
+    assert "selfcheck: FAILED" in out
+
+
+def test_selfcheck_fails_on_truncated_whisper_model(tmp_path, monkeypatch, capsys):
+    _selfcheck_env(tmp_path, monkeypatch, whisper_bytes=4)  # < 16-byte floor
+    assert handler._selfcheck() == 1
+    out = capsys.readouterr().out
+    assert "whisper model.bin" in out and "< 16 required" in out
+
+
+def test_selfcheck_fails_on_absent_whisper_dir(tmp_path, monkeypatch, capsys):
+    _, whisper_bin, _ = _selfcheck_env(tmp_path, monkeypatch)
+    whisper_bin.unlink()
+    assert handler._selfcheck() == 1
+    assert "whisper model.bin: not found" in capsys.readouterr().out
+
+
+def test_selfcheck_fails_on_missing_aligner_weights(tmp_path, monkeypatch, capsys):
+    _, _, align_weights = _selfcheck_env(tmp_path, monkeypatch)
+    align_weights.unlink()
+    assert handler._selfcheck() == 1
+    assert "aligner weights: none found" in capsys.readouterr().out
+
+
+def test_selfcheck_fails_on_broken_import(tmp_path, monkeypatch, capsys):
+    _selfcheck_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        handler, "_SELFCHECK_IMPORTS", ("json", "definitely_not_a_module_xyz")
+    )
+    assert handler._selfcheck() == 1
+    assert "import definitely_not_a_module_xyz failed" in capsys.readouterr().out
