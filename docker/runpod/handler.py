@@ -55,8 +55,10 @@ than silently returning a wrong shape.
 from __future__ import annotations
 
 import base64
+import importlib
 import logging
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -75,6 +77,7 @@ _GPU_LOCK = threading.Lock()
 # Lazy-loaded faster-whisper model; mirrors server.py's _get_whisper pattern.
 _WHISPER_MODEL: Any = None
 _WHISPER_LOCK = threading.Lock()
+_WHISPER_MODEL_NAME = "large-v3-turbo"
 
 # Lazy-loaded audio-separator BS-Roformer model. Same lazy-load shape as the
 # Whisper model so the (large) separation weights only load when a job actually
@@ -144,10 +147,13 @@ def _get_whisper():
             device = "cuda" if _gpu_available() else "cpu"
             compute_type = "float16" if device == "cuda" else "int8"
             LOG.info(
-                "loading faster-whisper large-v3-turbo on %s/%s", device, compute_type
+                "loading faster-whisper %s on %s/%s",
+                _WHISPER_MODEL_NAME,
+                device,
+                compute_type,
             )
             _WHISPER_MODEL = WhisperModel(
-                "large-v3-turbo", device=device, compute_type=compute_type
+                _WHISPER_MODEL_NAME, device=device, compute_type=compute_type
             )
     return _WHISPER_MODEL
 
@@ -811,7 +817,160 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+# --------------------------------------------------------------------------
+# CPU-only image selfcheck (#279; prevents a repeat of #263).
+#
+# CI runs this right after pushing a GPU image tag (`docker run <tag>
+# --selfcheck`, or KARAOKE_SELFCHECK=1): it eagerly imports every heavy
+# dependency the worker otherwise imports lazily at job time, and verifies the
+# baked model artifacts exist with plausible sizes — so a build that lost a
+# model-cache layer or shipped a broken venv fails the workflow instead of
+# shipping an unbootable image that only dies on the first real job.
+# It MUST NOT require a GPU: torch is imported but torch.cuda is never
+# initialized (only static build metadata is read).
+
+# Modules the worker imports lazily inside functions; a broken install of any
+# of them would otherwise surface only on the first real job.
+_SELFCHECK_IMPORTS = (
+    "torch",
+    "torchaudio",
+    "audio_separator.separator",
+    "faster_whisper",
+    "ctc_forced_aligner",
+    "runpod",
+)
+
+# Size floors for the baked model artifacts — generous fractions of the real
+# sizes (BS-Roformer ckpt ~639 MB, whisper model.bin ~1.6 GB, MMS-300m weights
+# ~1.2 GB) so a truncated or placeholder file fails while a future smaller
+# model revision still passes.
+_SELFCHECK_MIN_SEP_BYTES = 100 * 1024 * 1024
+_SELFCHECK_MIN_WHISPER_BYTES = 500 * 1024 * 1024
+_SELFCHECK_MIN_ALIGN_BYTES = 100 * 1024 * 1024
+
+
+def _hf_hub_dir() -> Path:
+    """The huggingface_hub cache dir models download into (``$HF_HOME/hub``)."""
+    hf_home = Path(os.environ.get("HF_HOME", "~/.cache/huggingface")).expanduser()
+    return hf_home / "hub"
+
+
+def _hf_repo_dir(repo_id: str) -> Path:
+    """The HF hub cache dir for one repo (``models--org--name``)."""
+    return _hf_hub_dir() / ("models--" + repo_id.replace("/", "--"))
+
+
+def _selfcheck_whisper_dirs() -> list[Path]:
+    """HF cache dirs that may hold the baked faster-whisper model.
+
+    Prefer the exact repo faster-whisper resolves ``_WHISPER_MODEL_NAME`` to
+    (private mapping — best-effort); fall back to globbing the hub for any
+    ``*whisper*`` model dir, which is unambiguous inside the image (exactly one
+    whisper model is baked).
+    """
+    try:
+        from faster_whisper.utils import _MODELS  # type: ignore
+
+        repo = _MODELS.get(_WHISPER_MODEL_NAME)
+    except Exception:
+        repo = None
+    if repo:
+        return [_hf_repo_dir(repo)]
+    return sorted(_hf_hub_dir().glob("models--*whisper*"))
+
+
+def _size_or_zero(path: Path) -> int:
+    """``path``'s size in bytes; 0 when missing (e.g. a broken HF symlink)."""
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _selfcheck_file(
+    label: str, path: Path, min_bytes: int, failures: list[str]
+) -> None:
+    """Record a failure unless ``path`` exists with at least ``min_bytes``."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        failures.append(f"{label}: missing at {path}")
+        return
+    if size < min_bytes:
+        failures.append(
+            f"{label}: {path} is {size} bytes (< {min_bytes} required)"
+        )
+    else:
+        print(f"selfcheck: {label} ok ({size / 1e6:.0f} MB) at {path}")
+
+
+def _selfcheck() -> int:
+    """CPU-only boot-verify of the built image. Returns a process exit code."""
+    failures: list[str] = []
+
+    for mod_name in _SELFCHECK_IMPORTS:
+        try:
+            mod = importlib.import_module(mod_name)
+        except Exception as exc:  # noqa: BLE001 — report, don't crash the check
+            failures.append(f"import {mod_name} failed: {exc!r}")
+        else:
+            version = getattr(mod, "__version__", "?")
+            print(f"selfcheck: import {mod_name} ok ({version})")
+            if mod_name == "torch":
+                # Static build metadata only — must not initialize CUDA.
+                print(f"selfcheck: torch cuda build: {mod.version.cuda}")
+
+    # BS-Roformer checkpoint pre-cached by the Dockerfile into the dir the
+    # handler loads from at job time.
+    _selfcheck_file(
+        "separator checkpoint",
+        Path(_SEP_MODEL_DIR) / _SEP_MODEL,
+        _SELFCHECK_MIN_SEP_BYTES,
+        failures,
+    )
+
+    # faster-whisper model weights in the HF hub cache.
+    whisper_dirs = _selfcheck_whisper_dirs()
+    whisper_bins = [p for d in whisper_dirs for p in sorted(d.rglob("model.bin"))]
+    if not whisper_bins:
+        failures.append(
+            "whisper model.bin: not found under "
+            f"{[str(d) for d in whisper_dirs] or [str(_hf_hub_dir())]}"
+        )
+    else:
+        best = max(whisper_bins, key=_size_or_zero)
+        _selfcheck_file(
+            "whisper model.bin", best, _SELFCHECK_MIN_WHISPER_BYTES, failures
+        )
+
+    # ctc-forced-aligner MMS-300m weights in the HF hub cache.
+    align_dir = _hf_repo_dir(_ALIGN_MODEL_ID)
+    align_weights = [
+        p
+        for pattern in ("*.safetensors", "pytorch_model.bin")
+        for p in sorted(align_dir.rglob(pattern))
+    ]
+    if not align_weights:
+        failures.append(f"aligner weights: none found under {align_dir}")
+    else:
+        best = max(align_weights, key=_size_or_zero)
+        _selfcheck_file(
+            "aligner weights", best, _SELFCHECK_MIN_ALIGN_BYTES, failures
+        )
+
+    if failures:
+        for failure in failures:
+            print(f"selfcheck: FAIL {failure}")
+        print(f"selfcheck: FAILED ({len(failures)} problem(s))")
+        return 1
+    print("selfcheck: OK — imports and baked model files verified (CPU-only)")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--selfcheck" in sys.argv[1:] or os.environ.get("KARAOKE_SELFCHECK") == "1":
+        sys.exit(_selfcheck())
+
     import runpod
 
     runpod.serverless.start({"handler": handler})
