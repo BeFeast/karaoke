@@ -50,7 +50,7 @@ jobs:
 
       # Registry-backed buildkit cache (#263): a handler-only tag bump reuses
       # every heavy layer (~9.4GB ingress otherwise) and pushes ~25KB.
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: docker/runpod
           platforms: linux/amd64
