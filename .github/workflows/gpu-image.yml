@@ -42,7 +42,7 @@ jobs:
       # (created by user PAT pushes) never granted this repo's Actions write
       # access, and GitHub has no API for that grant (UI-only). GHCR_TOKEN is
       # an operator PAT with write:packages.
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
