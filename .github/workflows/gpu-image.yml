@@ -36,7 +36,7 @@ jobs:
           sudo docker image prune -af
           df -h /
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # GITHUB_TOKEN cannot push: the pre-existing karaoke-runpod package
       # (created by user PAT pushes) never granted this repo's Actions write
