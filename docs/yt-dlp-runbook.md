@@ -47,6 +47,24 @@ GPU pipeline.
 On failure, the workflow opens or comments on an issue titled
 `yt-dlp canary failure`, then fails the workflow run.
 
+## GPU keepalive canary
+
+The download canary above cancels its job before GPU dispatch, so it says
+nothing about the RunPod endpoint. RunPod scales an endpoint that gets no
+requests for about 7 days down to `workersMax=0`. After that, every job fails
+with `409 ENDPOINT_PAUSED`. This happened silently from 2026-09-08 to 2026-09-24.
+
+`.github/workflows/gpu-keepalive.yml` therefore runs the same script with
+`KARAOKE_CANARY_MODE=full` every 3 days. It sends one short video (repo var
+`KARAOKE_KEEPALIVE_URL`, default "Me at the zoo") and waits for `completed`.
+That is one real, successful GPU request (about $0.01), which keeps the
+endpoint active and checks the whole pipeline. On failure it opens or comments
+on `GPU keepalive canary failure`.
+
+If the failure is `ENDPOINT_PAUSED`, restore the endpoint with a RunPod REST
+`PATCH /v1/endpoints/{id}` setting `workersMax` > 0 (the live endpoint id is
+`KARAOKE_RUNPOD_ENDPOINT_ID` in Infisical), then re-run the workflow.
+
 ## Rollback
 
 1. Open the failing canary run and identify the first bad deployed SHA/image.

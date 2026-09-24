@@ -1,0 +1,75 @@
+name: GPU keepalive canary
+
+# RunPod scales a serverless endpoint that gets no requests for ~7 days down to
+# workersMax=0; every job then fails with 409 ENDPOINT_PAUSED. The nightly
+# yt-dlp canary cancels its job before GPU dispatch, so it neither prevents nor
+# reliably detects that. This runs one short job end-to-end every 3 days.
+on:
+  schedule:
+    - cron: "41 9 */3 * *"
+  workflow_dispatch:
+
+concurrency:
+  group: gpu-keepalive
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  keepalive:
+    name: end-to-end GPU job
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Run full canary job
+        id: canary
+        continue-on-error: true
+        env:
+          KARAOKE_CANARY_MODE: full
+          KARAOKE_CANARY_BASE_URL: ${{ secrets.KARAOKE_CANARY_BASE_URL }}
+          KARAOKE_CANARY_SERVICE_TOKEN: ${{ secrets.KARAOKE_CANARY_SERVICE_TOKEN }}
+          # One short video only: each URL is a paid GPU job.
+          KARAOKE_CANARY_URLS: ${{ vars.KARAOKE_KEEPALIVE_URL || 'https://www.youtube.com/watch?v=jNQXAC9IVRw' }}
+          KARAOKE_CANARY_TIMEOUT_SECONDS: ${{ vars.KARAOKE_KEEPALIVE_TIMEOUT_SECONDS || '1800' }}
+          KARAOKE_CANARY_POLL_SECONDS: "15"
+        run: uv run --frozen --no-dev scripts/ytdlp_canary.py
+      - name: Open or update failure issue
+        if: steps.canary.outcome == 'failure'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const title = "GPU keepalive canary failure";
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              "End-to-end GPU keepalive job failed.",
+              "",
+              `Run: ${runUrl}`,
+              "",
+              "If the job error is `409 ENDPOINT_PAUSED`, the RunPod endpoint was scaled to workersMax=0: restore workersMax (see docs/yt-dlp-runbook.md).",
+            ].join("\n");
+            const q = `repo:${context.repo.owner}/${context.repo.repo} is:issue is:open in:title "${title}"`;
+            const existing = await github.rest.search.issuesAndPullRequests({ q, per_page: 1 });
+            if (existing.data.items.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.data.items[0].number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              });
+            }
+      - name: Fail workflow after surfacing canary failure
+        if: steps.canary.outcome == 'failure'
+        run: exit 1

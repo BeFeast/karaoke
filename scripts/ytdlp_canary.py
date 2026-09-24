@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Submit deployed coordinator jobs until the yt-dlp download stage succeeds."""
+"""Submit deployed coordinator jobs until the yt-dlp download stage succeeds.
+
+With KARAOKE_CANARY_MODE=full the job is instead driven to ``completed``: the
+GPU stages run for real, which both verifies the whole pipeline and keeps the
+RunPod endpoint from being auto-scaled to zero workers after a week without
+requests (it was silently paused 2026-09-08..24).
+"""
 from __future__ import annotations
 
 import json
@@ -14,6 +20,7 @@ from typing import Any
 DEFAULT_URL = "https://www.youtube.com/watch?v=BaW_jenozKc"
 DOWNLOAD_SUCCESS_STATUSES = {"separating", "transcribing", "completed"}
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+MODES = ("download", "full")
 
 
 class CanaryError(RuntimeError):
@@ -27,6 +34,7 @@ class CanaryConfig:
     urls: tuple[str, ...]
     timeout_s: float
     poll_s: float
+    mode: str = "download"
 
 
 class CanaryClient:
@@ -84,12 +92,16 @@ def config_from_env(env: dict[str, str] = os.environ) -> CanaryConfig:
         raise CanaryError("KARAOKE_CANARY_BASE_URL is required")
     if not token:
         raise CanaryError("KARAOKE_CANARY_SERVICE_TOKEN is required")
+    mode = env.get("KARAOKE_CANARY_MODE", "download").strip() or "download"
+    if mode not in MODES:
+        raise CanaryError(f"KARAOKE_CANARY_MODE must be one of {MODES}, got {mode!r}")
     return CanaryConfig(
         base_url=base_url,
         service_token=token,
         urls=_split_urls(env.get("KARAOKE_CANARY_URLS")),
         timeout_s=float(env.get("KARAOKE_CANARY_TIMEOUT_SECONDS", "900")),
         poll_s=float(env.get("KARAOKE_CANARY_POLL_SECONDS", "10")),
+        mode=mode,
     )
 
 
@@ -106,13 +118,17 @@ def run_one(
     *,
     timeout_s: float,
     poll_s: float,
+    mode: str = "download",
     sleep=time.sleep,
     now=time.monotonic,
 ) -> dict[str, Any]:
+    full = mode == "full"
+    success = {"completed"} if full else DOWNLOAD_SUCCESS_STATUSES
+    stage = "completion" if full else "download success"
     job = client.request_json(
         "POST",
         "/jobs",
-        {"url": source_url, "title": "yt-dlp nightly canary"},
+        {"url": source_url, "title": "GPU keepalive canary" if full else "yt-dlp nightly canary"},
     )
     job_id = job.get("id")
     if not isinstance(job_id, int):
@@ -125,11 +141,11 @@ def run_one(
             status = _status(last)
             progress = last.get("progress", "?")
             print(f"job {job_id}: {status} ({progress}%)", flush=True)
-            if status in DOWNLOAD_SUCCESS_STATUSES:
+            if status in success:
                 return last
             if status in TERMINAL_STATUSES:
                 raise CanaryError(
-                    f"job {job_id} reached {status} before download success: "
+                    f"job {job_id} reached {status} before {stage}: "
                     f"{last.get('error') or 'no error detail'}"
                 )
             sleep(poll_s)
@@ -139,10 +155,14 @@ def run_one(
         if final_status not in TERMINAL_STATUSES:
             try:
                 client.request_json("POST", f"/jobs/{job_id}/cancel")
-                print(f"job {job_id}: cancelled after canary download check", flush=True)
+                print(f"job {job_id}: cancelled after canary {mode} check", flush=True)
             except CanaryError as exc:
                 print(f"job {job_id}: cancel failed after canary check: {exc}", file=sys.stderr)
-    raise CanaryError(f"job {job_id} did not pass download stage within {timeout_s:.0f}s")
+    raise CanaryError(f"job {job_id} did not reach {stage} within {timeout_s:.0f}s")
+
+
+def mode_label(env: dict[str, str]) -> str:
+    return env.get("KARAOKE_CANARY_MODE", "download").strip() or "download"
 
 
 def main() -> int:
@@ -150,11 +170,11 @@ def main() -> int:
         cfg = config_from_env()
         client = CanaryClient(cfg.base_url, cfg.service_token)
         for url in cfg.urls:
-            run_one(client, url, timeout_s=cfg.timeout_s, poll_s=cfg.poll_s)
+            run_one(client, url, timeout_s=cfg.timeout_s, poll_s=cfg.poll_s, mode=cfg.mode)
     except CanaryError as exc:
-        print(f"yt-dlp canary failed: {exc}", file=sys.stderr)
+        print(f"canary ({mode_label(os.environ)}) failed: {exc}", file=sys.stderr)
         return 1
-    print("yt-dlp canary passed", flush=True)
+    print(f"canary ({cfg.mode}) passed", flush=True)
     return 0
 
 
