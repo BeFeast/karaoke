@@ -100,3 +100,54 @@ def test_run_one_fails_when_job_fails_before_download_passes():
             sleep=lambda _s: None,
             now=iter([0, 0, 1, 1, 2, 2]).__next__,
         )
+
+
+def test_config_rejects_unknown_mode():
+    with pytest.raises(CanaryError, match="KARAOKE_CANARY_MODE"):
+        config_from_env(
+            {
+                "KARAOKE_CANARY_BASE_URL": "https://karaoke.example",
+                "KARAOKE_CANARY_SERVICE_TOKEN": "token",
+                "KARAOKE_CANARY_MODE": "gpu",
+            }
+        )
+
+
+def test_full_mode_waits_for_completion_without_cancelling():
+    client = FakeClient(
+        [
+            {"id": 7, "status": "queued", "progress": 0},
+            {"id": 7, "status": "separating", "progress": 40},
+            {"id": 7, "status": "transcribing", "progress": 75},
+            {"id": 7, "status": "completed", "progress": 100},
+        ]
+    )
+    result = run_one(
+        client,
+        "https://yt/x",
+        timeout_s=10,
+        poll_s=1,
+        mode="full",
+        sleep=lambda _s: None,
+    )
+    assert result["status"] == "completed"
+    assert client.calls[0][2]["title"] == "GPU keepalive canary"
+    assert not any(path.endswith("/cancel") for _m, path, _p in client.calls)
+
+
+def test_full_mode_fails_when_gpu_stage_fails():
+    client = FakeClient(
+        [
+            {"id": 8, "status": "queued", "progress": 0},
+            {"id": 8, "status": "failed", "progress": 75, "error": "ENDPOINT_PAUSED"},
+        ]
+    )
+    with pytest.raises(CanaryError, match="before completion: ENDPOINT_PAUSED"):
+        run_one(
+            client,
+            "https://yt/x",
+            timeout_s=10,
+            poll_s=1,
+            mode="full",
+            sleep=lambda _s: None,
+        )
