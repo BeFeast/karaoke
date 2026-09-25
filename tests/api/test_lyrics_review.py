@@ -220,3 +220,152 @@ def test_collapsed_word_spans_cannot_be_marked_reviewed(
     result = client.put(f"/jobs/{job}/lyrics-review", json=body, headers=auth)
     assert result.status_code == 422, result.text
     assert lyrics_review.snapshot(export) == original
+
+
+class _ReviewSession:
+    """Model row-lock release with a waiting writer at transaction rollback."""
+
+    def __init__(self, job, *, on_rollback=None, commit_failures=0):
+        from types import SimpleNamespace
+        self.job = job
+        self.artifacts = [SimpleNamespace(id=1, kind="lyrics", size_bytes=1),
+                          SimpleNamespace(id=2, kind="lyrics_lrc", size_bytes=1)]
+        self.on_rollback = on_rollback
+        self.commit_failures = commit_failures
+        self.commits = 0
+        self.relocks = 0
+
+    async def scalars(self, query):
+        from types import SimpleNamespace
+        return SimpleNamespace(all=lambda: self.artifacts)
+
+    async def scalar(self, query):
+        assert "FOR UPDATE" in str(query)
+        self.relocks += 1
+        return self.job
+
+    async def commit(self):
+        self.commits += 1
+        if self.commits <= self.commit_failures:
+            raise ConnectionError("lost commit acknowledgement")
+
+    async def rollback(self):
+        if self.on_rollback:
+            callback, self.on_rollback = self.on_rollback, None
+            callback()
+
+    def add(self, artifact):
+        self.artifacts.append(artifact)
+
+
+def _direct_review(tmp_path):
+    from types import SimpleNamespace
+    export = tmp_path / "token" / "exports"
+    export.mkdir(parents=True)
+    (export / "lyrics.lrc").write_text("[00:01.00]original words\n")
+    (export / "lyrics.txt").write_text("original words")
+    (export / "metadata.json").write_text("{}")
+    job = SimpleNamespace(id=42, job_token="token", duration=30,
+                          status="completed", stage_note="Needs review")
+    return job, export, lyrics_review.snapshot(export)
+
+
+def test_file_failure_restores_before_releasing_lock_to_waiting_review(tmp_path, monkeypatch):
+    import asyncio
+    job, export, original = _direct_review(tmp_path)
+    newer = b"[00:01.00]later human edit\n"
+    def waiting_review():
+        # A queued writer can only run once rollback releases the row lock.
+        assert lyrics_review.snapshot(export) == original
+        (export / "lyrics.lrc").write_bytes(newer)
+    session = _ReviewSession(job, on_rollback=waiting_review)
+    real = lyrics_review._replace
+    failed = False
+    def fail_once(path, data):
+        nonlocal failed
+        if path.name == "metadata.json" and not failed:
+            failed = True
+            raise OSError("disk failure before commit")
+        real(path, data)
+    monkeypatch.setattr(lyrics_review, "_replace", fail_once)
+    with pytest.raises(OSError, match="disk failure before commit"):
+        asyncio.run(lyrics_review.save_review(session, job, export,
+            "[00:01.00]my correction", lyrics_review.revision(original), "alice"))
+    assert (export / "lyrics.lrc").read_bytes() == newer
+    assert session.commits == 0
+
+
+@pytest.mark.parametrize("commit_failures", [1, 2])
+def test_commit_failure_keeps_saved_files_and_reconciles_under_new_lock(tmp_path, commit_failures):
+    import asyncio
+
+    from fastapi import HTTPException
+    job, export, original = _direct_review(tmp_path)
+    session = _ReviewSession(job, commit_failures=commit_failures)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(lyrics_review.save_review(session, job, export,
+            "[00:01.00]my correction", lyrics_review.revision(original), "alice"))
+    assert error.value.status_code == 503 and "Reload" in error.value.detail
+    assert session.relocks == 1 and session.commits == 2
+    current = lyrics_review.snapshot(export)
+    assert current["lyrics.lrc"] == b"[00:01.00]my correction\n"
+    assert json.loads(current["metadata.json"])["lyrics_quality"]["status"] == "reviewed"
+    assert session.artifacts[0].size_bytes == len(current["lyrics.txt"])
+    assert session.artifacts[1].size_bytes == len(current["lyrics.lrc"])
+    assert job.stage_note is None
+    # Original files remain available even if the second commit is uncertain.
+    backups = list((export.parent / "work" / "lyrics-reviews").glob("*/lyrics.lrc"))
+    assert backups[0].read_bytes() == original["lyrics.lrc"]
+
+
+def test_commit_failure_never_overwrites_waiting_human_review(tmp_path):
+    import asyncio
+
+    from fastapi import HTTPException
+    job, export, original = _direct_review(tmp_path)
+    newer = b"[00:01.00]later confirmed edit\n"
+    def waiting_review():
+        (export / "lyrics.lrc").write_bytes(newer)
+        session.artifacts[1].size_bytes = len(newer)
+        job.stage_note = "later writer state"
+    session = _ReviewSession(job, on_rollback=waiting_review, commit_failures=1)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(lyrics_review.save_review(session, job, export,
+            "[00:01.00]my correction", lyrics_review.revision(original), "alice"))
+    assert error.value.status_code == 503
+    assert (export / "lyrics.lrc").read_bytes() == newer
+    assert session.commits == 1 and session.relocks == 1
+    assert session.artifacts[1].size_bytes == len(newer)
+    assert job.stage_note == "later writer state"
+
+
+def test_commit_recovery_does_not_modify_job_that_started_processing(tmp_path):
+    import asyncio
+
+    from fastapi import HTTPException
+    job, export, original = _direct_review(tmp_path)
+    def resumed():
+        job.status = "transcribing"
+        job.stage_note = "new processing"
+    session = _ReviewSession(job, on_rollback=resumed, commit_failures=1)
+    with pytest.raises(HTTPException):
+        asyncio.run(lyrics_review.save_review(session, job, export,
+            "[00:01.00]my correction", lyrics_review.revision(original), "alice"))
+    assert session.commits == 1
+    assert job.stage_note == "new processing"
+
+
+
+def test_cancelled_commit_does_not_start_recovery_or_overwrite_waiter(tmp_path):
+    import asyncio
+    job, export, original = _direct_review(tmp_path)
+    newer = b"[00:01.00]later confirmed edit\n"
+    session = _ReviewSession(job, on_rollback=lambda: (export / "lyrics.lrc").write_bytes(newer))
+    async def cancelled():
+        raise asyncio.CancelledError()
+    session.commit = cancelled
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(lyrics_review.save_review(session, job, export,
+            "[00:01.00]my correction", lyrics_review.revision(original), "alice"))
+    assert session.relocks == 0
+    assert (export / "lyrics.lrc").read_bytes() == newer

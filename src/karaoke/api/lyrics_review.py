@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -17,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from karaoke.db.models import Artifact, Job
 from karaoke.worker.lyrics import lrc_to_plain
+
+LOG = logging.getLogger(__name__)
 
 _FILES = ("lyrics.lrc", "lyrics.txt", "metadata.json", "lyrics.quality.json")
 _LINE = re.compile(r"^\[(\d{1,2}):([0-5]\d)(?:\.(\d{1,3}))?\]")
@@ -105,6 +108,44 @@ def _replace(path: Path, body: bytes) -> None:
         temp.unlink(missing_ok=True)
 
 
+def _sync_artifact_sizes(session, job, artifacts, files):
+    for kind, name in (("lyrics", "lyrics.txt"), ("lyrics_lrc", "lyrics.lrc")):
+        existing = [artifact for artifact in artifacts if artifact.kind == kind]
+        if existing:
+            for artifact in existing:
+                artifact.size_bytes = len(files[name])
+        else:
+            session.add(Artifact(
+                job_id=job.id, kind=kind,
+                relative_path=f"{job.job_token}/exports/{name}",
+                size_bytes=len(files[name]), content_type="text/plain",
+            ))
+    job.stage_note = None
+
+
+async def _reconcile_unconfirmed_commit(session, job_id, exports, candidate):
+    """Repair DB metadata only if our files remain current under a new row lock.
+
+    Commit may already have succeeded despite a lost response. A waiting review
+    may also have completed after that transaction ended. Never restore old
+    files here: a different revision belongs to that later writer.
+    """
+    await session.rollback()
+    job = await session.scalar(
+        select(Job).where(Job.id == job_id).with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (job is None or job.status != "completed"
+            or revision(snapshot(exports)) != revision(candidate)):
+        await session.rollback()
+        return
+    artifacts = list((await session.scalars(select(Artifact).where(
+        Artifact.job_id == job_id, Artifact.kind.in_(["lyrics", "lyrics_lrc"]),
+    ).execution_options(populate_existing=True))).all())
+    _sync_artifact_sizes(session, job, artifacts, candidate)
+    await session.commit()
+
+
 async def save_review(
     session: AsyncSession,
     job: Job,
@@ -159,6 +200,8 @@ async def save_review(
         json.dumps(
             {
                 "previous_revision": expected_revision,
+                "candidate_revision": revision(new),
+                "previous_stage_note": job.stage_note,
                 "reviewer": reviewer,
                 "reviewed_at": stamp,
                 "original_present": [n for n, b in original.items() if b is not None],
@@ -177,31 +220,44 @@ async def save_review(
     (backup / "artifact-rows.json").write_text(
         json.dumps([{"id": a.id, "kind": a.kind, "size_bytes": a.size_bytes} for a in artifacts])
     )
+    touched = []
+    job_id = job.id  # rollback expires ORM attributes
     try:
         for name, data in new.items():
+            touched.append(name)
             _replace(exports / name, data)
-        for kind, name in (("lyrics", "lyrics.txt"), ("lyrics_lrc", "lyrics.lrc")):
-            existing = [a for a in artifacts if a.kind == kind]
-            if existing:
-                for artifact in existing:
-                    artifact.size_bytes = len(new[name])
-            else:
-                session.add(
-                    Artifact(
-                        job_id=job.id,
-                        kind=kind,
-                        relative_path=f"{job.job_token}/exports/{name}",
-                        size_bytes=len(new[name]),
-                        content_type="text/plain",
-                    )
-                )
-        job.stage_note = None
-        await session.commit()
+        _sync_artifact_sizes(session, job, artifacts, new)
     except BaseException:
-        await session.rollback()
-        for name, data in original.items():
-            if data is None:
-                (exports / name).unlink(missing_ok=True)
-            else:
-                _replace(exports / name, data)
+        # No awaited database operation has occurred since writing began, so
+        # the caller's original job row lock still excludes another reviewer.
+        try:
+            for name in reversed(touched):
+                data = original[name]
+                if data is None:
+                    (exports / name).unlink(missing_ok=True)
+                else:
+                    _replace(exports / name, data)
+        finally:
+            await session.rollback()
         raise
+    try:
+        await session.commit()
+    except BaseException as commit_error:
+        if not isinstance(commit_error, Exception):
+            # Cancellation must not launch another write transaction or restore
+            # potentially committed files while the request is shutting down.
+            await session.rollback()
+            raise
+        # Once commit starts, its outcome and lock lifetime are uncertain.
+        # Keep the new files; reconcile only DB metadata under fresh locks/CAS.
+        try:
+            await _reconcile_unconfirmed_commit(session, job_id, exports, new)
+        except BaseException:
+            LOG.exception("Lyric review commit/reconciliation unconfirmed for job %s", job_id)
+            try:
+                await session.rollback()
+            except BaseException:
+                LOG.exception("Lyric review rollback failed for job %s", job_id)
+        raise HTTPException(
+            503, "Save confirmation failed. Reload the lyrics to check the saved review before retrying.",
+        ) from commit_error
