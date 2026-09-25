@@ -158,11 +158,14 @@ def _compose_asr(asr: dict | None) -> tuple[list[_Word], list[dict]]:
             return canonical + incoming, conflicts
         attempt = segment.get("attempt_id")
         replaces = segment.get("replaces_attempt_id")
+        logprob, silence = segment.get("avg_logprob"), segment.get("no_speech_prob")
         explicit_alternate = (
             segment.get("source") == "independent_crop_asr"
             and segment.get("attempt_phase") == "alternate"
             and isinstance(attempt, str) and isinstance(replaces, str)
             and replaces in seen_attempts and attempt != replaces
+            and isinstance(logprob, (int, float)) and math.isfinite(logprob) and logprob >= -1
+            and isinstance(silence, (int, float)) and math.isfinite(silence) and 0 <= silence < .6
         )
         used: set[int] = set()
         additions = []

@@ -558,6 +558,7 @@ def test_low_asr_confidence_preserves_existing_candidate_but_never_gpu_veto():
 def _attempt(text, start, attempt, *, replaces=None):
     segment = asr((text, start))["segments"][0]
     segment.update(source="independent_crop_asr", attempt_id=attempt,
+                   avg_logprob=-.1, no_speech_prob=.01,
                    attempt_phase="alternate" if replaces else "primary")
     if replaces:
         segment["replaces_attempt_id"] = replaces
@@ -639,3 +640,14 @@ def test_conflicting_accepted_retry_evidence_cannot_authenticate_recovery():
     result, quality = reconcile_alignment(text, raw, [None], evidence, accepted_retries=[retry])
     assert result is None
     assert quality["status"] == "needs_review"
+
+def test_unsafe_alternate_cannot_upgrade_a_low_confidence_word():
+    primary = _attempt("silver river", 10, "crop-0")
+    primary["words"][0]["probability"] = .1
+    for field, value in [("no_speech_prob", .9), ("avg_logprob", -2),
+                         ("avg_logprob", None), ("no_speech_prob", float("nan"))]:
+        alternate = _attempt("silver river", 10.1, "crop-1", replaces="crop-0")
+        alternate[field] = value
+        quality = assess_lyrics("silver river", line(), {"retry_segments": [primary, alternate]})
+        assert quality["status"] == "needs_review"
+        assert "asr_confidence_low" in codes(quality)
