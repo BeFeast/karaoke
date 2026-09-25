@@ -29,18 +29,25 @@ No track names, recording IDs or song-specific offsets are part of the algorithm
 1. Separate vocals once. Obtain independent Whisper text and word timestamps.
 2. Force-align the candidate lyrics. Keep pre-filter line/word evidence and
    explicit rejection reasons, including VAD and acoustic confidence.
-3. For suspicious bounded interior fragments, retry independent transcription
-   with VAD disabled and no lyric prompt. Require corroborated neighboring
-   anchors; do not guess whole-song offsets or use a later repeated chorus.
-   Limit the number and total duration of crops and honor the existing job
-   timeout/cost limits. Retry failure retains the baseline and diagnostics.
+3. Reuse trusted, temporally local full-audio ASR words before making extra
+   model calls. For remaining suspicious fragments, retry independent transcription
+   with VAD disabled and no lyric prompt. Include neighboring complete phrases
+   as context; merge overlapping windows into one decode and prioritize missing
+   text ahead of timing-only problems. Corroborated anchors bound the search;
+   known audio boundaries also permit first/last-line windows. Never guess a
+   whole-song offset or borrow a later repeated chorus.
+   The retry budget is 60 seconds of total cropped audio, at most 25 seconds per
+   window, and a 60-second cooperative wall deadline, with a defensive maximum
+   of 12 model calls. The overall job timeout remains the hard limit. Retry
+   failure or an exhausted budget retains the baseline and explicit diagnostics.
 4. Reconcile accepted alignments with ASR. Restore a score-filtered line only
    when temporally local independent evidence supports it. Repair implausible
    internal word timing only with reliable matching ASR timestamps. Never
    insert unsupported canonical verses just to reach full reference coverage.
 5. Audit the selected export, not merely the aligner input or kept-line subset.
    Preserve unresolved omissions, additions and timing disagreements for review.
-   Cropped retry evidence remains separate from first-pass ASR.
+   Evidence records distinguish reused full-audio ASR from cropped retry ASR;
+   the coordinator validates each source before preserving a recovered line.
 
 The GPU response is additive: older workers remain usable, but their missing
 retry/diagnostic evidence cannot be interpreted as a successful retry. Raw
