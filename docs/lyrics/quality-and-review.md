@@ -83,3 +83,21 @@ The initial correction editor uses LRC; waveform-based per-word editing is a
 separate UX improvement. Production coordinator and GPU images must both be
 updated to enable the complete retry path; a coordinator-only deploy provides
 quality disclosure/reconciliation/review without new GPU fragment retries.
+
+## Validation record — 2026-09-25
+
+The implementation passed 628 tests on the Forgejo base and was separately applied
+on the actual live coordinator base `42c6442` (v0.39.1), preserving its newer
+selfcheck, cold-start and downloader changes. That candidate passed 631 tests plus
+11 added evaluator tests. Its source is on `validation/272-live`; this records code
+compatibility, not deployed behavior. Browser checks used an isolated SQLite
+fixture, not production jobs: issue seek, correction/save, immediate refresh,
+stale-tab conflict with draft retention, and the Performance status all worked.
+
+Read-only production inspection found `karaoke-poc-2` still uses the r9 GPU image
+and shares its template with `karaoke-poc`. The next rollout must create an isolated
+template for the reviewed image and change only the intended active endpoint;
+running the general provisioner would also reapply unrelated endpoint settings.
+No GPU image publication, endpoint change or coordinator deploy was performed by
+this implementation task. Live model retry quality and a human-labelled music
+benchmark remain unmeasured; synthetic coverage does not establish those outcomes.
