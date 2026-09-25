@@ -507,7 +507,10 @@ def _resolve_lyrics(
             for segment in retry.get("evidence_segments", [])
             if isinstance(segment, dict)
         ]
-    aligned, recovery = reconcile_alignment(curated, raw, scores, asr)
+    aligned, recovery = reconcile_alignment(
+        curated, raw, scores, asr,
+        accepted_retries=(diagnostics or {}).get("retries"),
+    )
     provenance = _select_lyrics(
         lyrics, exports_dir, whisper_lyrics_txt, aligned_lrc_path,
         whisper_lyrics_json, aligned=aligned,

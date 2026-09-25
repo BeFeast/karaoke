@@ -8,6 +8,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from karaoke.worker.lyrics import (
+    _MAX_CHARS_PER_SECOND,
     LRC_TIMESTAMP_RE,
     LRC_WORD_TAG_RE,
     _fmt_lrc_timestamp,
@@ -232,6 +233,11 @@ def _timing_problems(line) -> list[str]:
         codes.append("word_timing_gap")
     if abs(line.start - times[0]) > 0.5:
         codes.append("line_word_timing_drift")
+    if len(line.word_starts) > 1:
+        span = line.word_starts[-1] - line.word_starts[0]
+        chars = len(" ".join(line.norm.split()[:-1]))
+        if chars / max(span, 0.05) > _MAX_CHARS_PER_SECOND:
+            codes.append("word_timing_pace")
     return codes
 
 
@@ -371,18 +377,77 @@ def assess_lyrics(
     timing_codes = {"word_timing_missing", "word_timing_mismatch", "word_timing_collapsed",
                     "word_timing_gap", "line_word_timing_drift", "line_timing_overlap",
                     "timed_lyrics_unavailable", "asr_evidence_unavailable", "asr_line_unconfirmed",
-                    "asr_word_timing_disagreement", "asr_confidence_low"}
+                    "asr_word_timing_disagreement", "asr_confidence_low", "word_timing_pace"}
     return dict(schema_version=1, status="needs_review" if issues else "checked",
                 text_confidence="uncertain" if any(i["code"] not in timing_codes or i["code"].startswith("asr_") for i in issues) else "checked",
                 timing_confidence="uncertain" if any(i["code"] in timing_codes for i in issues) else "checked",
                 counts=counts, issues=issues)
 
 
+
+def _accepted_retry(line, retries: list, used: set[int]) -> bool:
+    """Authenticate a recovered line against its independent crop evidence.
+
+    Null alignment scores alone are not proof of recovery. Require an accepted
+    diagnostic, plausible ASR word probabilities, and the same words/times in
+    the full trusted crop observation. Each accepted repair is consumed once.
+    """
+    for i, retry in enumerate(retries):
+        if i in used or not isinstance(retry, dict):
+            continue
+        if retry.get("outcome") != "accepted" or retry.get("reason") != "independent_crop_asr_match":
+            continue
+        raw_words = _list(retry.get("words"))
+        candidate = _asr_words({"segments": [{"words": raw_words}]})
+        if not candidate or len(candidate) != len(raw_words):
+            continue
+        if _tokens(line.norm) != _tokens(" ".join(word.text for word in candidate)):
+            continue
+        if len(candidate) != len(line.word_starts) or line.end is None:
+            continue
+        if any(word.probability is None or word.probability < 0.3 for word in candidate):
+            continue
+        if sum(word.probability for word in candidate) / len(candidate) < 0.65:
+            continue
+        if any(word.end - word.start < 0.04 or word.end - word.start > 8 for word in candidate):
+            continue
+        if any(b.start < a.end - 0.02 or b.start - a.end > 4
+               for a, b in zip(candidate, candidate[1:], strict=False)):
+            continue
+        if any(abs(start - word.start) > 0.02
+               for start, word in zip(line.word_starts, candidate, strict=True)):
+            continue
+        if abs(line.end - candidate[-1].end) > 0.02:
+            continue
+        safe_segments = []
+        for segment in _list(retry.get("evidence_segments")):
+            if not isinstance(segment, dict):
+                continue
+            logprob, silence = segment.get("avg_logprob"), segment.get("no_speech_prob")
+            if (isinstance(logprob, (int, float)) and math.isfinite(logprob) and logprob >= -1
+                    and isinstance(silence, (int, float)) and math.isfinite(silence)
+                    and 0 <= silence < 0.6):
+                safe_segments.append(segment)
+        support = _support(line, _asr_words({"retry_segments": safe_segments}))
+        if len(support) != len(candidate):
+            continue
+        if any(_tokens(a.text) != _tokens(b.text)
+               or abs(a.start - b.start) > 0.02 or abs(a.end - b.end) > 0.02
+               or b.probability is None or b.probability < 0.3
+               or abs(a.probability - b.probability) > 1e-9
+               for a, b in zip(candidate, support, strict=True)):
+            continue
+        used.add(i)
+        return True
+    return False
+
 def reconcile_alignment(
     curated_text: str | None,
     raw_lrc: str | None,
     scores: list | None,
     asr: dict | None,
+    *,
+    accepted_retries: list | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
     """Filter alignment, recover ASR-supported lines and repair supported timing."""
     if not raw_lrc:
@@ -399,7 +464,12 @@ def reconcile_alignment(
     retained = filtered.splitlines()
     words = _asr_words(asr)
     output, restored, timing = [], 0, 0
-    for raw in repaired.splitlines():
+    used_retries: set[int] = set()
+    for original, raw in zip(raw_lrc.splitlines(), repaired.splitlines(), strict=True):
+        original_lines = _parse_aligner_lines(original)
+        verified_retry = bool(original_lines) and _accepted_retry(
+            original_lines[0], _list(accepted_retries), used_retries
+        )
         parsed = _parse_aligner_lines(raw)
         keep = raw in retained
         if keep:
@@ -407,6 +477,13 @@ def reconcile_alignment(
         if not parsed:
             if keep:
                 output.append(raw)
+            continue
+        if verified_retry:
+            # Keep independent ASR text even when the legacy pace heuristic
+            # objects. Preserve measured timestamps; assess_lyrics still
+            # exposes timing uncertainty and never labels it checked.
+            restored += int(not keep)
+            output.append(original)
             continue
         line = parsed[0]
         if not keep:

@@ -64,3 +64,34 @@ def test_untimed_result_removes_old_timed_export(tmp_path):
                              export, work / "lyrics.txt")
     assert result["lyrics_quality"]["status"] == "needs_review"
     assert not (export / "lyrics.lrc").exists()
+
+
+def test_accepted_crop_survives_export_selection_despite_timing_warning(tmp_path):
+    work, export = _inputs(tmp_path)
+    text = "golden daylight"
+    words = [
+        {"word": "golden", "start": 3.0, "end": 3.15, "probability": .95},
+        {"word": "daylight", "start": 3.15, "end": 3.4, "probability": .95},
+    ]
+    segment = {"text": text, "start": 3, "end": 3.4, "words": words,
+               "avg_logprob": -.1, "no_speech_prob": .01}
+    diagnostics = {"retries": [{"outcome": "accepted",
+        "reason": "independent_crop_asr_match", "words": words,
+        "evidence_segments": [segment]}]}
+    raw_lines = (work / "aligned.lrc").read_text().splitlines()
+    raw_lines.insert(1, "[00:03.00]<00:03.00>golden <00:03.15>daylight <00:03.40>")
+    (work / "aligned.lrc").write_text("\n".join(raw_lines))
+    (work / "aligned.scores.json").write_text(json.dumps([-.1, None, -.1]))
+    (work / "aligned.diagnostics.json").write_text(json.dumps(diagnostics))
+    result = _resolve_lyrics(
+        LyricsResult(plain="silver river\ngolden daylight\nbright meadow", source="lrclib_get"),
+        export, work / "lyrics.txt", work / "aligned.lrc", work / "lyrics.json",
+    )
+    selected = (export / "lyrics.lrc").read_text()
+    quality = result["lyrics_quality"]
+    assert "golden" in selected and "daylight" in selected
+    assert quality["counts"]["expected_lines"] == quality["counts"]["matched_lines"] == 3
+    assert quality["counts"]["missing_lines"] == quality["counts"]["missing_words"] == 0
+    assert quality["status"] == "needs_review"
+    assert "word_timing_pace" in {issue["code"] for issue in quality["issues"]}
+    assert json.loads((export / "lyrics.quality.json").read_text()) == quality

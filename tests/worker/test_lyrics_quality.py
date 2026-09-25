@@ -307,3 +307,74 @@ def test_repeated_words_within_each_crop_keep_occurrence_count_after_dedupe():
     quality = assess_lyrics("echo echo returns", line("echo echo returns"), evidence)
     assert quality["status"] == "checked"
 
+
+
+def _fast_retry():
+    text = "silver river"
+    raw = line(text, step=0.15)
+    words = [
+        {"word": "silver", "start": 10.0, "end": 10.15, "probability": .95},
+        {"word": "river", "start": 10.15, "end": 10.3, "probability": .95},
+    ]
+    segment = {"text": text, "start": 10, "end": 10.3, "words": words,
+               "avg_logprob": -.1, "no_speech_prob": .01}
+    retry = {"outcome": "accepted", "reason": "independent_crop_asr_match",
+             "words": words, "evidence_segments": [segment]}
+    return text, raw, {"retry_segments": [segment]}, retry
+
+
+def test_accepted_independent_retry_preserves_text_and_flags_pace():
+    text, raw, evidence, retry = _fast_retry()
+    result, quality = reconcile_alignment(text, raw, [None], evidence,
+                                         accepted_retries=[retry])
+    assert result == raw
+    assert quality["counts"]["matched_lines"] == quality["counts"]["expected_lines"] == 1
+    assert quality["counts"]["missing_words"] == 0
+    assert quality["status"] == "needs_review"
+    assert quality["timing_confidence"] == "uncertain"
+    assert "word_timing_pace" in codes(quality)
+
+
+def test_null_score_and_matching_asr_do_not_bypass_legacy_pace_guard():
+    text, raw, evidence, _ = _fast_retry()
+    result, quality = reconcile_alignment(text, raw, [None], evidence)
+    assert result is None
+    assert quality["counts"]["missing_lines"] == 1
+
+
+def test_unproven_retry_diagnostic_cannot_preserve_rejected_line():
+    import copy
+    text, raw, evidence, retry = _fast_retry()
+    variants = []
+    rejected = copy.deepcopy(retry)
+    rejected["outcome"] = "rejected"
+    variants.append(rejected)
+    missing_evidence = copy.deepcopy(retry)
+    missing_evidence["evidence_segments"] = []
+    variants.append(missing_evidence)
+    wrong_text = copy.deepcopy(retry)
+    wrong_text["words"] = [dict(w, word="unrelated") for w in wrong_text["words"]]
+    variants.append(wrong_text)
+    wrong_timing = copy.deepcopy(retry)
+    wrong_timing["words"] = [dict(w, start=w["start"] + 1, end=w["end"] + 1)
+                             for w in wrong_timing["words"]]
+    variants.append(wrong_timing)
+    low_confidence = copy.deepcopy(retry)
+    low_confidence["words"][0]["probability"] = .1
+    variants.append(low_confidence)
+    silence = copy.deepcopy(retry)
+    silence["evidence_segments"][0]["no_speech_prob"] = .9
+    variants.append(silence)
+    for variant in variants:
+        result, quality = reconcile_alignment(text, raw, [None], evidence,
+                                             accepted_retries=[variant])
+        assert result is None
+        assert quality["status"] == "needs_review"
+
+
+def test_accepted_retry_cannot_preserve_duplicate_line_twice():
+    text, raw, evidence, retry = _fast_retry()
+    result, quality = reconcile_alignment(text + "\n" + text, raw + "\n" + raw,
+                                         [None, None], evidence, accepted_retries=[retry])
+    assert result == raw
+    assert quality["counts"]["missing_lines"] == 1
