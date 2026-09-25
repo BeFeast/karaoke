@@ -659,8 +659,9 @@ def aligned_text_agreement(
 
     Returns ``(agreed, eligible, aligner_total)``: ``eligible`` = single-tag
     non-empty curated lines; ``agreed`` = how many find their aligner
-    counterpart by normalized text alone, walking both sides in order (greedy
-    cursor, all timing ignored); ``aligner_total`` = aligner lines present.
+    counterpart by normalized text alone in the longest common subsequence
+    (all timing ignored); ``aligner_total`` = aligner lines present. Each line
+    can match only once, with order preserved and skipped lines on either side.
     The fallback gate (#253) judges ``agreed`` against ``aligner_total``, NOT
     ``eligible``: the VAD veto (r9) legitimately removes curated lines that
     are not sung in this cut, so a shorter-but-faithful aligned output must
@@ -668,10 +669,8 @@ def aligned_text_agreement(
     """
     if not aligned_lrc or not aligned_lrc.strip():
         return 0, 0, 0
-    aligner_norms = [al.norm for al in _parse_aligner_lines(aligned_lrc)]
-    agreed = 0
-    eligible = 0
-    cursor = 0
+    aligner_norms = [al.norm.casefold() for al in _parse_aligner_lines(aligned_lrc)]
+    curated_norms: list[str] = []
     for raw in synced_lrc.splitlines():
         tag = _LRC_TAG_CAP_RE.match(raw)
         if tag is None:
@@ -682,13 +681,23 @@ def aligned_text_agreement(
         norm = " ".join(_LRC_WORD_TAG_CAP_RE.sub("", text).split())
         if not norm:
             continue
-        eligible += 1
-        for j in range(cursor, len(aligner_norms)):
-            if aligner_norms[j] == norm.casefold() or aligner_norms[j] == norm:
-                agreed += 1
-                cursor = j + 1
-                break
-    return agreed, eligible, len(aligner_norms)
+        curated_norms.append(norm.casefold())
+
+    # A greedy cursor can consume a later repeated line for an earlier one
+    # removed by the VAD/quality filters, losing the retained lines in between.
+    # LCS finds the best ordered, one-to-one agreement without that ambiguity.
+    # Keep only the previous row: O(curated * aligned) time, O(aligned) space.
+    previous = [0] * (len(aligner_norms) + 1)
+    for curated in curated_norms:
+        current = [0]
+        for j, aligned in enumerate(aligner_norms):
+            current.append(
+                previous[j] + 1
+                if curated == aligned
+                else max(previous[j + 1], current[-1])
+            )
+        previous = current
+    return previous[-1], len(curated_norms), len(aligner_norms)
 
 
 @dataclass(frozen=True, slots=True)
