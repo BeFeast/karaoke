@@ -65,6 +65,8 @@ class CanaryClient:
             raise CanaryError(f"{method} {path} returned HTTP {exc.code}: {body}") from exc
         except urllib.error.URLError as exc:
             raise CanaryError(f"{method} {path} failed: {exc.reason}") from exc
+        if not raw.strip():
+            return {}  # e.g. 204 from DELETE /jobs/{id}
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -136,12 +138,14 @@ def run_one(
 
     deadline = now() + timeout_s
     last = job
+    passed = False
     try:
         while now() < deadline:
             status = _status(last)
             progress = last.get("progress", "?")
             print(f"job {job_id}: {status} ({progress}%)", flush=True)
             if status in success:
+                passed = True
                 return last
             if status in TERMINAL_STATUSES:
                 raise CanaryError(
@@ -158,6 +162,15 @@ def run_one(
                 print(f"job {job_id}: cancelled after canary {mode} check", flush=True)
             except CanaryError as exc:
                 print(f"job {job_id}: cancel failed after canary check: {exc}", file=sys.stderr)
+        # A passed check leaves nothing worth keeping, so remove the job and its
+        # artifacts rather than piling canary rows into the Booth. Failed jobs
+        # stay so the error is visible in the UI.
+        if passed:
+            try:
+                client.request_json("DELETE", f"/jobs/{job_id}")
+                print(f"job {job_id}: deleted after passing canary {mode} check", flush=True)
+            except CanaryError as exc:
+                print(f"job {job_id}: delete failed after canary check: {exc}", file=sys.stderr)
     raise CanaryError(f"job {job_id} did not reach {stage} within {timeout_s:.0f}s")
 
 

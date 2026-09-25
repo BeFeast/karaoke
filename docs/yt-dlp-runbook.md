@@ -44,6 +44,10 @@ coordinator-side download has succeeded. If the check passes before terminal
 completion, the script calls `/jobs/{id}/cancel` to avoid waiting on the whole
 GPU pipeline.
 
+Once a check passes, the script deletes its job (`DELETE /jobs/{id}`, also
+removing the artifacts) so canary rows don't pile up in the Booth. Failed
+canary jobs are kept, so their error stays visible.
+
 On failure, the workflow opens or comments on an issue titled
 `yt-dlp canary failure`, then fails the workflow run.
 

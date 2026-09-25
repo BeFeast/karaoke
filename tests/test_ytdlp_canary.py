@@ -70,6 +70,7 @@ def test_run_one_succeeds_once_download_stage_passed():
             {"id": 123, "status": "downloading", "progress": 20},
             {"id": 123, "status": "separating", "progress": 40},
             {"id": 123, "status": "cancelled", "progress": 40},
+            {},
         ]
     )
     result = run_one(
@@ -81,7 +82,10 @@ def test_run_one_succeeds_once_download_stage_passed():
         now=iter([0, 0, 1, 1, 2, 2]).__next__,
     )
     assert result["status"] == "separating"
-    assert client.calls[-1] == ("POST", "/jobs/123/cancel", None)
+    assert client.calls[-2:] == [
+        ("POST", "/jobs/123/cancel", None),
+        ("DELETE", "/jobs/123", None),
+    ]
 
 
 def test_run_one_fails_when_job_fails_before_download_passes():
@@ -120,6 +124,7 @@ def test_full_mode_waits_for_completion_without_cancelling():
             {"id": 7, "status": "separating", "progress": 40},
             {"id": 7, "status": "transcribing", "progress": 75},
             {"id": 7, "status": "completed", "progress": 100},
+            {},
         ]
     )
     result = run_one(
@@ -133,6 +138,7 @@ def test_full_mode_waits_for_completion_without_cancelling():
     assert result["status"] == "completed"
     assert client.calls[0][2]["title"] == "GPU keepalive canary"
     assert not any(path.endswith("/cancel") for _m, path, _p in client.calls)
+    assert client.calls[-1] == ("DELETE", "/jobs/7", None)
 
 
 def test_full_mode_fails_when_gpu_stage_fails():
@@ -151,3 +157,5 @@ def test_full_mode_fails_when_gpu_stage_fails():
             mode="full",
             sleep=lambda _s: None,
         )
+    # A failed job is kept so its error stays visible in the Booth.
+    assert not any(method == "DELETE" for method, _path, _p in client.calls)
