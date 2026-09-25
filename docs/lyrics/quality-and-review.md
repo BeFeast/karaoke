@@ -101,10 +101,41 @@ compatibility, not deployed behavior. Browser checks used an isolated SQLite
 fixture, not production jobs: issue seek, correction/save, immediate refresh,
 stale-tab conflict with draft retention, and the Performance status all worked.
 
-Read-only production inspection found `karaoke-poc-2` still uses the r9 GPU image
-and shares its template with `karaoke-poc`. The next rollout must create an isolated
-template for the reviewed image and change only the intended active endpoint;
-running the general provisioner would also reapply unrelated endpoint settings.
-No GPU image publication, endpoint change or coordinator deploy was performed by
-this implementation task. Live model retry quality and a human-labelled music
-benchmark remain unmeasured; synthetic coverage does not establish those outcomes.
+The authorized GPU rollout has since published and activated v2 on the production
+`karaoke-poc-2` endpoint using an isolated template. The active image is
+`ghcr.io/befeast/karaoke-runpod@sha256:a7b37e09c56e2bad6d2261f256eb90d9ba6de129cf9a29358d4fc3c879704af2`
+(tag `quality-272-v2-402caf038b0e`). The production coordinator still runs
+`42c6442`, version `0.39.1`; the candidate coordinator and owner-review UI have not
+been deployed. GPU publication, endpoint activation and coordinator deployment
+are separate states.
+
+Fresh real-audio replays measured these results against the 37-line reference:
+
+| GPU retry candidate | Matched/output lines | Missing reference words | Quality |
+| --- | --- | --- | --- |
+| v1 | 33/37 | 18 of 188 | `needs_review` |
+| v2 | 34/37 | 12 of 188 | `needs_review` |
+
+These are reference-coverage measurements, not human-confirmed accuracy. Both
+runs also retain independent-ASR disagreements and unconfirmed output words.
+The complete-song acceptance requirement is **not met**.
+
+Eight controlled crop/model probes varied narrow/wide context and
+`large-v3`/`large-v3-turbo`. They did not resolve the remaining opener/catch lexical
+errors represented by “Monday” and “drip”. A separate wider-context “River”
+fragment passed the existing evidence/confidence/timing gates. That local success
+does not establish complete-song correctness. Further bounded contextual retry
+work must preserve the evidence gates and resource limits; inserting desired
+reference text to improve the coverage count is not acceptance.
+
+Operator evidence remains outside the repository on maestro:
+
+- `/tmp/karaoke-debug-20260925/fresh-gpu-272/exports/lyrics.quality.json`
+- `/tmp/karaoke-debug-20260925/fresh-gpu-272-v2/exports/lyrics.quality.json`
+- `/tmp/karaoke-asr-context-20260925/*.json` (eight controlled probes)
+- `/tmp/karaoke-large-v3-20260925/*.json` (wider-context comparison)
+
+Those paths are temporary diagnostic evidence, not a durable labelled corpus.
+No complete-song listening acceptance or cross-song accuracy benchmark has been
+established. Merge, release tagging and coordinator deploy remain on hold pending
+the unresolved acceptance work.
