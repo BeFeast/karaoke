@@ -859,7 +859,7 @@ def _html_escape(s: str | None) -> str:
     )
 
 
-def _render_share_html(job: Job, lyrics_text: str | None, quality: dict | None = None) -> str:
+def _render_share_html(job: Job, lyrics_text: str | None) -> str:
     # Upload jobs (#172) fall back to the uploaded filename, never the raw
     # ``upload://`` sentinel; URL jobs keep falling back to the URL.
     title = job.title or upload_display_name(job.source_url) or "karaoke job"
@@ -894,14 +894,6 @@ def _render_share_html(job: Job, lyrics_text: str | None, quality: dict | None =
             '<section class="lyrics"><div class="sec-label">lyrics</div>'
             '<div class="empty">not yet available</div></section>'
         )
-
-    quality_status = (quality or {}).get("status")
-    quality_label = {
-        "checked": "Lyrics automatically checked — not a listening review",
-        "reviewed": "Lyrics reviewed by the owner",
-        "needs_review": "Lyrics need review — words or timing may be incomplete",
-    }.get(quality_status, "Lyrics not checked — words and timing may be incomplete")
-    lyrics_block = f'<p role="status">{_html_escape(quality_label)}</p>' + lyrics_block
 
     downloads: list[str] = []
     if "karaoke" in artifacts_by_kind:
@@ -997,8 +989,7 @@ async def share_page(
         except OSError:
             lyrics_text = None
 
-    quality = _lyrics_payload(job, settings).quality
-    return HTMLResponse(_render_share_html(job, lyrics_text, quality))
+    return HTMLResponse(_render_share_html(job, lyrics_text))
 
 
 # One LRC line timestamp tag, e.g. "[01:23.45]" / "[1:23]" / "[01:23:456]".

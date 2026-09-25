@@ -22,7 +22,7 @@ import { MBulbs, MicMark } from "./marks";
 import { timeLines } from "./stage-core";
 import { parseLrc, SyncedLyrics } from "./SyncedLyrics";
 import { Toast } from "./Toast";
-import { LyricsQualityBanner, LyricsReview } from "./LyricsQuality";
+import { LyricsReview } from "./LyricsQuality";
 
 // Lazy so wavesurfer.js (+ its WebAudio engine) only loads on the stage route,
 // keeping the booth bundle lean.
@@ -363,7 +363,6 @@ function StageBody({
         <StageEmpty title={meta.label} sub="Results will appear here once the job finishes." />
       )}
 
-      {isComplete && <LyricsQualityBanner quality={lyrics?.quality} />}
 
       {/* player: waveform card + console/setlist modules (KaraokePlayer.tsx) */}
       {isComplete && instrumental && (
@@ -385,7 +384,6 @@ function StageBody({
             title={title}
             artist={payload.artist}
             plainLyrics={lyrics?.plain ?? null}
-            lyricsQuality={lyrics?.quality}
             onToggleTheme={onToggleTheme}
           />
         </Suspense>

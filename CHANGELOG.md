@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.40.1] - 2026-09-25
+
+_Bump: patch_
+
+- fix(playback): keep lyric diagnostics inside the optional owner editor, without Stage, Performance, or public-share warnings (#275)
+
 ## [v0.40.0] - 2026-09-25
 
 _Bump: minor_
