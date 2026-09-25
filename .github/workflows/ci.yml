@@ -30,6 +30,8 @@ jobs:
   migrations:
     name: migrations
     runs-on: ubuntu-latest
+    # Use the same service-container network on GitHub and Forgejo runners.
+    container: node:24-bookworm
     services:
       postgres:
         image: postgres:16-alpine
@@ -37,15 +39,13 @@ jobs:
           POSTGRES_USER: karaoke
           POSTGRES_PASSWORD: karaoke
           POSTGRES_DB: karaoke
-        ports:
-          - 5432:5432
         options: >-
           --health-cmd "pg_isready -U karaoke"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      KARAOKE_DATABASE_URL: postgresql+psycopg://karaoke:karaoke@localhost:5432/karaoke
+      KARAOKE_DATABASE_URL: postgresql+psycopg://karaoke:karaoke@postgres:5432/karaoke
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
