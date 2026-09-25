@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.40.0] - 2026-09-25
+
+_Bump: minor_
+
+- fix(lyrics): preserve alignment after dropped repeated lines (Forgejo #271)
+- feat(lyrics): reconcile complete vocal evidence, retry suspect fragments, and expose owner listening review (Forgejo #273)
+- test(lyrics): add offline word-error and timing evaluation against human-labelled references (Forgejo #273)
+- fix(ci): connect migration checks to the PostgreSQL service container (Forgejo #273)
+
 ## [v0.39.1] - 2026-09-24
 
 _Bump: patch_
