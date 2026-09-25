@@ -1,28 +1,5 @@
 import { useReducer, useState } from "react";
-import { saveLyricsReview, type LyricsPayload, type LyricsQuality } from "../api";
-
-export function qualityMessage(quality?: LyricsQuality | null): { title: string; detail: string; warning: boolean } {
-  switch (quality?.status) {
-    case "reviewed":
-      return { title: "Lyrics reviewed", detail: "The owner confirmed the words and timing against the audio.", warning: false };
-    case "checked":
-      return { title: "Lyrics automatically checked", detail: "Automated checks passed. This is not a listening review.", warning: false };
-    case "needs_review":
-      return { title: "Lyrics need review", detail: "Words or timing may be incomplete. Listen as a preview until reviewed.", warning: true };
-    default:
-      return { title: "Lyrics not checked", detail: "These lyrics have no quality report. Words and timing may be incomplete.", warning: true };
-  }
-}
-
-export function LyricsQualityBanner({ quality, compact = false }: { quality?: LyricsQuality | null; compact?: boolean }) {
-  const message = qualityMessage(quality);
-  return (
-    <div role="status" style={{ padding: compact ? "8px 16px" : "12px 14px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg-card)", color: "var(--fg)", fontSize: compact ? 12 : 13, lineHeight: 1.5 }}>
-      <strong>{message.title}</strong>
-      {!compact && <div style={{ color: "var(--fg-soft)" }}>{message.detail}</div>}
-    </div>
-  );
-}
+import { saveLyricsReview, type LyricsPayload } from "../api";
 
 export interface ReviewDraft { lrc: string; confirmed: boolean; saving: boolean; error: string | null }
 export type ReviewAction = { type: "edit"; lrc: string } | { type: "confirm"; confirmed: boolean } | { type: "saving" } | { type: "saved" } | { type: "error"; error: string };
@@ -50,7 +27,7 @@ export function LyricsReview({ lyrics, onSaved, onSeek, onReload }: {
   if (lyrics.review_job_id == null || !lyrics.revision) return null;
   return <div>
     <button type="button" className="m-btn sm" onClick={() => setOpen(!open)} aria-expanded={open}>
-      {open ? "Close lyrics review" : "Review / correct lyrics"}
+      {open ? "Close lyrics editor" : "Edit lyrics"}
     </button>
     {open && <LyricsReviewEditor key={lyrics.revision} lyrics={lyrics} onSaved={onSaved} onSeek={onSeek} onReload={onReload} />}
   </div>;

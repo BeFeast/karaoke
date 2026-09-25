@@ -1221,10 +1221,7 @@ async def run_real_job(
                 )
             job.status = JobStatus.completed
             job.progress = 100
-            job.stage_note = (
-                "Lyrics need review"
-                if lyrics_prov["lyrics_quality"]["status"] == "needs_review" else None
-            )
+            job.stage_note = None
             job.completed_at = dt.datetime.now(dt.UTC)
             job.vast_instance_id = str(gpu.vast_instance_id)
             job.vast_cost_micros = round(gpu.vast_cost * 1_000_000)

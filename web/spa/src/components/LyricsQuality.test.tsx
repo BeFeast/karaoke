@@ -1,37 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { LyricsPayload, LyricsQuality } from "../api";
-import { canSaveReview, LyricsQualityBanner, LyricsReview, LyricsReviewEditor, qualityMessage, reviewReducer, type ReviewDraft } from "./LyricsQuality";
+import { canSaveReview, LyricsReview, LyricsReviewEditor, reviewReducer, type ReviewDraft } from "./LyricsQuality";
 
 const quality = (status: LyricsQuality["status"]): LyricsQuality => ({ schema_version: 1, status, issues: [] });
 const lyrics: LyricsPayload = { synced: true, source: "forced_aligned", lrc: "[00:01.00]First line", lines: [{ t: 1, text: "First line" }], plain: "First line", revision: "revision-one", review_job_id: 23, quality: quality("needs_review") };
 const props = { lyrics, onSaved: () => {}, onSeek: () => {}, onReload: async () => {} };
 
 describe("lyrics quality status", () => {
-  test("flags needs review, including in compact performance view", () => {
-    for (const compact of [true, false]) {
-      const html = renderToStaticMarkup(<LyricsQualityBanner quality={quality("needs_review")} compact={compact} />);
-      expect(html).toContain("Lyrics need review");
-      expect(html).toContain('role="status"');
-    }
-  });
-  test("automatic checks never imply a listening review", () => {
-    expect(qualityMessage(quality("checked")).title).toBe("Lyrics automatically checked");
-    expect(qualityMessage(quality("checked")).detail).toContain("not a listening review");
-    expect(qualityMessage(quality("reviewed")).title).toBe("Lyrics reviewed");
-    expect(qualityMessage(quality("reviewed")).detail).toContain("owner confirmed");
-  });
-  test("legacy/null reports are explicitly unchecked", () => {
-    for (const missing of [null, undefined]) {
-      const html = renderToStaticMarkup(<LyricsQualityBanner quality={missing} />);
-      expect(html).toContain("Lyrics not checked");
-      expect(qualityMessage(missing).warning).toBe(true);
-    }
-  });
   test("public shares have no correction control", () => {
     const html = renderToStaticMarkup(<LyricsReview {...props} lyrics={{ ...lyrics, review_job_id: null }} />);
     expect(html).toBe("");
-    expect(renderToStaticMarkup(<LyricsReview {...props} />)).toContain("Review / correct lyrics");
+    expect(renderToStaticMarkup(<LyricsReview {...props} />)).toContain("Edit lyrics");
   });
   test("owner starts with an unchecked confirmation and disabled save", () => {
     const html = renderToStaticMarkup(<LyricsReviewEditor {...props} />);

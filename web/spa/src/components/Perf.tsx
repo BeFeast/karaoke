@@ -45,8 +45,6 @@ import type { StageTheme } from "../theme";
 import { FIT_FLOOR, balancedSplit, fitLineScale, splitFill } from "./lineFit";
 import { MBulbs, MicMark } from "./marks";
 import { PlainLyrics } from "./SyncedLyrics";
-import type { LyricsQuality } from "../api";
-import { LyricsQualityBanner } from "./LyricsQuality";
 // BLEND_GRADIENT + the phone rail recipe moved to stage-core (#185) so the
 // phone console reuses them; the desktop rail below still paints the gradient.
 import { BLEND_GRADIENT, BlendRail, lyricState, type TimedLine } from "./stage-core";
@@ -264,7 +262,6 @@ export interface PerfProps {
   lines: TimedLine[];
   /** Plain lyrics text for the no-synced-data fallback. */
   plain: string | null;
-  lyricsQuality?: LyricsQuality | null;
   /** The stage room's persisted ◐ theme. */
   theme: StageTheme;
   onToggleTheme: () => void;
@@ -272,7 +269,7 @@ export interface PerfProps {
   reducedMotion: boolean;
 }
 
-export function Perf({ player, title, artist, lines, plain, lyricsQuality, theme, onToggleTheme, onExit, reducedMotion }: PerfProps) {
+export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme, onExit, reducedMotion }: PerfProps) {
   const phone = usePhoneLayout();
   const [idle, setIdle] = useState(false);
   const timer = useRef<number | undefined>(undefined);
@@ -372,7 +369,6 @@ export function Perf({ player, title, artist, lines, plain, lyricsQuality, theme
       </div>
 
       {/* Quality remains visible when the transport controls fade. */}
-      <LyricsQualityBanner quality={lyricsQuality} compact />
 
       {/* center: prev / current (wipe) / next + gap countdown (perf.jsx:50-61) */}
       {lines.length > 0 ? (

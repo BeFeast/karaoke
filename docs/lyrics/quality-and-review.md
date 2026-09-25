@@ -11,13 +11,18 @@ Every newly finalized result records `metadata.json.lyrics_quality`, also saved
 as `exports/lyrics.quality.json` and exposed as `quality` on the lyrics API.
 
 - `needs_review`: omissions, additions, text disagreement, insufficient independent
-  evidence, missing word timing or suspicious timing remain. Playback is a preview.
+  evidence, missing word timing or suspicious timing remain. This internal state
+  drives repair and optional owner diagnostics, not a playback warning.
 - `checked`: automated evidence checks passed. This is explicitly not a listening
   review or a guarantee of perfect transcription.
 - `reviewed`: the owner explicitly confirmed listening to the entire song and
   checking words, repeated lines and timestamps. This is a human assertion,
   separately recorded; it is not inferred from a confidence threshold.
-- Missing quality (old jobs) is displayed as not checked.
+- Missing quality (old jobs) stays unknown in the API.
+
+Stage, Performance and public HTML shares do not display generic quality banners.
+Owners can open **Edit lyrics** for detailed observations and corrections. Completed
+jobs clear progress notes; evidence and recognition thresholds remain unchanged (#275).
 
 Agreement must use the full reference denominator, retain repeated occurrences,
 account for missing and extra words, and inspect independent ASR evidence. A
@@ -40,7 +45,7 @@ No track names, recording IDs or song-specific offsets are part of the algorithm
    window, and a 60-second cooperative wall deadline, with a defensive maximum
    of 12 model calls. The overall job timeout remains the hard limit. Retry
    failure or an exhausted budget retains the baseline and explicit diagnostics.
-   An exact lexical mismatch may use one alternate neighboring-phrase context
+   An exact lexical match with low confidence may use one alternate neighboring-phrase context
    within the same budget; decoding remains independent of the desired lyrics.
 4. Reconcile accepted alignments with ASR. Restore a score-filtered line only
    when temporally local independent evidence supports it. Repair implausible
@@ -65,10 +70,10 @@ and review still apply to its output.
 
 ## Owner correction
 
-The stage exposes issue locations, seek controls and an LRC editor alongside the
-vocal player. Saving requires an explicit listening confirmation. Public share
-readers see the quality state but cannot edit through possession of the share
-URL alone.
+The owner can open **Edit lyrics** to see issue locations, seek controls and an
+LRC editor alongside the vocal player. Saving requires an explicit listening
+confirmation. Public share readers cannot edit through possession of the share
+URL alone. Automated quality remains available in the API without interrupting playback.
 
 `PUT /jobs/{id}/lyrics-review` accepts `lrc`, `expected_revision`, and `confirm`.
 It checks the existing ownership rules, completed audio status, timestamp syntax

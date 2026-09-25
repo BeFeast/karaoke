@@ -200,8 +200,8 @@ async def test_cold_start_wait_does_not_burn_capacity_retry(
     async with factory() as session:
         job = await session.get(Job, job_id)
         assert job.status == JobStatus.completed
-        # Audio completed; the warming-up note must yield to lyric quality.
-        assert job.stage_note == "Lyrics need review"
+        # Completion clears progress copy; lyric diagnostics stay in the quality report.
+        assert job.stage_note is None
 
 
 @pytest.mark.asyncio
