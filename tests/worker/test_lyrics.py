@@ -16,11 +16,14 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from karaoke.titles import parse_artist_track
 from karaoke.worker.lyrics import (
     _MAX_LADDER_QUERIES,
     LRC_WORD_TAG_RE,
     LyricsSource,
+    aligned_text_agreement,
     drop_unreliable_aligned_lines,
     lrc_to_plain,
     merge_lrclib_word_tags,
@@ -1320,3 +1323,46 @@ def test_drop_score_guard_skips_plain_lines():
     filtered, dropped = drop_unreliable_aligned_lines(body, scores)
     assert dropped == 0
     assert "plain drifted line" in filtered
+
+
+@pytest.mark.parametrize(
+    ("curated", "aligned", "expected"),
+    [
+        # Dropping an early repeat must not match the later repeat first and
+        # strand the retained middle lines behind a greedy cursor.
+        (["repeat", "middle one", "middle two", "repeat"],
+         ["middle one", "middle two", "repeat"], 3),
+        (["first", "second"], ["unrelated", "different"], 0),
+        (["first", "second", "third"], ["first", "different", "third"], 2),
+        (["first", "second", "third"], ["third", "second", "first"], 1),
+        (["repeat"], ["repeat", "repeat", "repeat"], 1),
+        (["repeat", "repeat", "repeat"], ["repeat"], 1),
+        (["MiXeD CASE", "Straße"], ["mixed case", "STRASSE"], 2),
+    ],
+)
+def test_aligned_text_agreement_preserves_order_and_line_multiplicity(
+    curated, aligned, expected
+):
+    def lrc(lines):
+        return "\n".join(f"[00:{i:02d}.00]{text}" for i, text in enumerate(lines))
+
+    assert aligned_text_agreement(lrc(curated), lrc(aligned)) == (
+        expected, len(curated), len(aligned)
+    )
+
+
+def test_aligned_text_agreement_counts_only_single_tag_nonempty_curated_lines():
+    curated = (
+        "[ar:Example]\n"
+        "untimed line\n"
+        "[00:01.00]  \n"
+        "[00:02.00][00:03.00]repeat\n"
+        "[00:04.00]<00:04.00> Hello   <00:05.00>WORLD <00:06.00>\n"
+    )
+    aligned = "[01:00.00]repeat\n[01:01.00]hello world"
+    assert aligned_text_agreement(curated, aligned) == (1, 1, 2)
+
+
+@pytest.mark.parametrize("aligned", [None, "", "  \n"])
+def test_aligned_text_agreement_without_alignment(aligned):
+    assert aligned_text_agreement("[00:01.00]words", aligned) == (0, 0, 0)
