@@ -874,6 +874,47 @@ def _retry_window(
                 boundary_start=left is None, boundary_end=right is None), None
 
 
+def _alternate_retry_window(
+    start: float, end: float, segments: list[dict[str, Any]], duration: float | None,
+) -> tuple[tuple[float, float] | None, str | None]:
+    """Include complete neighboring ASR phrases, without searching lyric variants."""
+    phrases = []
+    for segment in segments:
+        words = segment.get("words", [])
+        if not words:
+            continue
+        try:
+            a, b = float(words[0]["start"]), float(words[-1]["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(a) and math.isfinite(b) and 0 <= a < b:
+            phrases.append((a, b))
+    left = [(a, b) for a, b in phrases if a < start and start - 3 <= b]
+    right = [(a, b) for a, b in phrases if b > end and a <= end + 3]
+    a, b = start, end
+    if left:
+        a = max(0.0, max(left, key=lambda pair: pair[0])[0] - .5)
+    if right:
+        b = min(right, key=lambda pair: pair[1])[1] + .5
+    if duration is not None:
+        b = min(b, duration)
+    if a == start and b == end:
+        return None, "no_alternate_phrase_context"
+    if b - a > _RETRY_MAX_CROP_SECONDS:
+        return None, "alternate_context_out_of_bounds"
+    return (a, b), None
+
+
+def _confidence_only_failure(words: list[dict[str, Any]], start: float, end: float) -> bool:
+    """Permit another context only for valid timestamps and real low confidence."""
+    probabilities = [word.get("probability") for word in words]
+    if not all(isinstance(p, (int, float)) and math.isfinite(p) and 0 <= p <= 1
+               for p in probabilities):
+        return False
+    return (not _plausible_words(words, start, end)
+            and _plausible_words([dict(word, probability=1.) for word in words], start, end))
+
+
 def _retry_problem_lines(
     vocals_wav: Path, diagnostics: dict[str, Any], transcript: dict[str, Any],
     original_lrc: str, original_scores: list[float | None], *, deadline: float,
@@ -977,11 +1018,12 @@ def _retry_problem_lines(
         scores = [row["score"] for row in members if isinstance(row.get("score"), (int, float))]
         return (0 if missing else 1 if unsupported else 2, min(scores, default=0), group["start"])
 
-    for group in sorted(groups, key=priority):
+    queue = [dict(group, phase="primary") for group in sorted(groups, key=priority)]
+    planned_bounds = {(group["start"], group["end"]) for group in queue}
+    for group in queue:
         start, end = group["start"], group["end"]
         seconds = end - start
-        for index in group["indices"]:
-            records[index].update(start=start, end=end, evidence_source="crop_asr")
+        phase = group["phase"]
         reason = None
         if attempts >= _RETRY_MAX_CROPS or audio_seconds + seconds > _RETRY_MAX_AUDIO_SECONDS:
             reason = "retry_audio_budget_exhausted"
@@ -989,12 +1031,25 @@ def _retry_problem_lines(
             reason = "retry_time_budget_exhausted"
         if reason:
             for index in group["indices"]:
-                records[index]["reason"] = reason
+                skipped = dict(outcome="skipped", reason=reason, start=start, end=end,
+                               attempt_phase=phase)
+                records[index].setdefault("attempts", []).append(skipped)
+                if phase == "primary":
+                    records[index].update(skipped)
+                else:
+                    records[index]["alternate_skipped_reason"] = reason
             continue
         attempts += 1
         audio_seconds += seconds
-        for index in group["indices"]:
-            records[index].update(outcome="rejected", crop_index=attempts - 1)
+        attempt_id = f"crop-{attempts - 1}"
+        meta = dict(attempt_id=attempt_id, attempt_phase=phase, crop_start=start, crop_end=end,
+                    crop_index=attempts - 1)
+        if group.get("replaces_attempt_id"):
+            meta["replaces_attempt_id"] = group["replaces_attempt_id"]
+        results = {index: dict(outcome="rejected", start=start, end=end,
+                              evidence_source="crop_asr", confidence_only_failure=False, **meta)
+                   for index in group["indices"]}
+        confidence_failures = []
         try:
             crop_asr = _transcribe_crop(vocals_wav, start, end,
                                         transcript.get("language"), deadline)
@@ -1011,17 +1066,20 @@ def _retry_problem_lines(
                 evidence_segments.append(dict(
                     segment, start=float(segment.get("start", 0)) + start,
                     end=float(segment.get("end", seconds)) + start,
-                    words=evidence_words, source="independent_crop_asr", crop_index=attempts - 1,
+                    words=evidence_words, source="independent_crop_asr", **meta,
                 ))
             if evidence_segments:
                 transcript.setdefault("retry_segments", []).extend(evidence_segments)
             crop_words = _asr_words({"segments": safe_segments})
             for index in group["indices"]:
-                record = records[index]
+                record = results[index]
                 record.update(transcript=crop_asr, evidence_segments=evidence_segments,
                               reason="text_not_corroborated")
+                lower, upper = records[index]["lower"] - start, records[index]["upper"] - start
+                confidence_failed = False
                 for candidate in _matching_word_runs(rows[index]["text"], crop_words):
-                    if not _plausible_words(candidate, record["lower"] - start, record["upper"] - start):
+                    if not _plausible_words(candidate, lower, upper):
+                        confidence_failed |= _confidence_only_failure(candidate, lower, upper)
                         record["reason"] = "implausible_word_timing_or_confidence"
                         continue
                     shifted = [dict(w, start=float(w["start"]) + start,
@@ -1032,9 +1090,29 @@ def _retry_problem_lines(
                         continue
                     record.update(outcome="accepted", reason="independent_crop_asr_match", words=shifted)
                     break
+                if record["outcome"] != "accepted" and confidence_failed:
+                    record["confidence_only_failure"] = True
+                    confidence_failures.append(index)
         except Exception as exc:
-            for index in group["indices"]:
-                records[index].update(outcome="failed", reason=type(exc).__name__)
+            for record in results.values():
+                record.update(outcome="failed", reason=type(exc).__name__)
+            confidence_failures = []
+        for index, record in results.items():
+            records[index].setdefault("attempts", []).append(dict(record))
+            records[index].update(record)
+        # Appending after the pre-planned primary queue gives every initial
+        # problem a chance before spending any budget on another context.
+        if phase == "primary" and confidence_failures:
+            alternate, reason = _alternate_retry_window(start, end, trusted_segments, duration)
+            if alternate is not None and alternate in planned_bounds:
+                alternate, reason = None, "alternate_context_already_planned"
+            if alternate is None:
+                for index in confidence_failures:
+                    records[index]["alternate_skipped_reason"] = reason
+            else:
+                planned_bounds.add(alternate)
+                queue.append(dict(start=alternate[0], end=alternate[1], indices=confidence_failures,
+                                  phase="alternate", replaces_attempt_id=attempt_id))
     diagnostics["retries"] = [records[index] for index in sorted(records)]
     diagnostics["retry_budget"].update(crops_used=attempts, audio_seconds_used=audio_seconds)
     if not recovered:

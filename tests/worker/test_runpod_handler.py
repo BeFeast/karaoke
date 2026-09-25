@@ -836,3 +836,121 @@ def test_context_window_does_not_absorb_remote_instrumental_gap():
     assert window["end"] - window["start"] == 6
     assert window["end"] < 20
     assert window["upper"] == 51  # output acceptance still observes independent bound
+
+
+
+def test_confidence_backoff_runs_after_primary_and_preserves_attempt_evidence(monkeypatch):
+    diagnostics, transcript = _retry_fixture(gaps=2)
+    calls = []
+    def crop(path, start, end, language, deadline):
+        calls.append((start, end))
+        if len(calls) == 2:
+            return _crop_transcript("different words")  # never lexical fishing
+        return _crop_transcript(times=((12-start, 12.5-start), (13-start, 13.5-start)),
+                                probability=.2 if len(calls) == 1 else .95)
+    monkeypatch.setattr(handler, "_transcribe_crop", crop)
+    monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
+    lrc, _ = handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
+    assert calls == [(9.25, 15.25), (16.25, 22.25), (9.25, 18.5)]
+    first, second = diagnostics["retries"]
+    assert first["outcome"] == "accepted" and not first["confidence_only_failure"]
+    assert first["attempt_id"] == "crop-2"
+    assert first["replaces_attempt_id"] == "crop-0"
+    assert [a["outcome"] for a in first["attempts"]] == ["rejected", "accepted"]
+    assert first["evidence_segments"][0]["attempt_id"] == "crop-2"
+    assert [s["attempt_id"] for s in transcript["retry_segments"]] == ["crop-0", "crop-1", "crop-2"]
+    assert transcript["retry_segments"][0]["words"][0]["probability"] == .2
+    assert len(second["attempts"]) == 1 and second["reason"] == "text_not_corroborated"
+    assert "missing0" in lrc and "missing1" not in lrc
+
+
+@pytest.mark.parametrize("failure", ["confidence", "exception", "split", "wrong_text"])
+def test_backoff_never_splices_or_repeats_after_second_failure(monkeypatch, failure):
+    diagnostics, transcript = _retry_fixture()
+    calls = []
+    def crop(path, start, end, language, deadline):
+        calls.append((start, end))
+        if len(calls) == 1 or failure == "confidence":
+            return _crop_transcript(probability=.2)
+        if failure == "exception":
+            raise RuntimeError("test decode failure")
+        if failure == "split":
+            # One trustworthy word in a different attempt cannot complete the
+            # low-confidence primary sequence.
+            return _crop_transcript("words", times=((3.75, 4.25),))
+        return _crop_transcript("different words")
+    monkeypatch.setattr(handler, "_transcribe_crop", crop)
+    monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
+    assert handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60) == ("original", [])
+    assert len(calls) == 2
+    assert len(diagnostics["retries"][0]["attempts"]) == 2
+    assert diagnostics["retries"][0]["outcome"] != "accepted"
+    assert transcript["retry_segments"][0]["attempt_id"] == "crop-0"
+
+
+@pytest.mark.parametrize("budget", ["audio", "time"])
+def test_backoff_respects_remaining_shared_resources(monkeypatch, budget):
+    diagnostics, transcript = _retry_fixture()
+    calls = []
+    now = [0]
+    def crop(*args):
+        calls.append(args)
+        if budget == "time":
+            now[0] = 51
+        return _crop_transcript(probability=.2)
+    monkeypatch.setattr(handler, "_transcribe_crop", crop)
+    monkeypatch.setattr(handler.time, "monotonic", lambda: now[0])
+    if budget == "audio":
+        monkeypatch.setattr(handler, "_RETRY_MAX_AUDIO_SECONDS", 12)
+    handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
+    assert len(calls) == 1
+    retry = diagnostics["retries"][0]
+    assert retry["alternate_skipped_reason"] == f"retry_{budget}_budget_exhausted"
+    assert retry["attempts"][-1]["outcome"] == "skipped"
+    assert retry["attempts"][0]["attempt_id"] == "crop-0"
+
+
+@pytest.mark.parametrize("kind", ["lexical", "timing", "unsafe", "bad_probability"])
+def test_backoff_is_not_lexical_or_timestamp_fishing(monkeypatch, kind):
+    diagnostics, transcript = _retry_fixture()
+    crop = _crop_transcript(probability=.2)
+    if kind == "lexical":
+        crop = _crop_transcript("different words")
+    elif kind == "timing":
+        crop["segments"][0]["words"][0]["end"] = 2.75
+    elif kind == "unsafe":
+        crop["segments"][0]["avg_logprob"] = -2
+    else:
+        crop["segments"][0]["words"][0]["probability"] = -1
+    calls = []
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: calls.append(args) or crop)
+    monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
+    handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
+    assert len(calls) == 1
+    assert diagnostics["retries"][0]["outcome"] == "rejected"
+
+
+def test_alternate_context_has_hard_window_cap():
+    segment = _crop_transcript("long phrase", times=((1, 5), (7, 9)))["segments"][0]
+    window, reason = handler._alternate_retry_window(8, 34, [segment], 40)
+    assert window is None and reason == "alternate_context_out_of_bounds"
+
+
+
+def test_shared_alternate_cannot_reuse_one_occurrence_for_repeated_rows(monkeypatch):
+    diagnostics, transcript = _retry_fixture()
+    diagnostics["lines"].insert(2, dict(diagnostics["lines"][1], line_index=2))
+    diagnostics["lines"][-1]["line_index"] = 3
+    calls = []
+    def crop(*args):
+        calls.append(args)
+        return _crop_transcript(probability=.2 if len(calls) == 1 else .95)
+    monkeypatch.setattr(handler, "_transcribe_crop", crop)
+    monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
+    lrc, _ = handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
+    assert len(calls) == 2  # one primary and one alternate shared by both rows
+    assert lrc.count("missing0") == 1
+    first, second = diagnostics["retries"]
+    assert first["outcome"] == "accepted"
+    assert second["reason"] == "retry_word_span_already_used"
+    assert first["attempt_id"] == second["attempt_id"] == "crop-1"
