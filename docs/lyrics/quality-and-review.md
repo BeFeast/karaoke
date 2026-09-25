@@ -40,14 +40,22 @@ No track names, recording IDs or song-specific offsets are part of the algorithm
    window, and a 60-second cooperative wall deadline, with a defensive maximum
    of 12 model calls. The overall job timeout remains the hard limit. Retry
    failure or an exhausted budget retains the baseline and explicit diagnostics.
+   An exact lexical mismatch may use one alternate neighboring-phrase context
+   within the same budget; decoding remains independent of the desired lyrics.
 4. Reconcile accepted alignments with ASR. Restore a score-filtered line only
    when temporally local independent evidence supports it. Repair implausible
    internal word timing only with reliable matching ASR timestamps. Never
-   insert unsupported canonical verses just to reach full reference coverage.
+   invent missing canonical verses just to reach full reference coverage.
+   Retain plausible existing alignment text with explicit provisional issues
+   when acoustic/timing evidence passes preservation gates but independent ASR
+   does not confirm every word. This is uncertain text, not verified recovery;
+   the final quality remains `needs_review` and unreliable word timing is removed.
 5. Audit the selected export, not merely the aligner input or kept-line subset.
    Preserve unresolved omissions, additions and timing disagreements for review.
    Evidence records distinguish reused full-audio ASR from cropped retry ASR;
    the coordinator validates each source before preserving a recovered line.
+   Duplicate observations from overlapping ASR attempts count once. Conflicting
+   observations remain explicit issues; cropping cannot erase contrary evidence.
 
 The GPU response is additive: older workers remain usable, but their missing
 retry/diagnostic evidence cannot be interpreted as a successful retry. Raw
@@ -101,10 +109,10 @@ compatibility, not deployed behavior. Browser checks used an isolated SQLite
 fixture, not production jobs: issue seek, correction/save, immediate refresh,
 stale-tab conflict with draft retention, and the Performance status all worked.
 
-The authorized GPU rollout has since published and activated v2 on the production
+The authorized GPU rollout has since published and activated v3 on the production
 `karaoke-poc-2` endpoint using an isolated template. The active image is
-`ghcr.io/befeast/karaoke-runpod@sha256:a7b37e09c56e2bad6d2261f256eb90d9ba6de129cf9a29358d4fc3c879704af2`
-(tag `quality-272-v2-402caf038b0e`). The production coordinator still runs
+`ghcr.io/befeast/karaoke-runpod@sha256:a23088865c1ab52b775451bba311beb843a9daef6f1c1b2d5e9e307a039e77d4`
+(handler source `9b4f4fc`). The production coordinator still runs
 `42c6442`, version `0.39.1`; the candidate coordinator and owner-review UI have not
 been deployed. GPU publication, endpoint activation and coordinator deployment
 are separate states.
@@ -115,10 +123,20 @@ Fresh real-audio replays measured these results against the 37-line reference:
 | --- | --- | --- | --- |
 | v1 | 33/37 | 18 of 188 | `needs_review` |
 | v2 | 34/37 | 12 of 188 | `needs_review` |
+| v3 with coordinator preservation | 37/37 | 0 of 188 | `needs_review` (two provisional lines) |
 
-These are reference-coverage measurements, not human-confirmed accuracy. Both
-runs also retain independent-ASR disagreements and unconfirmed output words.
-The complete-song acceptance requirement is **not met**.
+These are reference-coverage measurements, not human-confirmed accuracy. All
+runs retain independent-ASR disagreements and unconfirmed output words. The v3
+run completed in 55.202 seconds on an RTX 4090 and used six crop decodes covering
+45.4 seconds of audio. Its alternate-context River retry passed the independent
+evidence gates. Coordinator replay preserves all 37 lines / 188 reference words
+with no missing or extra reference words, including two explicitly provisional
+lines. It still records 13 unconfirmed output words and 14 unmatched ASR words;
+three conflicting ASR observations remain explicit issues and one alignment
+retains only line timing. The selected LRC passes the correction API timestamp
+syntax/order validator against the 273.4-second audio duration. This is input
+validation, not owner review. No complete-song listening acceptance
+or claim of perfect transcription follows from the restored coverage.
 
 Eight controlled crop/model probes varied narrow/wide context and
 `large-v3`/`large-v3-turbo`. They did not resolve the remaining opener/catch lexical
@@ -132,10 +150,12 @@ Operator evidence remains outside the repository on maestro:
 
 - `/tmp/karaoke-debug-20260925/fresh-gpu-272/exports/lyrics.quality.json`
 - `/tmp/karaoke-debug-20260925/fresh-gpu-272-v2/exports/lyrics.quality.json`
+- `/tmp/karaoke-debug-20260925/fresh-gpu-272-v3/exports/lyrics.quality.json`
 - `/tmp/karaoke-asr-context-20260925/*.json` (eight controlled probes)
 - `/tmp/karaoke-large-v3-20260925/*.json` (wider-context comparison)
 
 Those paths are temporary diagnostic evidence, not a durable labelled corpus.
 No complete-song listening acceptance or cross-song accuracy benchmark has been
-established. Merge, release tagging and coordinator deploy remain on hold pending
-the unresolved acceptance work.
+established. Release integration and CI still need to validate the complete
+candidate. Production authorization exists; the remaining deployment hold is
+verification, not a request for new approval.
