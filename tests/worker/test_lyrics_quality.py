@@ -378,3 +378,61 @@ def test_accepted_retry_cannot_preserve_duplicate_line_twice():
                                          [None, None], evidence, accepted_retries=[retry])
     assert result == raw
     assert quality["counts"]["missing_lines"] == 1
+
+
+def _full_asr_retry():
+    text, raw, evidence, retry = _fast_retry()
+    retry["reason"] = "independent_full_asr_match"
+    retry["evidence_source"] = "full_asr"
+    retry["evidence_segments"][0]["source"] = "independent_full_asr"
+    return text, raw, evidence, retry
+
+
+def test_full_asr_recovery_preserves_exact_words_with_timing_review():
+    text, raw, evidence, retry = _full_asr_retry()
+    result, quality = reconcile_alignment(text, raw, [None], evidence,
+                                         accepted_retries=[retry])
+    assert result == raw
+    assert quality["counts"]["missing_words"] == 0
+    assert quality["status"] == "needs_review"
+    assert "word_timing_pace" in codes(quality)
+
+
+def test_full_asr_reason_cannot_bypass_provenance_or_evidence_guards():
+    import copy
+    text, raw, evidence, retry = _full_asr_retry()
+    variants = []
+    wrong_source = copy.deepcopy(retry)
+    wrong_source["evidence_source"] = "crop_asr"
+    variants.append(wrong_source)
+    wrong_segment_source = copy.deepcopy(retry)
+    wrong_segment_source["evidence_segments"][0]["source"] = "forced_alignment"
+    variants.append(wrong_segment_source)
+    untrusted_segment = copy.deepcopy(retry)
+    untrusted_segment["evidence_segments"][0]["avg_logprob"] = -2
+    variants.append(untrusted_segment)
+    silent_segment = copy.deepcopy(retry)
+    silent_segment["evidence_segments"][0]["no_speech_prob"] = .9
+    variants.append(silent_segment)
+    missing_evidence = copy.deepcopy(retry)
+    missing_evidence["evidence_segments"] = []
+    variants.append(missing_evidence)
+    wrong_text = copy.deepcopy(retry)
+    wrong_text["words"] = [dict(word, word="unrelated") for word in wrong_text["words"]]
+    variants.append(wrong_text)
+    wrong_timing = copy.deepcopy(retry)
+    wrong_timing["words"] = [dict(word, start=word["start"] + 10, end=word["end"] + 10)
+                            for word in wrong_timing["words"]]
+    variants.append(wrong_timing)
+    probability_mismatch = copy.deepcopy(retry)
+    probability_mismatch["words"] = [dict(word, probability=.75)
+                                     for word in probability_mismatch["words"]]
+    variants.append(probability_mismatch)
+    rejected = copy.deepcopy(retry)
+    rejected["outcome"] = "rejected"
+    variants.append(rejected)
+    for variant in variants:
+        result, quality = reconcile_alignment(text, raw, [None], evidence,
+                                             accepted_retries=[variant])
+        assert result is None
+        assert quality["status"] == "needs_review"

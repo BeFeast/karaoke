@@ -386,16 +386,22 @@ def assess_lyrics(
 
 
 def _accepted_retry(line, retries: list, used: set[int]) -> bool:
-    """Authenticate a recovered line against its independent crop evidence.
+    """Authenticate a recovered line against independent crop or full ASR evidence.
 
     Null alignment scores alone are not proof of recovery. Require an accepted
     diagnostic, plausible ASR word probabilities, and the same words/times in
-    the full trusted crop observation. Each accepted repair is consumed once.
+    the full trusted ASR observation. Each accepted repair is consumed once.
     """
     for i, retry in enumerate(retries):
         if i in used or not isinstance(retry, dict):
             continue
-        if retry.get("outcome") != "accepted" or retry.get("reason") != "independent_crop_asr_match":
+        reason = retry.get("reason")
+        if retry.get("outcome") != "accepted" or reason not in {
+            "independent_crop_asr_match", "independent_full_asr_match"
+        }:
+            continue
+        full_asr = reason == "independent_full_asr_match"
+        if full_asr and retry.get("evidence_source") != "full_asr":
             continue
         raw_words = _list(retry.get("words"))
         candidate = _asr_words({"segments": [{"words": raw_words}]})
@@ -422,6 +428,8 @@ def _accepted_retry(line, retries: list, used: set[int]) -> bool:
         safe_segments = []
         for segment in _list(retry.get("evidence_segments")):
             if not isinstance(segment, dict):
+                continue
+            if full_asr and segment.get("source") != "independent_full_asr":
                 continue
             logprob, silence = segment.get("avg_logprob"), segment.get("no_speech_prob")
             if (isinstance(logprob, (int, float)) and math.isfinite(logprob) and logprob >= -1
