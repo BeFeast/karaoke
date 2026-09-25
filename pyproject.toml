@@ -16,7 +16,7 @@ dependencies = [
     # coordinator's residential IP stops tripping the bot-check (issue #68). The
     # provider server itself runs as a separate docker sidecar — see
     # docker/api/README.md.
-    "bgutil-ytdlp-pot-provider>=1.3.1",
+    "bgutil-ytdlp-pot-provider>=2.0.0",
     "cryptography>=50.0.0",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
