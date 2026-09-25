@@ -30,6 +30,8 @@ jobs:
   migrations:
     name: migrations
     runs-on: ubuntu-latest
+    # Use the same service-container network on GitHub and Forgejo runners.
+    container: node:24-bookworm
     services:
       postgres:
         image: postgres:16-alpine
@@ -37,15 +39,13 @@ jobs:
           POSTGRES_USER: karaoke
           POSTGRES_PASSWORD: karaoke
           POSTGRES_DB: karaoke
-        ports:
-          - 5432:5432
         options: >-
           --health-cmd "pg_isready -U karaoke"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      KARAOKE_DATABASE_URL: postgresql+psycopg://karaoke:karaoke@localhost:5432/karaoke
+      KARAOKE_DATABASE_URL: postgresql+psycopg://karaoke:karaoke@postgres:5432/karaoke
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
@@ -166,16 +166,16 @@ jobs:
           fi
       - name: Set up JDK 17
         if: steps.filter.outputs.android == 'true'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
       - name: Validate Gradle wrapper
         if: steps.filter.outputs.android == 'true'
-        uses: gradle/actions/wrapper-validation@v4
+        uses: gradle/actions/wrapper-validation@v6
       - name: Setup Gradle (cache)
         if: steps.filter.outputs.android == 'true'
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
       - name: Unit tests + lint
         if: steps.filter.outputs.android == 'true'
         working-directory: mobile/android
@@ -186,7 +186,7 @@ jobs:
         run: ./gradlew --no-daemon assembleDebug
       - name: Upload APK artifact
         if: steps.filter.outputs.android == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: karaoke-submitter-debug-apk
           path: mobile/android/app/build/outputs/apk/debug/app-debug.apk

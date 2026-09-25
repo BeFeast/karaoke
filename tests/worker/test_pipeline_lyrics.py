@@ -1076,3 +1076,32 @@ def test_tiny_faithful_excerpt_still_falls_to_floor(tmp_path):
         aligned_lrc_path=_aligned_file(tmp_path, drifted),
     )
     assert prov["lyrics_source"] == SOURCE_WHISPER_ASR
+
+
+def test_dropped_early_repeated_line_with_timing_drift_keeps_forced_alignment(tmp_path):
+    """Retained middle lines must survive a repeat after a dropped opening line."""
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper = _whisper(tmp_path, "asr floor")
+    texts = ["repeat phrase", *[f"middle line {i}" for i in range(8)], "repeat phrase"]
+    synced = "\n".join(f"[{i:02d}:00.00]{text}" for i, text in enumerate(texts))
+    # The first repeated line was filtered out. All retained lines have a
+    # three-second drift, outside the LRCLIB timing merge tolerance.
+    aligned = "\n".join(
+        f"[{i:02d}:03.00]"
+        + " ".join(f"<{i:02d}:{3 + j:02d}.00>{word}" for j, word in enumerate(text.split()))
+        + f" <{i:02d}:{2 + len(text.split()):02d}.35>"
+        for i, text in enumerate(texts[1:], start=1)
+    )
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=synced, plain=lrc_to_plain(synced), source="lrclib_get"),
+        exports,
+        whisper,
+        aligned_lrc_path=_aligned_file(tmp_path, aligned),
+    )
+    assert prov["lyrics_source"] == SOURCE_FORCED_ALIGNED
+    assert prov["lyrics_align_reason"] == "align_coverage_low (0/10)"
+    assert prov["synced"] is True
+    assert "lyrics_lrclib_rejected" not in prov
+    assert (exports / "lyrics.lrc").read_text() == aligned
+    assert (exports / "lyrics.txt").read_text() == "\n".join(texts[1:])

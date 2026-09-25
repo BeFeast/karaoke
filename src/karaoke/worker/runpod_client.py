@@ -79,6 +79,18 @@ class RunpodColdStartError(RunpodCapacityError):
         self.workers_initializing = workers_initializing
 
 
+class RunpodEndpointPausedError(RunpodCapacityError):
+    """``/run`` returned HTTP 409 endpoint-paused (workersMax=0).
+
+    This happens when a job is dispatched during the ``runpod_provision.py``
+    warm-worker flush window (workersMax bounced 0 -> drain -> restore), which
+    self-heals in seconds-to-minutes — or when the endpoint was left paused
+    (incident #279). No RunPod job was created and no cost was incurred, so
+    re-submitting is idempotent. Subclasses ``RunpodCapacityError`` so the
+    coordinator's existing capacity-retry ladder backs off and re-submits
+    instead of failing the job (#265)."""
+
+
 # ---------------------------------------------------------------------------
 # tiny http helper (urllib only — no extra runtime dep). Inject for tests.
 # ---------------------------------------------------------------------------
@@ -106,6 +118,22 @@ def _http(
         except Exception:  # pragma: no cover - non-JSON error body
             payload = {}
         return exc.code, payload
+
+
+def _is_endpoint_paused(code: int, body: dict) -> bool:
+    """True when a ``/run`` response means "endpoint is paused" (workersMax=0).
+
+    RunPod signals this as HTTP 409 with an error body like
+    ``{"error": "Endpoint is paused (max_workers is 0) ..."}`` (canary jobs
+    Aug 10-14) — match "paused" case-insensitively anywhere in the body.
+    A 409 with an empty/non-JSON body is treated as paused too: /run has no
+    other known 409, and misclassifying a real conflict merely retries an
+    idempotent, cost-free submit."""
+    if code != 409:
+        return False
+    if not body:
+        return True
+    return "paused" in json.dumps(body).lower()
 
 
 def _extract_workers_initializing(body: dict) -> int:
@@ -238,6 +266,10 @@ class RunpodClient:
             run_input["align_text"] = align_text
             if align_lang and align_lang.strip():
                 run_input["align_lang"] = align_lang
+        # Recovery probes share the existing wall/cost budget, never extend it.
+        rate = float(self.settings.runpod_hourly_rate_estimate or 0.68)
+        cost_ceiling_s = max_job_cost / rate * 3600 if max_job_cost > 0 else wall_ceiling
+        run_input["job_budget_s"] = min(wall_ceiling, cost_ceiling_s)
         # Whisper language hint (#260): independent of alignment — it applies
         # exactly when LRCLIB missed and the ASR transcript IS the product.
         if whisper_lang and whisper_lang.strip():
@@ -265,6 +297,19 @@ class RunpodClient:
                 timeout=request_timeout,
             )
             if code not in (200, 201) or not body.get("id"):
+                if _is_endpoint_paused(code, body):
+                    # #265: dispatched into the warm-worker flush window (or a
+                    # stuck-paused endpoint, #279). No job was created, no cost
+                    # incurred — retryable via the capacity ladder.
+                    raise RunpodEndpointPausedError(
+                        f"runpod /run rejected: HTTP 409 ENDPOINT_PAUSED "
+                        f"(workersMax=0) body={body!r} — the endpoint is "
+                        f"paused; a provisioning flush self-heals in minutes, "
+                        f"but if it stays paused, unpause it by setting "
+                        f"Max Workers > 0 in the RunPod console (or PATCH "
+                        f"/v1/endpoints/{endpoint_id} workersMax, as "
+                        f"scripts/runpod_provision.py does)"
+                    )
                 raise RunpodError(
                     f"runpod /run failed: HTTP {code} body={body!r}"
                 )
@@ -529,6 +574,21 @@ class RunpodClient:
             aligned_lrc_path = work_dir / "aligned.lrc"
             aligned_lrc_path.write_text(aligned, encoding="utf-8")
 
+        # Preserve pre-filter alignment and rejection/retry evidence, even when
+        # every line was rejected. Older workers simply omit these fields.
+        aligned_raw_lrc_path: Path | None = None
+        aligned_diagnostics_path: Path | None = None
+        raw = output.get("aligned_raw_lrc")
+        if isinstance(raw, str) and raw.strip():
+            aligned_raw_lrc_path = work_dir / "aligned.raw.lrc"
+            aligned_raw_lrc_path.write_text(raw, encoding="utf-8")
+        diagnostics = output.get("aligned_diagnostics")
+        if isinstance(diagnostics, dict):
+            aligned_diagnostics_path = work_dir / "aligned.diagnostics.json"
+            aligned_diagnostics_path.write_text(
+                json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
         # Prefer RunPod's reported execution time; fall back to wall clock.
         seconds = max(execution_ms / 1000.0, wall_seconds)
         rate = float(self.settings.runpod_hourly_rate_estimate or 0.68)
@@ -545,4 +605,6 @@ class RunpodClient:
             lyrics_txt_path=lyrics_txt_path,
             lyrics_json_path=lyrics_json_path,
             aligned_lrc_path=aligned_lrc_path,
+            aligned_raw_lrc_path=aligned_raw_lrc_path,
+            aligned_diagnostics_path=aligned_diagnostics_path,
         )

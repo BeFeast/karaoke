@@ -108,3 +108,48 @@ def test_flush_when_template_created(prov, monkeypatch):
         {"workersMax": 0},
         {"workersMax": prov.ENDPOINT_SPEC["workersMax"]},
     ]
+
+
+@pytest.mark.parametrize(
+    "boom",
+    [KeyboardInterrupt, RuntimeError],
+    ids=["keyboard-interrupt", "request-exception"],
+)
+def test_flush_restores_workers_max_after_exception_mid_drain(
+    prov, monkeypatch, boom
+):
+    """A flush dying mid-drain must still restore workersMax (incident #279:
+    a died flush left the endpoint paused at workersMax=0 for ~a week)."""
+    calls = _install_fake_request(monkeypatch, prov, existing_image=None)
+
+    def raise_boom(*_a, **_k):
+        raise boom()
+
+    monkeypatch.setattr(prov, "_endpoint_worker_count", raise_boom)
+    with pytest.raises(boom):
+        prov._flush_workers("rpa_test", "ep_test")
+    assert _flush_bounces(calls) == [
+        {"workersMax": 0},
+        {"workersMax": prov.ENDPOINT_SPEC["workersMax"]},
+    ], "restore PATCH must fire even when the drain poll raises"
+
+
+def test_flush_restore_failure_is_loud_and_nonzero(prov, monkeypatch, capsys):
+    """If the restore PATCH itself fails, the operator gets an actionable
+    stderr message (endpoint may be paused + exact curl) and a non-zero exit."""
+    target = prov.ENDPOINT_SPEC["workersMax"]
+
+    def fake_request(method, path, token, body=None):
+        if body == {"workersMax": target}:
+            # Exactly what the real ``_request`` does on HTTP/network errors.
+            raise SystemExit(3)
+        return {}
+
+    monkeypatch.setattr(prov, "_request", fake_request)
+    with pytest.raises(SystemExit) as excinfo:
+        prov._flush_workers("rpa_test", "ep_test")
+    assert excinfo.value.code == 3
+    err = capsys.readouterr().err
+    assert "MAY BE LEFT PAUSED" in err
+    assert f'curl -X PATCH "{prov.API_BASE}/endpoints/ep_test"' in err
+    assert f"-d '{{\"workersMax\": {target}}}'" in err

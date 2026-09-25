@@ -352,7 +352,14 @@ export function SyncedLyrics({
  * everything else (native LRCLIB synced, force-aligned LRCLIB text) is LRCLIB.
  */
 export function sourceLabel(source: string | null): string {
-  return source === "whisper_asr_synced" ? "ASR (approximate)" : "LRCLIB";
+  switch (source) {
+    case "human_reviewed": return "Owner reviewed";
+    case "whisper_asr_synced":
+    case "whisper_asr": return "ASR (approximate)";
+    case "forced_aligned": return "Vocal alignment";
+    case "lrclib_synced": return "LRCLIB";
+    default: return "Unknown source";
+  }
 }
 
 /** mm:ss for a line timestamp (provenance / tooltip only). */

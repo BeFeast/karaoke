@@ -22,6 +22,7 @@ import { MBulbs, MicMark } from "./marks";
 import { timeLines } from "./stage-core";
 import { parseLrc, SyncedLyrics } from "./SyncedLyrics";
 import { Toast } from "./Toast";
+import { LyricsQualityBanner, LyricsReview } from "./LyricsQuality";
 
 // Lazy so wavesurfer.js (+ its WebAudio engine) only loads on the stage route,
 // keeping the booth bundle lean.
@@ -116,6 +117,12 @@ export function Stage({ token }: { token: string }) {
     }
   }, [payload?.status, token]);
 
+  const reloadLyrics = useCallback(async () => {
+    const updated = await getLyrics(token);
+    if (!updated) throw new Error("Could not load the latest lyrics. Your draft is unchanged.");
+    setLyrics(updated);
+  }, [token]);
+
   // Same-origin copy path — the public base 401s on the LAN (#131).
   const onCopyLink = useCallback(async () => {
     const url = itemUrl(token);
@@ -176,6 +183,8 @@ export function Stage({ token }: { token: string }) {
         payload={payload}
         token={token}
         lyrics={lyrics}
+        onLyricsSaved={setLyrics}
+        onReloadLyrics={reloadLyrics}
         view={view}
         setView={setView}
         theme={theme}
@@ -221,6 +230,8 @@ function StageBody({
   payload,
   token,
   lyrics,
+  onLyricsSaved,
+  onReloadLyrics,
   view,
   setView,
   theme,
@@ -234,6 +245,8 @@ function StageBody({
   payload: SharePayload;
   token: string;
   lyrics: LyricsPayload | null;
+  onLyricsSaved: (lyrics: LyricsPayload) => void;
+  onReloadLyrics: () => Promise<void>;
   view: StageView;
   setView: (v: StageView) => void;
   theme: StageTheme;
@@ -350,6 +363,8 @@ function StageBody({
         <StageEmpty title={meta.label} sub="Results will appear here once the job finishes." />
       )}
 
+      {isComplete && <LyricsQualityBanner quality={lyrics?.quality} />}
+
       {/* player: waveform card + console/setlist modules (KaraokePlayer.tsx) */}
       {isComplete && instrumental && (
         <Suspense
@@ -370,6 +385,7 @@ function StageBody({
             title={title}
             artist={payload.artist}
             plainLyrics={lyrics?.plain ?? null}
+            lyricsQuality={lyrics?.quality}
             onToggleTheme={onToggleTheme}
           />
         </Suspense>
@@ -377,6 +393,8 @@ function StageBody({
       {isComplete && !instrumental && (
         <StageEmpty title="No audio tracks" sub="No audio tracks were produced for this job." />
       )}
+
+      {isComplete && lyrics && <LyricsReview lyrics={lyrics} onSaved={onLyricsSaved} onSeek={onSeek} onReload={onReloadLyrics} />}
 
       {/* full synced-lyrics panel (LRC highlight + click-to-seek, #59/#145) */}
       {isComplete && (

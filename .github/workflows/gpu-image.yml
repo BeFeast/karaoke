@@ -24,11 +24,15 @@ jobs:
       - uses: actions/checkout@v4
 
       # The image is ~7GB compressed / >15GB in layers; stock runners have
-      # ~14GB free on /. Drop the big preinstalled toolchains first.
+      # ~14GB free on /. Drop the big preinstalled toolchains first. The
+      # boot-verify step below pulls the whole image back from GHCR, so free
+      # more than the build alone needs (ghcup/swift/jvm add ~8GB).
       - name: Free runner disk
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/local/.ghcup /usr/share/swift /usr/lib/jvm \
+            /usr/local/share/powershell
           sudo docker image prune -af
           df -h /
 
@@ -54,3 +58,21 @@ jobs:
           tags: ghcr.io/befeast/karaoke-runpod:${{ inputs.tag }}
           cache-from: type=registry,ref=ghcr.io/befeast/karaoke-runpod:buildcache
           cache-to: type=registry,ref=ghcr.io/befeast/karaoke-runpod:buildcache,mode=max
+
+      # Boot-verify the JUST-pushed tag (#279; prevents a repeat of #263,
+      # where CI overwrote a live-verified tag with an unverified image).
+      # Pull it BACK from GHCR — this verifies the registry artifact itself,
+      # not local build state — and run the handler's CPU-only selfcheck
+      # (heavy imports + baked model files present and plausibly sized).
+      # buildx keeps the image layers in its local cache after the build;
+      # prune it first so the >15GB pulled image fits the runner disk.
+      - name: Free disk for boot-verify pull
+        run: |
+          docker buildx prune -af
+          sudo docker image prune -af
+          df -h /
+
+      - name: Boot-verify pushed image (CPU selfcheck)
+        run: |
+          docker pull ghcr.io/befeast/karaoke-runpod:${{ inputs.tag }}
+          docker run --rm ghcr.io/befeast/karaoke-runpod:${{ inputs.tag }} --selfcheck

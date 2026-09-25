@@ -47,7 +47,13 @@ Output (returned to RunPod as JSON)::
 
     + optional (any mode that ran separation, when ``align_text`` was supplied
       and alignment succeeded):
-      {"aligned_lrc": str, "aligned_lang": str}
+      {"aligned_lrc": str, "aligned_lang": str,
+       "aligned_raw_lrc": str, "aligned_diagnostics": dict}
+
+Raw evidence includes every supplied lyric line before score/VAD filters.
+For mode "both", ASR runs first and bounded no-VAD vocal-crop retries may
+recover problematic lines only when independent text and timings agree.
+Accepted absolute-time words are also included in lyrics_json.retry_segments.
 
 Unknown modes raise ``ValueError`` so RunPod marks the job FAILED rather
 than silently returning a wrong shape.
@@ -55,8 +61,13 @@ than silently returning a wrong shape.
 from __future__ import annotations
 
 import base64
+import importlib
 import logging
+import math
 import os
+import re
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -75,6 +86,7 @@ _GPU_LOCK = threading.Lock()
 # Lazy-loaded faster-whisper model; mirrors server.py's _get_whisper pattern.
 _WHISPER_MODEL: Any = None
 _WHISPER_LOCK = threading.Lock()
+_WHISPER_MODEL_NAME = "large-v3-turbo"
 
 # Lazy-loaded audio-separator BS-Roformer model. Same lazy-load shape as the
 # Whisper model so the (large) separation weights only load when a job actually
@@ -144,10 +156,13 @@ def _get_whisper():
             device = "cuda" if _gpu_available() else "cpu"
             compute_type = "float16" if device == "cuda" else "int8"
             LOG.info(
-                "loading faster-whisper large-v3-turbo on %s/%s", device, compute_type
+                "loading faster-whisper %s on %s/%s",
+                _WHISPER_MODEL_NAME,
+                device,
+                compute_type,
             )
             _WHISPER_MODEL = WhisperModel(
-                "large-v3-turbo", device=device, compute_type=compute_type
+                _WHISPER_MODEL_NAME, device=device, compute_type=compute_type
             )
     return _WHISPER_MODEL
 
@@ -249,7 +264,8 @@ _LANG_DETECT_TRUST_P = 0.6
 
 
 def _transcribe(
-    wav_path: Path, language: str | None = None
+    wav_path: Path, language: str | None = None, *, vad_filter: bool = True,
+    deadline: float | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Run faster-whisper on `wav_path`. Returns (lyrics_txt, lyrics_json).
 
@@ -291,7 +307,7 @@ def _transcribe(
         try:
             detected, prob, _ = model.detect_language(
                 str(wav_path),
-                vad_filter=True,
+                vad_filter=vad_filter,
                 language_detection_segments=4,
             )
         except Exception:  # detection probe is best-effort; keep the hint
@@ -305,7 +321,7 @@ def _transcribe(
         beam_size=5,
         word_timestamps=True,
         condition_on_previous_text=False,
-        vad_filter=True,
+        vad_filter=vad_filter,
         vad_parameters=dict(
             min_silence_duration_ms=500,
             speech_pad_ms=400,
@@ -319,10 +335,14 @@ def _transcribe(
     segments: list[dict[str, Any]] = []
     text_lines: list[str] = []
     for seg in segments_iter:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("crop transcription retry deadline exceeded")
         seg_dict: dict[str, Any] = {
             "start": seg.start,
             "end": seg.end,
             "text": seg.text,
+            "avg_logprob": getattr(seg, "avg_logprob", None),
+            "no_speech_prob": getattr(seg, "no_speech_prob", None),
         }
         if seg.words:
             seg_dict["words"] = [
@@ -457,7 +477,8 @@ def _voiced_overlap(start: float, end: float, regions: list[tuple[float, float]]
 
 
 def _force_align_to_lrc(
-    vocals_wav: Path, text: str, language: str
+    vocals_wav: Path, text: str, language: str,
+    diagnostics: dict[str, Any] | None = None,
 ) -> tuple[str, list[float | None]]:
     """Force-align ``text`` against the ``vocals_wav`` stem → Enhanced LRC.
 
@@ -496,7 +517,8 @@ def _force_align_to_lrc(
     word_timestamps = postprocess_results(text_starred, spans, stride, scores)
 
     return _word_timestamps_to_lrc(
-        word_timestamps, text, stride=stride, voiced=_voiced_regions(vocals_wav)
+        word_timestamps, text, stride=stride, voiced=_voiced_regions(vocals_wav),
+        diagnostics=diagnostics,
     )
 
 
@@ -505,6 +527,7 @@ def _word_timestamps_to_lrc(
     text: str,
     stride: float | None = None,
     voiced: list[tuple[float, float]] | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> tuple[str, list[float | None]]:
     """Build an Enhanced LRC from ctc-forced-aligner word timestamps.
 
@@ -562,51 +585,82 @@ def _word_timestamps_to_lrc(
             n,
             total_words,
         )
-    for line in lines:
+    evidence: list[dict[str, Any]] = []
+    for line_index, line in enumerate(lines):
         words = line.split()
         if not words:
             continue
         line_ts = word_timestamps[wi : wi + len(words)]
         wi += len(words)
+        score = _line_avg_logprob(line_ts, stride) if line_ts else None
         if not line_ts:
-            # Ran out of aligned words (tokenization drift): keep the line
-            # plain (no word tags), timed at the end of the last aligned word.
-            # A plain line is a valid Enhanced-LRC line — consumers fall back
-            # to a linear line wipe for it.
             start = float(word_timestamps[-1].get("end") or 0.0) if n else 0.0
-            out.append(f"{_fmt_lrc_timestamp(start)}{line.strip()}")
-            out_scores.append(None)
-            continue
-        if _line_below_confidence(line_ts, stride):
-            LOG.info("dropping low-confidence aligned line: %r", line.strip())
-            continue
-        # VAD veto (#247): monotonic CTC MUST place every input line somewhere,
-        # so text absent from this audio edit lands on instrumental sections —
-        # with locally-plausible scores (band bleed). Overlap is measured over
-        # the individual WORD spans (sum covered / sum span), not the whole
-        # first-to-last window: a sung line with a long internal instrumental
-        # gap or an absorbed-silence first word must not dilute its own
-        # denominator. Timestamps here are seconds (postprocess_results
-        # converts frames via stride — same units the LRC tags are built from).
-        if voiced is not None:
-            total_span = 0.0
-            covered = 0.0
-            for ts in line_ts:
-                w0 = float(ts.get("start") or 0.0)
-                w1 = float(ts.get("end") or w0)
-                if w1 <= w0:
-                    continue
-                total_span += w1 - w0
-                covered += _voiced_overlap(w0, w1, voiced) * (w1 - w0)
-            if total_span > 0 and covered / total_span < _ALIGN_MIN_VOICED_OVERLAP:
-                LOG.info("VAD veto: aligned line not sung: %r", line.strip())
-                continue
-        if emit_word_tags:
-            out.append(_enhanced_lrc_line(words, line_ts))
+            raw_line = f"{_fmt_lrc_timestamp(start)}{line.strip()}"
+            end = start
         else:
             start = float(line_ts[0].get("start") or 0.0)
-            out.append(f"{_fmt_lrc_timestamp(start)}{line.strip()}")
-        out_scores.append(_line_avg_logprob(line_ts, stride))
+            end = float(line_ts[-1].get("end") or start)
+            raw_line = (
+                _enhanced_lrc_line(words, line_ts) if emit_word_tags
+                else f"{_fmt_lrc_timestamp(start)}{line.strip()}"
+            )
+        reasons: list[str] = []
+        if _line_below_confidence(line_ts, stride):
+            reasons.append("low_alignment_score")
+        if voiced is not None and line_ts:
+            total_span = sum(max(0.0, float(w.get("end") or 0) -
+                                 float(w.get("start") or 0)) for w in line_ts)
+            covered = sum(
+                _voiced_overlap(float(w.get("start") or 0),
+                                float(w.get("end") or 0), voiced)
+                * max(0.0, float(w.get("end") or 0) - float(w.get("start") or 0))
+                for w in line_ts
+            )
+            if total_span > 0 and covered / total_span < _ALIGN_MIN_VOICED_OVERLAP:
+                reasons.append("low_voiced_overlap")
+        # Keep the legacy rendering contract, but never conceal token drift
+        # from the coordinator's quality gate or use drifted rows as anchors.
+        timing_issues = [] if emit_word_tags else ["token_count_mismatch"]
+        if not line_ts:
+            timing_issues.append("no_word_timestamps")
+        elif any(
+            not math.isfinite(float(w.get("start") or 0))
+            or not math.isfinite(float(w.get("end") or 0))
+            or float(w.get("end") or 0) <= float(w.get("start") or 0)
+            for w in line_ts
+        ):
+            timing_issues.append("invalid_word_timestamps")
+        if line_ts and emit_word_tags:
+            starts = [float(w.get("start") or 0) for w in line_ts]
+            ends = [float(w.get("end") or 0) for w in line_ts]
+            if any(b - a > 8 for a, b in zip(starts, ends, strict=True)):
+                timing_issues.append("long_word_span")
+            if any(starts[i] - ends[i - 1] > 4 for i in range(1, len(starts))):
+                timing_issues.append("internal_word_gap")
+            if len(starts) > 1:
+                chars = len(" ".join(words[:-1]))
+                if chars / max(starts[-1] - starts[0], 0.05) > 30:
+                    timing_issues.append("implausible_word_pace")
+        evidence.append({
+            "line_index": line_index, "text": line.strip(), "raw_lrc": raw_line,
+            "start": start, "end": end, "score": score, "kept": not reasons,
+            "rejection_reasons": reasons, "timing_issues": timing_issues,
+            "words": [dict(w) for w in line_ts],
+        })
+        if not reasons:
+            out.append(raw_line)
+            out_scores.append(score)
+    numeric = sorted(row["score"] for row in evidence if row["score"] is not None)
+    if len(numeric) >= 8:
+        median = numeric[len(numeric) // 2]
+        mad = sorted(abs(score - median) for score in numeric)[len(numeric) // 2]
+        cutoff = median - 2 * max(mad, 0.25)
+        for row in evidence:
+            if row["score"] is not None and row["score"] < cutoff:
+                row["timing_issues"].append("relative_score_outlier")
+    if diagnostics is not None:
+        diagnostics.update(schema_version=1, lines=evidence, retries=[])
+        diagnostics["raw_lrc"] = "\n".join(row["raw_lrc"] for row in evidence)
     return "\n".join(out), out_scores
 
 
@@ -620,7 +674,7 @@ def _enhanced_lrc_line(words: list[str], line_ts: list[dict[str, Any]]) -> str:
     aligned word's ``end`` (the line's sung end).
     """
     tokens: list[str] = []
-    for word, ts in zip(words, line_ts):
+    for word, ts in zip(words, line_ts, strict=False):
         w_start = float(ts.get("start") or 0.0)
         tokens.append(f"{_fmt_lrc_word_tag(w_start)}{word}")
     # Words with no aligned timestamp (intra-line drift) ride untagged.
@@ -670,6 +724,409 @@ def _line_below_confidence(
     """
     avg = _line_avg_logprob(line_ts, stride)
     return avg is not None and avg < _ALIGN_MIN_AVG_LOGPROB
+
+
+# Retry limits are deliberately fixed: these are short recovery probes inside
+# the existing GPU job, never another separation or a whole-track ASR pass.
+_RETRY_MAX_CROPS = 12
+_RETRY_MAX_CROP_SECONDS = 25.0
+_RETRY_MAX_AUDIO_SECONDS = 60.0
+
+
+def _norm_word(word: str) -> str:
+    return re.sub(r"[\W_]", "", word.casefold())
+
+
+def _asr_words(transcript: dict[str, Any]) -> list[dict[str, Any]]:
+    return [dict(w) for seg in transcript.get("segments", [])
+            for w in seg.get("words", []) if _norm_word(str(w.get("word", "")))]
+
+
+def _matching_word_runs(text: str, words: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    expected = [_norm_word(w) for w in text.split() if _norm_word(w)]
+    actual = [_norm_word(str(w.get("word", ""))) for w in words]
+    if not expected:
+        return []
+    return [words[i:i + len(expected)] for i in range(len(words) - len(expected) + 1)
+            if actual[i:i + len(expected)] == expected]
+
+
+def _plausible_words(words: list[dict[str, Any]], start: float, end: float) -> bool:
+    """Reject degenerate, overlapping, low-confidence or out-of-crop ASR words."""
+    previous_end = start
+    probabilities: list[float] = []
+    for word in words:
+        try:
+            a, b = float(word["start"]), float(word["end"])
+            probability = float(word["probability"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if not all(math.isfinite(v) for v in (a, b, probability)):
+            return False
+        if a < start or b > end or b - a < 0.04 or b - a > 8 or a < previous_end - 0.02:
+            return False
+        if probabilities and a - previous_end > 4:
+            return False
+        if probability < 0.3 or probability > 1:
+            return False
+        probabilities.append(probability)
+        previous_end = b
+    return bool(probabilities) and sum(probabilities) / len(probabilities) >= 0.65
+
+
+def _corroborated_anchor(row: dict[str, Any], words: list[dict[str, Any]]) -> tuple[float, float] | None:
+    if not row["kept"] or row.get("timing_issues"):
+        return None
+    for run in _matching_word_runs(row["text"], words):
+        if not _plausible_words(run, 0, float("inf")):
+            continue
+        a, b = float(run[0]["start"]), float(run[-1]["end"])
+        if abs(a - row["start"]) <= 2 and abs(b - row["end"]) <= 2:
+            return a, b
+    return None
+
+
+def _transcribe_crop(
+    vocals_wav: Path, start: float, end: float, language: str | None, deadline: float,
+) -> dict[str, Any]:
+    """Decode one vocal crop without VAD or a supplied lyric prompt.
+
+    ffmpeg is already part of this image. The deadline is cooperative during
+    model decoding (checked between segments); RunPod/coordinator retain the
+    hard job timeout. No additional GPU job is created.
+    """
+    with tempfile.TemporaryDirectory(prefix="kar-retry-") as tmp:
+        crop = Path(tmp) / "vocals.wav"
+        subprocess.run(
+            ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+             "-ss", str(start), "-i", str(vocals_wav), "-t", str(end - start),
+             "-ac", "1", "-ar", "16000", str(crop)],
+            check=True, capture_output=True, timeout=max(0.1, min(10, deadline - time.monotonic())),
+        )
+        if time.monotonic() >= deadline:
+            raise TimeoutError("crop extraction exhausted retry deadline")
+        _, transcript = _transcribe(crop, language, vad_filter=False, deadline=deadline)
+        return transcript
+
+
+def _trusted_asr_segment(segment: dict[str, Any]) -> bool:
+    logprob, silence = segment.get("avg_logprob"), segment.get("no_speech_prob")
+    return (isinstance(logprob, (int, float)) and math.isfinite(logprob)
+            and logprob >= -1 and isinstance(silence, (int, float))
+            and math.isfinite(silence) and 0 <= silence < 0.6)
+
+
+def _retry_window(
+    index: int, rows: list[dict[str, Any]], anchors: dict[int, tuple[float, float]],
+    full_words: list[dict[str, Any]], duration: float | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Propose an audio window, never output timing, inside independent bounds.
+
+    Include nearby complete anchor phrases instead of clipping precisely at
+    their ends. Do not stretch a short target over an unrelated instrumental
+    gap. File boundaries are valid one-sided bounds when duration is known.
+    """
+    left = max((i for i in anchors if i < index), default=None)
+    right = min((i for i in anchors if i > index), default=None)
+    if left is None and right is None and (duration is None or duration > _RETRY_MAX_CROP_SECONDS):
+        return None, "no_corroborated_anchor"
+    if (left is None or right is None) and duration is None:
+        return None, "audio_duration_unavailable_for_edge"
+    lower = anchors[left][1] if left is not None else 0.0
+    upper = anchors[right][0] if right is not None else duration
+    assert upper is not None
+    row = rows[index]
+    target_start, target_end = row["start"], row["end"]
+    # An exact ASR text run may locate the target even when one low-confidence
+    # token prevents accepting its timing. It is a crop proposal, not a repair.
+    for run in _matching_word_runs(row["text"], full_words):
+        a, b = float(run[0]["start"]), float(run[-1]["end"])
+        if abs(a - target_start) <= 2 and lower <= a < b <= upper:
+            target_start, target_end = a, b
+            break
+    if not all(math.isfinite(value) for value in (target_start, target_end, lower, upper)):
+        return None, "invalid_candidate_bounds"
+    if upper <= lower or target_start < lower - 2 or target_start >= upper:
+        return None, "candidate_outside_anchor_bounds"
+    target_start = max(target_start, lower)
+    # Absorbed-silence tails must not turn into a whole-track crop. A word-count
+    # envelope only bounds the retry search; accepted words still need actual
+    # independent ASR timestamps and unchanged confidence gates.
+    max_target_span = min(15.0, max(5.0, len(row["text"].split()) * 1.5))
+    target_end = min(upper, max(target_start + 0.5, min(target_end, target_start + max_target_span)))
+    if target_end <= target_start:
+        return None, "invalid_candidate_bounds"
+    start, end = max(0.0, target_start - 2), target_end + 2
+    if left is not None and target_start - anchors[left][1] <= 2:
+        start = min(start, max(0.0, anchors[left][0] - 0.5))
+    if right is not None and anchors[right][0] - target_end <= 2:
+        end = max(end, anchors[right][1] + 0.5)
+    if end - start < 6:
+        padding = (6 - (end - start)) / 2
+        start, end = max(0.0, start - padding), end + padding
+    if duration is not None:
+        end = min(end, duration)
+    if end - start > _RETRY_MAX_CROP_SECONDS:
+        return None, "context_window_out_of_bounds"
+    return dict(start=start, end=end, lower=lower, upper=upper,
+                left_anchor=rows[left]["line_index"] if left is not None else None,
+                right_anchor=rows[right]["line_index"] if right is not None else None,
+                boundary_start=left is None, boundary_end=right is None), None
+
+
+def _alternate_retry_window(
+    start: float, end: float, segments: list[dict[str, Any]], duration: float | None,
+) -> tuple[tuple[float, float] | None, str | None]:
+    """Include complete neighboring ASR phrases, without searching lyric variants."""
+    phrases = []
+    for segment in segments:
+        words = segment.get("words", [])
+        if not words:
+            continue
+        try:
+            a, b = float(words[0]["start"]), float(words[-1]["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(a) and math.isfinite(b) and 0 <= a < b:
+            phrases.append((a, b))
+    left = [(a, b) for a, b in phrases if a < start and start - 3 <= b]
+    right = [(a, b) for a, b in phrases if b > end and a <= end + 3]
+    a, b = start, end
+    if left:
+        a = max(0.0, max(left, key=lambda pair: pair[0])[0] - .5)
+    if right:
+        b = min(right, key=lambda pair: pair[1])[1] + .5
+    if duration is not None:
+        b = min(b, duration)
+    if a == start and b == end:
+        return None, "no_alternate_phrase_context"
+    if b - a > _RETRY_MAX_CROP_SECONDS:
+        return None, "alternate_context_out_of_bounds"
+    return (a, b), None
+
+
+def _confidence_only_failure(words: list[dict[str, Any]], start: float, end: float) -> bool:
+    """Permit another context only for valid timestamps and real low confidence."""
+    probabilities = [word.get("probability") for word in words]
+    if not all(isinstance(p, (int, float)) and math.isfinite(p) and 0 <= p <= 1
+               for p in probabilities):
+        return False
+    return (not _plausible_words(words, start, end)
+            and _plausible_words([dict(word, probability=1.) for word in words], start, end))
+
+
+def _retry_problem_lines(
+    vocals_wav: Path, diagnostics: dict[str, Any], transcript: dict[str, Any],
+    original_lrc: str, original_scores: list[float | None], *, deadline: float,
+) -> tuple[str, list[float | None]]:
+    """Use existing independent evidence first, then budget contextual crops.
+
+    Missing text precedes timing-only problems. Overlapping windows share one
+    decode. Budgets are audio seconds and wall time, with a defensive call cap;
+    no reference text is ever supplied as a decoder prompt.
+    """
+    rows = diagnostics["lines"]
+    original_segments = [s for s in transcript.get("segments", []) if isinstance(s, dict)]
+    trusted_segments = [s for s in original_segments if _trusted_asr_segment(s)]
+    # An unsafe decoded phrase is a barrier, not silence to splice across.
+    full_words = _asr_words({"segments": [
+        seg if _trusted_asr_segment(seg) else {"words": [{"word": "__untrusted_segment__"}]}
+        for seg in original_segments
+    ]})
+    anchors = {i: anchor for i, row in enumerate(rows)
+               if (anchor := _corroborated_anchor(row, full_words)) is not None}
+    duration = transcript.get("duration")
+    duration = (float(duration) if isinstance(duration, (int, float))
+                and math.isfinite(duration) and duration > 0 else None)
+    attempts = 0
+    audio_seconds = 0.0
+    recovered: dict[int, str] = {}
+    recovered_spans: dict[int, tuple[float, float]] = {}
+    records: dict[int, dict[str, Any]] = {}
+    pending: list[int] = []
+    diagnostics["retry_budget"] = {
+        "max_crops": _RETRY_MAX_CROPS, "max_crop_seconds": _RETRY_MAX_CROP_SECONDS,
+        "max_audio_seconds": _RETRY_MAX_AUDIO_SECONDS, "max_wall_seconds": 60,
+    }
+
+    def accept(index: int, candidate: list[dict[str, Any]]) -> str | None:
+        if len(candidate) != len(rows[index]["text"].split()):
+            return "source_word_token_mismatch"
+        a, b = float(candidate[0]["start"]), float(candidate[-1]["end"])
+        for other, (x, y) in recovered_spans.items():
+            if max(a, x) < min(b, y):
+                return "retry_word_span_already_used"
+            if (other < index and y > a) or (other > index and x < b):
+                return "retry_word_order_conflict"
+        recovered[index] = _enhanced_lrc_line(rows[index]["text"].split(), candidate)
+        recovered_spans[index] = (a, b)
+        return None
+
+    # Exact, well-timed words already decoded over the full vocal need no
+    # additional model call. Keep full trusted segments as audit evidence.
+    for index, row in enumerate(rows):
+        if row["kept"] and not row.get("timing_issues"):
+            continue
+        record: dict[str, Any] = {"line_index": row["line_index"], "outcome": "skipped"}
+        records[index] = record
+        left = max((i for i in anchors if i < index), default=None)
+        right = min((i for i in anchors if i > index), default=None)
+        lower = anchors[left][1] if left is not None else 0.0
+        upper = anchors[right][0] if right is not None else duration
+        if upper is not None:
+            for run in _matching_word_runs(row["text"], full_words):
+                if abs(float(run[0]["start"]) - row["start"]) > 2:
+                    continue
+                if not _plausible_words(run, lower, upper) or accept(index, run) is not None:
+                    continue
+                a, b = recovered_spans[index]
+                evidence = [dict(seg, source="independent_full_asr") for seg in trusted_segments
+                            if any(float(w["start"]) < b and float(w["end"]) > a
+                                   for w in seg.get("words", []))]
+                record.update(outcome="accepted", reason="independent_full_asr_match",
+                              evidence_source="full_asr", start=a, end=b,
+                              words=run, evidence_segments=evidence)
+                anchors[index] = (a, b)
+                break
+        if index not in recovered:
+            pending.append(index)
+
+    # Plan first, then merge overlapping contexts. A shared phrase/chorus gap
+    # must never consume two model calls merely because it contains two rows.
+    windows: list[dict[str, Any]] = []
+    for index in pending:
+        window, reason = _retry_window(index, rows, anchors, full_words, duration)
+        if window is None:
+            records[index]["reason"] = reason
+            continue
+        records[index].update(window)
+        windows.append(dict(start=window["start"], end=window["end"], indices=[index]))
+    windows.sort(key=lambda w: w["start"])
+    groups: list[dict[str, Any]] = []
+    for window in windows:
+        if (groups and window["start"] <= groups[-1]["end"]
+                and max(window["end"], groups[-1]["end"]) - groups[-1]["start"] <= _RETRY_MAX_CROP_SECONDS):
+            groups[-1]["end"] = max(groups[-1]["end"], window["end"])
+            groups[-1]["indices"].extend(window["indices"])
+        else:
+            groups.append(window)
+
+    def priority(group: dict[str, Any]) -> tuple:
+        members = [rows[i] for i in group["indices"]]
+        missing = any(not row["kept"] for row in members)
+        unsupported = any(not _matching_word_runs(row["text"], full_words) for row in members)
+        scores = [row["score"] for row in members if isinstance(row.get("score"), (int, float))]
+        return (0 if missing else 1 if unsupported else 2, min(scores, default=0), group["start"])
+
+    queue = [dict(group, phase="primary") for group in sorted(groups, key=priority)]
+    planned_bounds = {(group["start"], group["end"]) for group in queue}
+    for group in queue:
+        start, end = group["start"], group["end"]
+        seconds = end - start
+        phase = group["phase"]
+        reason = None
+        if attempts >= _RETRY_MAX_CROPS or audio_seconds + seconds > _RETRY_MAX_AUDIO_SECONDS:
+            reason = "retry_audio_budget_exhausted"
+        elif time.monotonic() + 10 >= deadline:
+            reason = "retry_time_budget_exhausted"
+        if reason:
+            for index in group["indices"]:
+                skipped = dict(outcome="skipped", reason=reason, start=start, end=end,
+                               attempt_phase=phase)
+                records[index].setdefault("attempts", []).append(skipped)
+                if phase == "primary":
+                    records[index].update(skipped)
+                else:
+                    records[index]["alternate_skipped_reason"] = reason
+            continue
+        attempts += 1
+        audio_seconds += seconds
+        attempt_id = f"crop-{attempts - 1}"
+        meta = dict(attempt_id=attempt_id, attempt_phase=phase, crop_start=start, crop_end=end,
+                    crop_index=attempts - 1)
+        if group.get("replaces_attempt_id"):
+            meta["replaces_attempt_id"] = group["replaces_attempt_id"]
+        results = {index: dict(outcome="rejected", start=start, end=end,
+                              evidence_source="crop_asr", confidence_only_failure=False, **meta)
+                   for index in group["indices"]}
+        confidence_failures = []
+        try:
+            crop_asr = _transcribe_crop(vocals_wav, start, end,
+                                        transcript.get("language"), deadline)
+            safe_segments = [seg if _trusted_asr_segment(seg)
+                             else {"words": [{"word": "__untrusted_segment__"}]}
+                             for seg in crop_asr.get("segments", [])]
+            evidence_segments = []
+            for segment in safe_segments:
+                if "avg_logprob" not in segment:
+                    continue
+                evidence_words = [dict(w, start=float(w["start"]) + start,
+                                       end=float(w["end"]) + start)
+                                  for w in segment.get("words", [])]
+                evidence_segments.append(dict(
+                    segment, start=float(segment.get("start", 0)) + start,
+                    end=float(segment.get("end", seconds)) + start,
+                    words=evidence_words, source="independent_crop_asr", **meta,
+                ))
+            if evidence_segments:
+                transcript.setdefault("retry_segments", []).extend(evidence_segments)
+            crop_words = _asr_words({"segments": safe_segments})
+            for index in group["indices"]:
+                record = results[index]
+                record.update(transcript=crop_asr, evidence_segments=evidence_segments,
+                              reason="text_not_corroborated")
+                lower, upper = records[index]["lower"] - start, records[index]["upper"] - start
+                confidence_failed = False
+                for candidate in _matching_word_runs(rows[index]["text"], crop_words):
+                    if not _plausible_words(candidate, lower, upper):
+                        confidence_failed |= _confidence_only_failure(candidate, lower, upper)
+                        record["reason"] = "implausible_word_timing_or_confidence"
+                        continue
+                    shifted = [dict(w, start=float(w["start"]) + start,
+                                    end=float(w["end"]) + start) for w in candidate]
+                    problem = accept(index, shifted)
+                    if problem:
+                        record["reason"] = problem
+                        continue
+                    record.update(outcome="accepted", reason="independent_crop_asr_match", words=shifted)
+                    break
+                if record["outcome"] != "accepted" and confidence_failed:
+                    record["confidence_only_failure"] = True
+                    confidence_failures.append(index)
+        except Exception as exc:
+            for record in results.values():
+                record.update(outcome="failed", reason=type(exc).__name__)
+            confidence_failures = []
+        for index, record in results.items():
+            records[index].setdefault("attempts", []).append(dict(record))
+            records[index].update(record)
+        # Appending after the pre-planned primary queue gives every initial
+        # problem a chance before spending any budget on another context.
+        if phase == "primary" and confidence_failures:
+            alternate, reason = _alternate_retry_window(start, end, trusted_segments, duration)
+            if alternate is not None and alternate in planned_bounds:
+                alternate, reason = None, "alternate_context_already_planned"
+            if alternate is None:
+                for index in confidence_failures:
+                    records[index]["alternate_skipped_reason"] = reason
+            else:
+                planned_bounds.add(alternate)
+                queue.append(dict(start=alternate[0], end=alternate[1], indices=confidence_failures,
+                                  phase="alternate", replaces_attempt_id=attempt_id))
+    diagnostics["retries"] = [records[index] for index in sorted(records)]
+    diagnostics["retry_budget"].update(crops_used=attempts, audio_seconds_used=audio_seconds)
+    if not recovered:
+        return original_lrc, original_scores
+    lrc: list[str] = []
+    scores: list[float | None] = []
+    for index, row in enumerate(rows):
+        if index in recovered:
+            lrc.append(recovered[index])
+            scores.append(None)
+        elif row["kept"]:
+            lrc.append(row["raw_lrc"])
+            scores.append(row["score"])
+    return "\n".join(lrc), scores
 
 
 def _put_file(path: Path, presigned_url: str, content_type: str) -> None:
@@ -772,24 +1229,6 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         if mode in ("demucs", "both"):
             out_dir = tmp_path / "out"
             vocals_path, instrumental_path = _run_separation(in_wav, out_dir)
-            # Force-align supplied plain lyrics against the vocal stem (#55).
-            # Best-effort: a failure here must NOT fail the job — the
-            # coordinator falls back to the plain text / Whisper transcript.
-            if want_align:
-                try:
-                    lrc, line_scores = _force_align_to_lrc(
-                        vocals_path, align_text, align_lang
-                    )
-                    if lrc.strip():
-                        result["aligned_lrc"] = lrc
-                        result["aligned_lang"] = align_lang
-                        # Per emitted line: mean per-frame logprob (or null).
-                        # The coordinator drops relative outliers (#244).
-                        result["aligned_line_scores"] = line_scores
-                    else:
-                        LOG.warning("force-align produced empty LRC; omitting")
-                except Exception as exc:  # noqa: BLE001 — never fatal
-                    LOG.warning("force-align failed (%s); omitting aligned_lrc", exc)
             if use_put:
                 _put_file(vocals_path, vocals_put_url, "audio/wav")
                 _put_file(instrumental_path, instrumental_put_url, "audio/wav")
@@ -806,12 +1245,195 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
             result["lyrics_txt"] = lyrics_txt
             result["lyrics_json"] = lyrics_json
 
+        if want_align and vocals_path is not None:
+            diagnostics: dict[str, Any] = {"schema_version": 1, "lines": [], "retries": []}
+            try:
+                lrc, line_scores = _force_align_to_lrc(
+                    vocals_path, align_text, align_lang, diagnostics=diagnostics
+                )
+                if mode == "both" and diagnostics.get("lines"):
+                    # Reserve time for returning outputs; never extend the
+                    # coordinator's existing wall/cost ceiling for retries.
+                    budget = max(0.0, min(float(job_input.get("job_budget_s", 1200)), 1200))
+                    deadline = min(time.monotonic() + 60, started + budget - 30)
+                    try:
+                        lrc, line_scores = _retry_problem_lines(
+                            vocals_path, diagnostics, result["lyrics_json"],
+                            lrc, line_scores, deadline=deadline,
+                        )
+                    except Exception as exc:  # retries cannot destroy valid baseline output
+                        diagnostics["retry_error"] = type(exc).__name__
+                        LOG.warning("alignment retries failed (%s); preserving baseline", exc)
+                if lrc.strip():
+                    result.update(aligned_lrc=lrc, aligned_lang=align_lang,
+                                  aligned_line_scores=line_scores)
+            except Exception as exc:
+                diagnostics["alignment_error"] = type(exc).__name__
+                LOG.warning("force-align failed (%s); omitting aligned_lrc", exc)
+            raw = diagnostics.pop("raw_lrc", "")
+            if raw:
+                result["aligned_raw_lrc"] = raw
+            result["aligned_diagnostics"] = diagnostics
+
     result["gpu_model"] = _gpu_model_name()
     result["elapsed_s"] = round(time.monotonic() - started, 3)
     return result
 
 
+# --------------------------------------------------------------------------
+# CPU-only image selfcheck (#279; prevents a repeat of #263).
+#
+# CI runs this right after pushing a GPU image tag (`docker run <tag>
+# --selfcheck`, or KARAOKE_SELFCHECK=1): it eagerly imports every heavy
+# dependency the worker otherwise imports lazily at job time, and verifies the
+# baked model artifacts exist with plausible sizes — so a build that lost a
+# model-cache layer or shipped a broken venv fails the workflow instead of
+# shipping an unbootable image that only dies on the first real job.
+# It MUST NOT require a GPU: torch is imported but torch.cuda is never
+# initialized (only static build metadata is read).
+
+# Modules the worker imports lazily inside functions; a broken install of any
+# of them would otherwise surface only on the first real job.
+_SELFCHECK_IMPORTS = (
+    "torch",
+    "torchaudio",
+    "audio_separator.separator",
+    "faster_whisper",
+    "ctc_forced_aligner",
+    "runpod",
+)
+
+# Size floors for the baked model artifacts — generous fractions of the real
+# sizes (BS-Roformer ckpt ~639 MB, whisper model.bin ~1.6 GB, MMS-300m weights
+# ~1.2 GB) so a truncated or placeholder file fails while a future smaller
+# model revision still passes.
+_SELFCHECK_MIN_SEP_BYTES = 100 * 1024 * 1024
+_SELFCHECK_MIN_WHISPER_BYTES = 500 * 1024 * 1024
+_SELFCHECK_MIN_ALIGN_BYTES = 100 * 1024 * 1024
+
+
+def _hf_hub_dir() -> Path:
+    """The huggingface_hub cache dir models download into (``$HF_HOME/hub``)."""
+    hf_home = Path(os.environ.get("HF_HOME", "~/.cache/huggingface")).expanduser()
+    return hf_home / "hub"
+
+
+def _hf_repo_dir(repo_id: str) -> Path:
+    """The HF hub cache dir for one repo (``models--org--name``)."""
+    return _hf_hub_dir() / ("models--" + repo_id.replace("/", "--"))
+
+
+def _selfcheck_whisper_dirs() -> list[Path]:
+    """HF cache dirs that may hold the baked faster-whisper model.
+
+    Prefer the exact repo faster-whisper resolves ``_WHISPER_MODEL_NAME`` to
+    (private mapping — best-effort); fall back to globbing the hub for any
+    ``*whisper*`` model dir, which is unambiguous inside the image (exactly one
+    whisper model is baked).
+    """
+    try:
+        from faster_whisper.utils import _MODELS  # type: ignore
+
+        repo = _MODELS.get(_WHISPER_MODEL_NAME)
+    except Exception:
+        repo = None
+    if repo:
+        return [_hf_repo_dir(repo)]
+    return sorted(_hf_hub_dir().glob("models--*whisper*"))
+
+
+def _size_or_zero(path: Path) -> int:
+    """``path``'s size in bytes; 0 when missing (e.g. a broken HF symlink)."""
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _selfcheck_file(
+    label: str, path: Path, min_bytes: int, failures: list[str]
+) -> None:
+    """Record a failure unless ``path`` exists with at least ``min_bytes``."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        failures.append(f"{label}: missing at {path}")
+        return
+    if size < min_bytes:
+        failures.append(
+            f"{label}: {path} is {size} bytes (< {min_bytes} required)"
+        )
+    else:
+        print(f"selfcheck: {label} ok ({size / 1e6:.0f} MB) at {path}")
+
+
+def _selfcheck() -> int:
+    """CPU-only boot-verify of the built image. Returns a process exit code."""
+    failures: list[str] = []
+
+    for mod_name in _SELFCHECK_IMPORTS:
+        try:
+            mod = importlib.import_module(mod_name)
+        except Exception as exc:  # noqa: BLE001 — report, don't crash the check
+            failures.append(f"import {mod_name} failed: {exc!r}")
+        else:
+            version = getattr(mod, "__version__", "?")
+            print(f"selfcheck: import {mod_name} ok ({version})")
+            if mod_name == "torch":
+                # Static build metadata only — must not initialize CUDA.
+                print(f"selfcheck: torch cuda build: {mod.version.cuda}")
+
+    # BS-Roformer checkpoint pre-cached by the Dockerfile into the dir the
+    # handler loads from at job time.
+    _selfcheck_file(
+        "separator checkpoint",
+        Path(_SEP_MODEL_DIR) / _SEP_MODEL,
+        _SELFCHECK_MIN_SEP_BYTES,
+        failures,
+    )
+
+    # faster-whisper model weights in the HF hub cache.
+    whisper_dirs = _selfcheck_whisper_dirs()
+    whisper_bins = [p for d in whisper_dirs for p in sorted(d.rglob("model.bin"))]
+    if not whisper_bins:
+        failures.append(
+            "whisper model.bin: not found under "
+            f"{[str(d) for d in whisper_dirs] or [str(_hf_hub_dir())]}"
+        )
+    else:
+        best = max(whisper_bins, key=_size_or_zero)
+        _selfcheck_file(
+            "whisper model.bin", best, _SELFCHECK_MIN_WHISPER_BYTES, failures
+        )
+
+    # ctc-forced-aligner MMS-300m weights in the HF hub cache.
+    align_dir = _hf_repo_dir(_ALIGN_MODEL_ID)
+    align_weights = [
+        p
+        for pattern in ("*.safetensors", "pytorch_model.bin")
+        for p in sorted(align_dir.rglob(pattern))
+    ]
+    if not align_weights:
+        failures.append(f"aligner weights: none found under {align_dir}")
+    else:
+        best = max(align_weights, key=_size_or_zero)
+        _selfcheck_file(
+            "aligner weights", best, _SELFCHECK_MIN_ALIGN_BYTES, failures
+        )
+
+    if failures:
+        for failure in failures:
+            print(f"selfcheck: FAIL {failure}")
+        print(f"selfcheck: FAILED ({len(failures)} problem(s))")
+        return 1
+    print("selfcheck: OK — imports and baked model files verified (CPU-only)")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--selfcheck" in sys.argv[1:] or os.environ.get("KARAOKE_SELFCHECK") == "1":
+        sys.exit(_selfcheck())
+
     import runpod
 
     runpod.serverless.start({"handler": handler})

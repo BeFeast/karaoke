@@ -238,25 +238,52 @@ def _flush_workers(token: str, endpoint_id: str) -> None:
         file=sys.stderr,
     )
     _request("PATCH", f"/endpoints/{endpoint_id}", token, {"workersMax": 0})
-    deadline = time.monotonic() + _FLUSH_DRAIN_TIMEOUT_S
-    drained = False
-    while time.monotonic() < deadline:
-        if _endpoint_worker_count(token, endpoint_id) == 0:
-            drained = True
-            break
-        time.sleep(_FLUSH_POLL_INTERVAL_S)
-    if drained:
-        print("# workers drained to 0", file=sys.stderr)
-    else:
-        print(
-            f"# WARN: workers did not confirm drain within "
-            f"{_FLUSH_DRAIN_TIMEOUT_S:.0f}s; restoring workersMax anyway",
-            file=sys.stderr,
-        )
-    _request(
-        "PATCH", f"/endpoints/{endpoint_id}", token, {"workersMax": target_max}
-    )
-    print(f"# restored workersMax={target_max}", file=sys.stderr)
+    # From this point the endpoint is PAUSED (workersMax=0). The restore PATCH
+    # below MUST run no matter how the drain wait dies (KeyboardInterrupt,
+    # timeout, any request exception) — a flush that dies here otherwise leaves
+    # the endpoint paused indefinitely (incident #279: karaoke-poc sat at
+    # workersMax=0 for ~a week after a died flush).
+    try:
+        deadline = time.monotonic() + _FLUSH_DRAIN_TIMEOUT_S
+        drained = False
+        while time.monotonic() < deadline:
+            if _endpoint_worker_count(token, endpoint_id) == 0:
+                drained = True
+                break
+            time.sleep(_FLUSH_POLL_INTERVAL_S)
+        if drained:
+            print("# workers drained to 0", file=sys.stderr)
+        else:
+            print(
+                f"# WARN: workers did not confirm drain within "
+                f"{_FLUSH_DRAIN_TIMEOUT_S:.0f}s; restoring workersMax anyway",
+                file=sys.stderr,
+            )
+    finally:
+        try:
+            _request(
+                "PATCH",
+                f"/endpoints/{endpoint_id}",
+                token,
+                {"workersMax": target_max},
+            )
+        except BaseException:
+            # Catch BaseException: _request() raises SystemExit(3) on HTTP or
+            # network errors, and a Ctrl-C during the PATCH is a BaseException
+            # too. Either way the operator must know the endpoint may be stuck.
+            print(
+                f"ERROR: failed to restore workersMax={target_max} on endpoint "
+                f"{endpoint_id} — the endpoint MAY BE LEFT PAUSED "
+                f"(workersMax=0) and will serve NO jobs until fixed. "
+                f"Fix it now with:\n"
+                f'  curl -X PATCH "{API_BASE}/endpoints/{endpoint_id}" '
+                f'-H "Authorization: Bearer $RUNPOD_API_KEY" '
+                f'-H "Content-Type: application/json" '
+                f"-d '{{\"workersMax\": {target_max}}}'",
+                file=sys.stderr,
+            )
+            raise
+        print(f"# restored workersMax={target_max}", file=sys.stderr)
 
 
 def main() -> int:
