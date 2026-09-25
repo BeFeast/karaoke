@@ -39,6 +39,7 @@ from karaoke.api.cookies_store import (
     CookieValidationError,
     validate_netscape_cookies,
 )
+from karaoke.api.lyrics_review import revision, save_review, snapshot
 from karaoke.api.preflight import match_url
 from karaoke.api.ws import forget_job, publish_stage
 from karaoke.config import Settings, get_settings
@@ -271,6 +272,15 @@ class LyricsPayload(BaseModel):
     lines: list[LyricsLine] | None
     plain: str | None
     source: str
+    quality: dict | None = None
+    revision: str | None = None
+    review_job_id: int | None = None
+
+
+class LyricsReviewRequest(BaseModel):
+    lrc: str = Field(max_length=262144)
+    expected_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirm: bool
 
 
 class PreflightOut(BaseModel):
@@ -849,7 +859,7 @@ def _html_escape(s: str | None) -> str:
     )
 
 
-def _render_share_html(job: Job, lyrics_text: str | None) -> str:
+def _render_share_html(job: Job, lyrics_text: str | None, quality: dict | None = None) -> str:
     # Upload jobs (#172) fall back to the uploaded filename, never the raw
     # ``upload://`` sentinel; URL jobs keep falling back to the URL.
     title = job.title or upload_display_name(job.source_url) or "karaoke job"
@@ -884,6 +894,14 @@ def _render_share_html(job: Job, lyrics_text: str | None) -> str:
             '<section class="lyrics"><div class="sec-label">lyrics</div>'
             '<div class="empty">not yet available</div></section>'
         )
+
+    quality_status = (quality or {}).get("status")
+    quality_label = {
+        "checked": "Lyrics automatically checked — not a listening review",
+        "reviewed": "Lyrics reviewed by the owner",
+        "needs_review": "Lyrics need review — words or timing may be incomplete",
+    }.get(quality_status, "Lyrics not checked — words and timing may be incomplete")
+    lyrics_block = f'<p role="status">{_html_escape(quality_label)}</p>' + lyrics_block
 
     downloads: list[str] = []
     if "karaoke" in artifacts_by_kind:
@@ -979,7 +997,8 @@ async def share_page(
         except OSError:
             lyrics_text = None
 
-    return HTMLResponse(_render_share_html(job, lyrics_text))
+    quality = _lyrics_payload(job, settings).quality
+    return HTMLResponse(_render_share_html(job, lyrics_text, quality))
 
 
 # One LRC line timestamp tag, e.g. "[01:23.45]" / "[1:23]" / "[01:23:456]".
@@ -1101,6 +1120,8 @@ def _read_lyrics_source(exports_dir: _PathLib) -> str | None:
     if not isinstance(meta, dict):
         return None
     source = meta.get("lyrics_source")
+    if not isinstance(source, str):
+        source = None
     return source if isinstance(source, str) and source else None
 
 
@@ -1128,6 +1149,7 @@ def _read_text_artifact(path: _PathLib) -> str | None:
 async def share_lyrics(
     job_token: str,
     request: Request,
+    response: Response,
     owner: Owner | None = Depends(resolve_owner),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
@@ -1159,53 +1181,64 @@ async def share_lyrics(
     if not (holds_unlisted_token or is_owner or is_lan):  # pragma: no cover
         raise HTTPException(status_code=404, detail="job not found")
 
-    exports_dir = _PathLib(settings.artifact_root) / job_token / "exports"
-    meta_source = _read_lyrics_source(exports_dir)
+    response.headers["Cache-Control"] = "private, no-store"
+    return _lyrics_payload(job, settings, can_review=is_owner)
 
-    # Instrumental: no lyrics regardless of any stray files.
-    if _metadata_is_instrumental(exports_dir):
-        return LyricsPayload(
-            synced=False,
-            lrc=None,
-            lines=None,
-            plain=None,
-            source=meta_source or "instrumental",
-        )
 
-    lrc_path = exports_dir / "lyrics.lrc"
-    txt_path = exports_dir / "lyrics.txt"
+def _lyrics_payload(job: Job, settings: Settings, *, can_review: bool = False) -> LyricsPayload:
+    exports_dir = _PathLib(settings.artifact_root) / job.job_token / "exports"
+    files = snapshot(exports_dir)
+    try:
+        meta = json.loads(files["metadata.json"] or b"{}")
+        if not isinstance(meta, dict):
+            meta = {}
+    except ValueError:
+        meta = {}
+    quality = meta.get("lyrics_quality")
+    common = {
+        "quality": quality if isinstance(quality, dict) else None,
+        "revision": revision(files),
+        "review_job_id": job.id if can_review and job.status == JobStatus.completed else None,
+    }
+    source = meta.get("lyrics_source")
+    if meta.get("instrumental"):
+        return LyricsPayload(synced=False, lrc=None, lines=None, plain=None,
+                             source=source or "instrumental", **common)
+    lrc_data = files["lyrics.lrc"]
+    plain_data = files["lyrics.txt"]
+    plain = plain_data.decode("utf-8", errors="replace") if plain_data is not None else None
+    if lrc_data is not None:
+        lrc = lrc_data.decode("utf-8", errors="replace")
+        return LyricsPayload(synced=True, lrc=lrc, lines=_parse_lrc_lines(lrc),
+                             plain=plain if plain is not None else _lrc_strip_timestamps(lrc),
+                             source=source or "lrclib_synced", **common)
+    return LyricsPayload(synced=False, lrc=None, lines=None, plain=plain,
+                         source=source or ("whisper_asr" if plain is not None else "none"), **common)
 
-    lrc_text = _read_text_artifact(lrc_path) if lrc_path.is_file() else None
-    if lrc_text is not None:
-        plain = _read_text_artifact(txt_path) if txt_path.is_file() else None
-        if plain is None:
-            plain = _lrc_strip_timestamps(lrc_text)
-        return LyricsPayload(
-            synced=True,
-            lrc=lrc_text,
-            lines=_parse_lrc_lines(lrc_text),
-            plain=plain,
-            source=meta_source or "lrclib_synced",
-        )
 
-    plain = _read_text_artifact(txt_path) if txt_path.is_file() else None
-    if plain is not None:
-        return LyricsPayload(
-            synced=False,
-            lrc=None,
-            lines=None,
-            plain=plain,
-            source=meta_source or "whisper_asr",
-        )
-
-    # No lyrics artifacts at all (job still running, or none produced).
-    return LyricsPayload(
-        synced=False,
-        lrc=None,
-        lines=None,
-        plain=None,
-        source=meta_source or "none",
+@router.put("/jobs/{job_id}/lyrics-review", response_model=LyricsPayload, tags=["jobs"])
+async def review_lyrics(
+    job_id: int,
+    body: LyricsReviewRequest,
+    response: Response,
+    owner: Owner = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> LyricsPayload:
+    """Persist an owner's listening review; an unlisted share token cannot edit."""
+    job = await session.scalar(select(Job).where(Job.id == job_id).with_for_update())
+    if job is None or not _can_owner_view(owner, job):
+        raise HTTPException(404, "job not found")
+    if job.status != JobStatus.completed:
+        raise HTTPException(409, "Wait for audio processing to finish before reviewing lyrics")
+    if body.confirm is not True:
+        raise HTTPException(422, "Confirm that you checked the lyrics against the audio")
+    await save_review(
+        session, job, _PathLib(settings.artifact_root) / job.job_token / "exports",
+        body.lrc, body.expected_revision, owner.subject,
     )
+    response.headers["Cache-Control"] = "private, no-store"
+    return _lyrics_payload(job, settings, can_review=True)
 
 
 _ALLOWED_ARTIFACTS: dict[str, tuple[str, str]] = {
