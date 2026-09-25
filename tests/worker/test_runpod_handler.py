@@ -520,16 +520,18 @@ def _retry_fixture(gaps=1, gap_seconds=6):
         rows.append(dict(line_index=len(rows), text=word, kept=True, score=-0.2,
                          start=start, end=start + 1, timing_issues=[],
                          raw_lrc=f"[{handler._fmt_lrc_time(start)}]{word}"))
-        segments.append({"words": [dict(word=word, start=start, end=start + 1,
-                                         probability=0.95)]})
+        segments.append({"start": start, "end": start + 1, "text": word,
+                         "avg_logprob": -0.1, "no_speech_prob": 0.01,
+                         "words": [dict(word=word, start=start, end=start + 1,
+                                        probability=0.95)]})
         if i < gaps:
             rows.append(dict(line_index=len(rows), text=f"missing{i} words", kept=False,
                              score=-9, start=start + 2, end=start + 3, timing_issues=[],
                              raw_lrc="raw missing", rejection_reasons=["low_voiced_overlap"]))
-    return {"lines": rows, "retries": []}, {"language": "en", "segments": segments}
+    return {"lines": rows, "retries": []}, {"language": "en", "segments": segments, "duration": start + 10}
 
 
-def _crop_transcript(text="missing0 words", times=((1.25, 1.75), (2.25, 2.75)), probability=0.95):
+def _crop_transcript(text="missing0 words", times=((2.75, 3.25), (3.75, 4.25)), probability=0.95):
     words = [dict(word=w, start=a, end=b, probability=probability)
              for w, (a, b) in zip(text.split(), times, strict=True)]
     return {"segments": [{"start": times[0][0], "end": times[-1][1], "text": text,
@@ -547,7 +549,7 @@ def test_retry_uses_independent_crop_words_with_absolute_offsets(monkeypatch):
     lrc, scores = handler._retry_problem_lines(
         Path("vocals.wav"), diagnostics, transcript, "original", [-0.2, -0.2], deadline=60,
     )
-    assert calls == [(10.75, 17.25, "en")]
+    assert calls == [(9.25, 15.25, "en")]
     assert "[00:12.00]<00:12.00>missing0 <00:13.00>words <00:13.50>" in lrc
     assert scores == [-0.2, None, -0.2]
     retry = diagnostics["retries"][0]
@@ -583,7 +585,7 @@ def test_retry_does_not_resurrect_uncorroborated_text(monkeypatch, variant):
         assert transcript["retry_segments"]
 
 
-@pytest.mark.parametrize(("gaps", "gap_seconds", "expected_calls"), [(5, 6, 3), (3, 22, 2), (1, 30, 0)])
+@pytest.mark.parametrize(("gaps", "gap_seconds", "expected_calls"), [(5, 6, 5), (3, 22, 3), (1, 30, 1)])
 def test_retry_crop_audio_and_count_caps(monkeypatch, gaps, gap_seconds, expected_calls):
     diagnostics, transcript = _retry_fixture(gaps, gap_seconds)
     calls = []
@@ -596,13 +598,14 @@ def test_retry_crop_audio_and_count_caps(monkeypatch, gaps, gap_seconds, expecte
     assert len(diagnostics["retries"]) == gaps  # skipped cases remain visible
 
 
-def test_retry_requires_two_audio_corroborated_anchors(monkeypatch):
+def test_retry_one_anchor_requires_known_audio_duration(monkeypatch):
     diagnostics, transcript = _retry_fixture()
     transcript["segments"].pop()  # no corroboration for right anchor
+    transcript.pop("duration")
     monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: pytest.fail("must not crop"))
     result = handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
     assert result == ("original", [])
-    assert diagnostics["retries"][0]["reason"] == "no_two_corroborated_anchors"
+    assert diagnostics["retries"][0]["reason"] == "audio_duration_unavailable_for_edge"
 
 
 def test_retry_failure_and_exhausted_deadline_preserve_baseline(monkeypatch):
@@ -629,7 +632,7 @@ def test_suspicious_kept_timing_is_evidence_and_retry_candidate(monkeypatch):
     assert "internal_word_gap" in row["timing_issues"]
     assert "long_word_span" in row["timing_issues"]
     handler._retry_problem_lines(Path("v.wav"), diagnostics, {"segments": []}, "original", [], deadline=60)
-    assert diagnostics["retries"][0]["reason"] == "no_two_corroborated_anchors"
+    assert diagnostics["retries"][0]["reason"] == "no_corroborated_anchor"
 
 
 def test_transcribe_crop_disables_vad_without_lyric_prompt(monkeypatch, tmp_path):
@@ -705,9 +708,9 @@ def test_successful_retry_preserves_extra_crop_words_for_quality_audit(monkeypat
     crop = _crop_transcript()
     segment = crop["segments"][0]
     segment["text"] = "unheard missing0 words adlib"
-    segment["start"], segment["end"] = 0.5, 4.0
-    segment["words"].insert(0, dict(word="unheard", start=0.5, end=0.9, probability=0.99))
-    segment["words"].append(dict(word="adlib", start=3.5, end=4.0, probability=0.99))
+    segment["start"], segment["end"] = 2.0, 5.5
+    segment["words"].insert(0, dict(word="unheard", start=2.0, end=2.4, probability=0.99))
+    segment["words"].append(dict(word="adlib", start=5.0, end=5.5, probability=0.99))
     monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: crop)
     monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
     lrc, _ = handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
@@ -741,3 +744,95 @@ def test_rejected_retry_still_preserves_conflicting_crop_evidence(monkeypatch):
     assert quality["status"] == "needs_review"
     assert any(i["code"] == "asr_words_unrepresented" and "different" in i["text"]
                for i in quality["issues"])
+
+
+@pytest.mark.parametrize("unsafe_middle", [False, True])
+def test_full_asr_recovery_keeps_exact_evidence_and_unsafe_barriers(monkeypatch, unsafe_middle):
+    diagnostics, transcript = _retry_fixture()
+    segment = _crop_transcript(times=((12, 12.5), (13, 13.5)))["segments"][0]
+    if unsafe_middle:
+        first = dict(segment, words=segment["words"][:1])
+        last = dict(segment, words=segment["words"][1:])
+        unsafe = dict(segment, avg_logprob=-2, words=[
+            dict(word="never", start=12.5, end=13, probability=.99)])
+        transcript["segments"][1:1] = [first, unsafe, last]
+    else:
+        transcript["segments"].insert(1, segment)
+    calls = []
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: calls.append(args) or {"segments": []})
+    monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
+    lrc, _ = handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
+    retry = diagnostics["retries"][0]
+    if unsafe_middle:
+        assert lrc == "original"
+        assert retry["outcome"] == "rejected"
+        assert len(calls) == 1
+    else:
+        assert not calls
+        assert retry["reason"] == "independent_full_asr_match"
+        assert retry["evidence_source"] == "full_asr"
+        assert retry["words"] == segment["words"]
+        assert retry["evidence_segments"] == [dict(segment, source="independent_full_asr")]
+        assert "missing0" in lrc
+
+
+def test_context_windows_share_one_decode_for_adjacent_lines(monkeypatch):
+    diagnostics, transcript = _retry_fixture()
+    second = dict(diagnostics["lines"][1], line_index=2, text="next phrase", start=14, end=15)
+    diagnostics["lines"].insert(2, second)
+    diagnostics["lines"][-1]["line_index"] = 3
+    calls = []
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: calls.append(args) or {"segments": []})
+    monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
+    handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
+    assert len(calls) == 1
+    assert calls[0][1] <= 10  # full nearby left anchor included
+    assert calls[0][2] >= 18  # full nearby right anchor included
+    assert [r["crop_index"] for r in diagnostics["retries"]] == [0, 0]
+
+
+@pytest.mark.parametrize("edge", ["beginning", "end"])
+def test_known_audio_boundary_allows_edge_retry(monkeypatch, edge):
+    diagnostics, transcript = _retry_fixture()
+    if edge == "beginning":
+        diagnostics["lines"] = diagnostics["lines"][1:]
+        transcript["segments"] = transcript["segments"][1:]
+    else:
+        diagnostics["lines"].pop()
+        transcript["segments"].pop()
+    calls = []
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: calls.append(args) or {"segments": []})
+    monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
+    handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
+    assert len(calls) == 1
+    assert 0 <= calls[0][1] < calls[0][2] <= transcript["duration"]
+    retry = diagnostics["retries"][0]
+    assert retry["boundary_start" if edge == "beginning" else "boundary_end"]
+    assert retry["outcome"] == "rejected"  # proposing a crop is not successful recovery
+
+
+def test_missing_text_priority_and_resource_exhaustion_are_explicit(monkeypatch):
+    diagnostics, transcript = _retry_fixture(gaps=15, gap_seconds=8)
+    # Earlier mildly suspicious kept text must not starve a missing later line.
+    diagnostics["lines"][1].update(kept=True, timing_issues=["relative_score_outlier"], score=-.8)
+    calls = []
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: calls.append(args) or {"segments": []})
+    monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
+    handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
+    assert calls[0][1] > diagnostics["lines"][1]["end"]
+    assert 3 < len(calls) <= 12
+    assert diagnostics["retry_budget"]["audio_seconds_used"] <= 60
+    skipped = [r for r in diagnostics["retries"] if r["outcome"] == "skipped"]
+    assert skipped and all(r["reason"] == "retry_audio_budget_exhausted" for r in skipped)
+    assert len(diagnostics["retries"]) == 15
+
+
+def test_context_window_does_not_absorb_remote_instrumental_gap():
+    diagnostics, transcript = _retry_fixture(gap_seconds=40)
+    rows = diagnostics["lines"]
+    anchors = {0: (10, 11), 2: (51, 52)}
+    window, reason = handler._retry_window(1, rows, anchors, [], transcript["duration"])
+    assert reason is None
+    assert window["end"] - window["start"] == 6
+    assert window["end"] < 20
+    assert window["upper"] == 51  # output acceptance still observes independent bound

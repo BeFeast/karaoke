@@ -728,7 +728,7 @@ def _line_below_confidence(
 
 # Retry limits are deliberately fixed: these are short recovery probes inside
 # the existing GPU job, never another separation or a whole-track ASR pass.
-_RETRY_MAX_CROPS = 3
+_RETRY_MAX_CROPS = 12
 _RETRY_MAX_CROP_SECONDS = 25.0
 _RETRY_MAX_AUDIO_SECONDS = 60.0
 
@@ -809,134 +809,242 @@ def _transcribe_crop(
         return transcript
 
 
+def _trusted_asr_segment(segment: dict[str, Any]) -> bool:
+    logprob, silence = segment.get("avg_logprob"), segment.get("no_speech_prob")
+    return (isinstance(logprob, (int, float)) and math.isfinite(logprob)
+            and logprob >= -1 and isinstance(silence, (int, float))
+            and math.isfinite(silence) and 0 <= silence < 0.6)
+
+
+def _retry_window(
+    index: int, rows: list[dict[str, Any]], anchors: dict[int, tuple[float, float]],
+    full_words: list[dict[str, Any]], duration: float | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Propose an audio window, never output timing, inside independent bounds.
+
+    Include nearby complete anchor phrases instead of clipping precisely at
+    their ends. Do not stretch a short target over an unrelated instrumental
+    gap. File boundaries are valid one-sided bounds when duration is known.
+    """
+    left = max((i for i in anchors if i < index), default=None)
+    right = min((i for i in anchors if i > index), default=None)
+    if left is None and right is None and (duration is None or duration > _RETRY_MAX_CROP_SECONDS):
+        return None, "no_corroborated_anchor"
+    if (left is None or right is None) and duration is None:
+        return None, "audio_duration_unavailable_for_edge"
+    lower = anchors[left][1] if left is not None else 0.0
+    upper = anchors[right][0] if right is not None else duration
+    assert upper is not None
+    row = rows[index]
+    target_start, target_end = row["start"], row["end"]
+    # An exact ASR text run may locate the target even when one low-confidence
+    # token prevents accepting its timing. It is a crop proposal, not a repair.
+    for run in _matching_word_runs(row["text"], full_words):
+        a, b = float(run[0]["start"]), float(run[-1]["end"])
+        if abs(a - target_start) <= 2 and lower <= a < b <= upper:
+            target_start, target_end = a, b
+            break
+    if not all(math.isfinite(value) for value in (target_start, target_end, lower, upper)):
+        return None, "invalid_candidate_bounds"
+    if upper <= lower or target_start < lower - 2 or target_start >= upper:
+        return None, "candidate_outside_anchor_bounds"
+    target_start = max(target_start, lower)
+    # Absorbed-silence tails must not turn into a whole-track crop. A word-count
+    # envelope only bounds the retry search; accepted words still need actual
+    # independent ASR timestamps and unchanged confidence gates.
+    max_target_span = min(15.0, max(5.0, len(row["text"].split()) * 1.5))
+    target_end = min(upper, max(target_start + 0.5, min(target_end, target_start + max_target_span)))
+    if target_end <= target_start:
+        return None, "invalid_candidate_bounds"
+    start, end = max(0.0, target_start - 2), target_end + 2
+    if left is not None and target_start - anchors[left][1] <= 2:
+        start = min(start, max(0.0, anchors[left][0] - 0.5))
+    if right is not None and anchors[right][0] - target_end <= 2:
+        end = max(end, anchors[right][1] + 0.5)
+    if end - start < 6:
+        padding = (6 - (end - start)) / 2
+        start, end = max(0.0, start - padding), end + padding
+    if duration is not None:
+        end = min(end, duration)
+    if end - start > _RETRY_MAX_CROP_SECONDS:
+        return None, "context_window_out_of_bounds"
+    return dict(start=start, end=end, lower=lower, upper=upper,
+                left_anchor=rows[left]["line_index"] if left is not None else None,
+                right_anchor=rows[right]["line_index"] if right is not None else None,
+                boundary_start=left is None, boundary_end=right is None), None
+
+
 def _retry_problem_lines(
     vocals_wav: Path, diagnostics: dict[str, Any], transcript: dict[str, Any],
     original_lrc: str, original_scores: list[float | None], *, deadline: float,
 ) -> tuple[str, list[float | None]]:
-    """Recover only independently decoded words between two trusted anchors.
+    """Use existing independent evidence first, then budget contextual crops.
 
-    Canonical text is used solely for comparing the result. It is never fed
-    into crop ASR, so a forced-input echo cannot resurrect a missing verse.
-    Failure preserves the original output and remains visible in diagnostics.
+    Missing text precedes timing-only problems. Overlapping windows share one
+    decode. Budgets are audio seconds and wall time, with a defensive call cap;
+    no reference text is ever supplied as a decoder prompt.
     """
     rows = diagnostics["lines"]
-    full_words = _asr_words(transcript)
+    original_segments = [s for s in transcript.get("segments", []) if isinstance(s, dict)]
+    trusted_segments = [s for s in original_segments if _trusted_asr_segment(s)]
+    # An unsafe decoded phrase is a barrier, not silence to splice across.
+    full_words = _asr_words({"segments": [
+        seg if _trusted_asr_segment(seg) else {"words": [{"word": "__untrusted_segment__"}]}
+        for seg in original_segments
+    ]})
     anchors = {i: anchor for i, row in enumerate(rows)
                if (anchor := _corroborated_anchor(row, full_words)) is not None}
+    duration = transcript.get("duration")
+    duration = (float(duration) if isinstance(duration, (int, float))
+                and math.isfinite(duration) and duration > 0 else None)
     attempts = 0
     audio_seconds = 0.0
     recovered: dict[int, str] = {}
-    recovered_spans: list[tuple[float, float]] = []
+    recovered_spans: dict[int, tuple[float, float]] = {}
+    records: dict[int, dict[str, Any]] = {}
+    pending: list[int] = []
     diagnostics["retry_budget"] = {
         "max_crops": _RETRY_MAX_CROPS, "max_crop_seconds": _RETRY_MAX_CROP_SECONDS,
         "max_audio_seconds": _RETRY_MAX_AUDIO_SECONDS, "max_wall_seconds": 60,
     }
+
+    def accept(index: int, candidate: list[dict[str, Any]]) -> str | None:
+        if len(candidate) != len(rows[index]["text"].split()):
+            return "source_word_token_mismatch"
+        a, b = float(candidate[0]["start"]), float(candidate[-1]["end"])
+        for other, (x, y) in recovered_spans.items():
+            if max(a, x) < min(b, y):
+                return "retry_word_span_already_used"
+            if (other < index and y > a) or (other > index and x < b):
+                return "retry_word_order_conflict"
+        recovered[index] = _enhanced_lrc_line(rows[index]["text"].split(), candidate)
+        recovered_spans[index] = (a, b)
+        return None
+
+    # Exact, well-timed words already decoded over the full vocal need no
+    # additional model call. Keep full trusted segments as audit evidence.
     for index, row in enumerate(rows):
         if row["kept"] and not row.get("timing_issues"):
             continue
         record: dict[str, Any] = {"line_index": row["line_index"], "outcome": "skipped"}
-        diagnostics["retries"].append(record)
+        records[index] = record
         left = max((i for i in anchors if i < index), default=None)
         right = min((i for i in anchors if i > index), default=None)
-        if left is None or right is None:
-            record["reason"] = "no_two_corroborated_anchors"
+        lower = anchors[left][1] if left is not None else 0.0
+        upper = anchors[right][0] if right is not None else duration
+        if upper is not None:
+            for run in _matching_word_runs(row["text"], full_words):
+                if abs(float(run[0]["start"]) - row["start"]) > 2:
+                    continue
+                if not _plausible_words(run, lower, upper) or accept(index, run) is not None:
+                    continue
+                a, b = recovered_spans[index]
+                evidence = [dict(seg, source="independent_full_asr") for seg in trusted_segments
+                            if any(float(w["start"]) < b and float(w["end"]) > a
+                                   for w in seg.get("words", []))]
+                record.update(outcome="accepted", reason="independent_full_asr_match",
+                              evidence_source="full_asr", start=a, end=b,
+                              words=run, evidence_segments=evidence)
+                anchors[index] = (a, b)
+                break
+        if index not in recovered:
+            pending.append(index)
+
+    # Plan first, then merge overlapping contexts. A shared phrase/chorus gap
+    # must never consume two model calls merely because it contains two rows.
+    windows: list[dict[str, Any]] = []
+    for index in pending:
+        window, reason = _retry_window(index, rows, anchors, full_words, duration)
+        if window is None:
+            records[index]["reason"] = reason
             continue
-        lower = max(anchors[left][1], rows[left]["end"])
-        upper = min(anchors[right][0], rows[right]["start"])
-        start, end = max(0.0, lower - 0.25), upper + 0.25
-        record.update(start=start, end=end, left_anchor=rows[left]["line_index"],
-                      right_anchor=rows[right]["line_index"])
-        duration = end - start
-        if upper <= lower or duration > _RETRY_MAX_CROP_SECONDS:
-            record["reason"] = "anchor_gap_out_of_bounds"
-            continue
-        if attempts >= _RETRY_MAX_CROPS or audio_seconds + duration > _RETRY_MAX_AUDIO_SECONDS:
-            record["reason"] = "retry_audio_budget_exhausted"
-            continue
-        if time.monotonic() + 10 >= deadline:
-            record["reason"] = "retry_time_budget_exhausted"
+        records[index].update(window)
+        windows.append(dict(start=window["start"], end=window["end"], indices=[index]))
+    windows.sort(key=lambda w: w["start"])
+    groups: list[dict[str, Any]] = []
+    for window in windows:
+        if (groups and window["start"] <= groups[-1]["end"]
+                and max(window["end"], groups[-1]["end"]) - groups[-1]["start"] <= _RETRY_MAX_CROP_SECONDS):
+            groups[-1]["end"] = max(groups[-1]["end"], window["end"])
+            groups[-1]["indices"].extend(window["indices"])
+        else:
+            groups.append(window)
+
+    def priority(group: dict[str, Any]) -> tuple:
+        members = [rows[i] for i in group["indices"]]
+        missing = any(not row["kept"] for row in members)
+        unsupported = any(not _matching_word_runs(row["text"], full_words) for row in members)
+        scores = [row["score"] for row in members if isinstance(row.get("score"), (int, float))]
+        return (0 if missing else 1 if unsupported else 2, min(scores, default=0), group["start"])
+
+    for group in sorted(groups, key=priority):
+        start, end = group["start"], group["end"]
+        seconds = end - start
+        for index in group["indices"]:
+            records[index].update(start=start, end=end, evidence_source="crop_asr")
+        reason = None
+        if attempts >= _RETRY_MAX_CROPS or audio_seconds + seconds > _RETRY_MAX_AUDIO_SECONDS:
+            reason = "retry_audio_budget_exhausted"
+        elif time.monotonic() + 10 >= deadline:
+            reason = "retry_time_budget_exhausted"
+        if reason:
+            for index in group["indices"]:
+                records[index]["reason"] = reason
             continue
         attempts += 1
-        audio_seconds += duration
-        record["outcome"] = "rejected"
+        audio_seconds += seconds
+        for index in group["indices"]:
+            records[index].update(outcome="rejected", crop_index=attempts - 1)
         try:
             crop_asr = _transcribe_crop(vocals_wav, start, end,
                                         transcript.get("language"), deadline)
-            record["transcript"] = crop_asr
-            # Segment guards are needed in addition to word probabilities:
-            # high token confidence alone does not exclude silence hallucination.
-            safe_segments = []
-            for seg in crop_asr.get("segments", []):
-                logprob, silence = seg.get("avg_logprob"), seg.get("no_speech_prob")
-                if (isinstance(logprob, (int, float)) and math.isfinite(logprob)
-                        and logprob >= -1 and isinstance(silence, (int, float))
-                        and math.isfinite(silence) and 0 <= silence < 0.6):
-                    safe_segments.append(seg)
-                else:
-                    # Do not splice across a low-confidence segment to create
-                    # an apparently exact text run that was never decoded.
-                    safe_segments.append({"words": [{"word": "__untrusted_segment__"}]})
-            # Preserve ALL trusted observations from the crop, not only
-            # the matching reference slice. Otherwise extra sung words
-            # disappear from the completeness audit and can falsely produce
-            # a checked result. Evidence is independent of repair acceptance.
+            safe_segments = [seg if _trusted_asr_segment(seg)
+                             else {"words": [{"word": "__untrusted_segment__"}]}
+                             for seg in crop_asr.get("segments", [])]
             evidence_segments = []
             for segment in safe_segments:
-                if "avg_logprob" not in segment:  # unsafe-segment barrier
+                if "avg_logprob" not in segment:
                     continue
-                evidence_words = [
-                    dict(word, start=float(word["start"]) + start,
-                         end=float(word["end"]) + start)
-                    for word in segment.get("words", [])
-                ]
+                evidence_words = [dict(w, start=float(w["start"]) + start,
+                                       end=float(w["end"]) + start)
+                                  for w in segment.get("words", [])]
                 evidence_segments.append(dict(
-                    segment,
-                    start=float(segment.get("start", 0)) + start,
-                    end=float(segment.get("end", duration)) + start,
-                    words=evidence_words, source="independent_crop_asr",
-                    line_index=row["line_index"],
+                    segment, start=float(segment.get("start", 0)) + start,
+                    end=float(segment.get("end", seconds)) + start,
+                    words=evidence_words, source="independent_crop_asr", crop_index=attempts - 1,
                 ))
-            record["evidence_segments"] = evidence_segments
             if evidence_segments:
                 transcript.setdefault("retry_segments", []).extend(evidence_segments)
             crop_words = _asr_words({"segments": safe_segments})
-            candidates = _matching_word_runs(row["text"], crop_words)
-            record["reason"] = "text_not_corroborated"
-            for candidate in candidates:
-                if len(candidate) != len(row["text"].split()):
-                    record["reason"] = "source_word_token_mismatch"
-                    continue
-                if not _plausible_words(candidate, lower - start, upper - start):
-                    record["reason"] = "implausible_word_timing_or_confidence"
-                    continue
-                shifted = [dict(w, start=float(w["start"]) + start,
-                                end=float(w["end"]) + start) for w in candidate]
-                a, b = shifted[0]["start"], shifted[-1]["end"]
-                if any(max(a, x) < min(b, y) for x, y in recovered_spans):
-                    record["reason"] = "retry_word_span_already_used"
-                    continue
-                # Later source rows cannot precede a previously recovered row.
-                if recovered_spans and a < recovered_spans[-1][1]:
-                    record["reason"] = "retry_word_order_conflict"
-                    continue
-                recovered[index] = _enhanced_lrc_line(row["text"].split(), shifted)
-                recovered_spans.append((a, b))
-                record.update(outcome="accepted", reason="independent_crop_asr_match",
-                              words=shifted)
-                break
-        except Exception as exc:  # bounded recovery must never fail the base job
-            record.update(outcome="failed", reason=type(exc).__name__)
+            for index in group["indices"]:
+                record = records[index]
+                record.update(transcript=crop_asr, evidence_segments=evidence_segments,
+                              reason="text_not_corroborated")
+                for candidate in _matching_word_runs(rows[index]["text"], crop_words):
+                    if not _plausible_words(candidate, record["lower"] - start, record["upper"] - start):
+                        record["reason"] = "implausible_word_timing_or_confidence"
+                        continue
+                    shifted = [dict(w, start=float(w["start"]) + start,
+                                    end=float(w["end"]) + start) for w in candidate]
+                    problem = accept(index, shifted)
+                    if problem:
+                        record["reason"] = problem
+                        continue
+                    record.update(outcome="accepted", reason="independent_crop_asr_match", words=shifted)
+                    break
+        except Exception as exc:
+            for index in group["indices"]:
+                records[index].update(outcome="failed", reason=type(exc).__name__)
+    diagnostics["retries"] = [records[index] for index in sorted(records)]
     diagnostics["retry_budget"].update(crops_used=attempts, audio_seconds_used=audio_seconds)
     if not recovered:
         return original_lrc, original_scores
-    # Rebuild in source order. Raw evidence and original rejection reasons are
-    # intentionally immutable; successful recoveries live in retries[].
     lrc: list[str] = []
     scores: list[float | None] = []
     for index, row in enumerate(rows):
         if index in recovered:
             lrc.append(recovered[index])
-            scores.append(None)  # ASR probability is not an alignment log-prob
+            scores.append(None)
         elif row["kept"]:
             lrc.append(row["raw_lrc"])
             scores.append(row["score"])
