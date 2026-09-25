@@ -105,89 +105,135 @@ def _invalid_evidence(asr: Any) -> bool:
     return False
 
 
-def _same_observation(left: list[_Word], right: list[_Word]) -> bool:
-    """Collapse repeated decodes, never successive sung word occurrences."""
-    if not left or len(left) != len(right):
-        return False
-    for a, b in zip(left, right, strict=True):
-        overlap = min(a.end, b.end) - max(a.start, b.start)
-        if (
-            _tokens(a.text) != _tokens(b.text)
-            or abs(a.start - b.start) > 0.25
-            or abs(a.end - b.end) > 0.25
-            or overlap < 0.5 * min(a.end - a.start, b.end - b.start)
-        ):
-            return False
-    return True
-
-
-def _dedupe_retry_segments(segments: list) -> list:
-    """Deduplicate whole observations; retain competing text for review.
-
-    Use the first timing observation, with the lowest confidence seen for each
-    word. Selecting whichever version best matches the reference would hide
-    uncertainty. Non-overlapping repetitions are separate performances.
-    """
-    retained: list = []
-    parsed: list[list[_Word]] = []
-    for segment in segments:
-        words = _asr_words({"segments": [segment]})
-        duplicate = next((i for i, prior in enumerate(parsed)
-                          if _same_observation(prior, words)), None)
-        if duplicate is None:
-            retained.append(segment)
-            parsed.append(words)
+def _segment_words(segment: Any) -> list[_Word]:
+    words = []
+    if not isinstance(segment, dict):
+        return words
+    for raw in _list(segment.get("words")):
+        if not isinstance(raw, dict):
             continue
-        prior = parsed[duplicate]
-        merged_words = []
-        for a, b in zip(prior, words, strict=True):
-            probability = (
-                min(a.probability, b.probability)
-                if a.probability is not None and b.probability is not None else None
-            )
-            merged_words.append(dict(word=a.text, start=a.start, end=a.end,
-                                     probability=probability))
-        retained[duplicate] = dict(retained[duplicate], words=merged_words)
-        parsed[duplicate] = _asr_words({"segments": [retained[duplicate]]})
-    return retained
+        try:
+            start, end = float(raw["start"]), float(raw["end"])
+            probability = raw.get("probability")
+            if probability is not None:
+                probability = float(probability)
+            if not (math.isfinite(start) and math.isfinite(end) and 0 <= start < end):
+                continue
+            if probability is not None and not (math.isfinite(probability) and 0 <= probability <= 1):
+                continue
+            text = str(raw.get("word") or "").strip()
+            if _tokens(text):
+                words.append(_Word(text, start, end, probability))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return sorted(words, key=lambda word: word.start)
+
+
+def _same_interval(left: _Word, right: _Word) -> bool:
+    overlap = min(left.end, right.end) - max(left.start, right.start)
+    return (abs(left.start - right.start) <= 1 and abs(left.end - right.end) <= 1
+            and overlap >= .5 * min(left.end - left.start, right.end - right.start))
+
+
+def _compose_asr(asr: dict | None) -> tuple[list[_Word], list[dict]]:
+    """Compose observations of an occurrence, never independent sung copies.
+
+    Base text wins a lexical conflict deterministically, without consulting the
+    curated reference. Conflicts remain blocking audit issues and all original
+    observations remain untouched. An explicit alternate may improve the
+    timing/confidence of the SAME words, never erase a contrary observation.
+    """
+    data = asr if isinstance(asr, dict) else {}
+    observations = [*_list(data.get("segments")), *_list(data.get("retry_segments"))]
+    canonical: list[_Word] = []
+    owners: list[set[str]] = []
+    seen_attempts: set[str] = set()
+    conflicts: list[dict] = []
+    for segment in observations:
+        incoming = _segment_words(segment)
+        if not incoming:
+            continue
+        if len(canonical) + len(incoming) > _MAX_TOKENS * 2:
+            # Let the ordinary audit limit report oversized evidence.
+            return canonical + incoming, conflicts
+        attempt = segment.get("attempt_id")
+        replaces = segment.get("replaces_attempt_id")
+        explicit_alternate = (
+            segment.get("source") == "independent_crop_asr"
+            and segment.get("attempt_phase") == "alternate"
+            and isinstance(attempt, str) and isinstance(replaces, str)
+            and replaces in seen_attempts and attempt != replaces
+        )
+        used: set[int] = set()
+        additions = []
+        last_match = -1
+        # Exact lexical matching first prevents an extra word from stealing
+        # the matching occurrence of a neighboring word in another decode.
+        matches = {}
+        for j, word in enumerate(incoming):
+            eligible = [i for i, prior in enumerate(canonical)
+                        if i not in used and i > last_match
+                        and _tokens(prior.text) == _tokens(word.text)
+                        and _same_interval(prior, word)]
+            if eligible:
+                i = min(eligible, key=lambda i: abs(canonical[i].start - word.start)
+                        + abs(canonical[i].end - word.end))
+                matches[j] = i
+                used.add(i)
+                last_match = i
+        for j, word in enumerate(incoming):
+            if j in matches:
+                i = matches[j]
+                prior = canonical[i]
+                if explicit_alternate and replaces in owners[i]:
+                    canonical[i] = word
+                else:
+                    probability = (min(prior.probability, word.probability)
+                                   if prior.probability is not None and word.probability is not None
+                                   else None)
+                    canonical[i] = _Word(prior.text, prior.start, prior.end, probability)
+                if isinstance(attempt, str):
+                    owners[i].add(attempt)
+                continue
+            overlapping = [prior for prior in canonical
+                           if _same_interval(prior, word)]
+            if overlapping:
+                prior = min(overlapping, key=lambda prior: abs(prior.start - word.start))
+                conflict = dict(code="asr_observation_conflict", text=prior.text,
+                                alternate_text=word.text,
+                                start=min(prior.start, word.start), end=max(prior.end, word.end),
+                                detail=f"Independent ASR readings differ here: {prior.text} / {word.text}. Listen to confirm.")
+                if conflict not in conflicts:
+                    conflicts.append(conflict)
+            else:
+                additions.append(word)
+        canonical.extend(additions)
+        owners.extend([{attempt} if isinstance(attempt, str) else set() for _ in additions])
+        ordered = sorted(zip(canonical, owners, strict=True), key=lambda pair: pair[0].start)
+        canonical = [pair[0] for pair in ordered]
+        owners = [pair[1] for pair in ordered]
+        if isinstance(attempt, str):
+            seen_attempts.add(attempt)
+    return canonical, conflicts
+
+
+def _observation_runs(asr: dict | None) -> list[list[_Word]]:
+    """Keep support searches within one independent decoding attempt."""
+    data = asr if isinstance(asr, dict) else {}
+    groups: dict[str, list[_Word]] = {"full-asr": []}
+    for segment in _list(data.get("segments")):
+        groups["full-asr"].extend(_segment_words(segment))
+    for index, segment in enumerate(_list(data.get("retry_segments"))):
+        if not isinstance(segment, dict):
+            continue
+        attempt = segment.get("attempt_id")
+        key = attempt if isinstance(attempt, str) else f"legacy-segment-{index}"
+        groups.setdefault(key, []).extend(_segment_words(segment))
+    return [sorted(words, key=lambda word: word.start) for words in groups.values() if words]
 
 
 def _asr_words(asr: dict | None) -> list[_Word]:
-    words = []
-    data = asr if isinstance(asr, dict) else {}
-    base = _list(data.get("segments"))
-    retries = _dedupe_retry_segments(_list(data.get("retry_segments")))
-    windows = []
-    for segment in retries:
-        if not isinstance(segment, dict):
-            continue
-        valid = _asr_words({"segments": [segment]})
-        if valid:
-            windows.append((valid[0].start, valid[-1].end))
-    segments = [(segment, False) for segment in base] + [(segment, True) for segment in retries]
-    for segment, retry in segments:
-        if not isinstance(segment, dict):
-            continue
-        for raw in _list(segment.get("words")):
-            if not isinstance(raw, dict):
-                continue
-            try:
-                start, end = float(raw["start"]), float(raw["end"])
-                probability = raw.get("probability")
-                if probability is not None:
-                    probability = float(probability)
-                if not (math.isfinite(start) and math.isfinite(end) and 0 <= start < end):
-                    continue
-                if probability is not None and not (math.isfinite(probability) and 0 <= probability <= 1):
-                    continue
-                if not retry and any(a <= (start + end) / 2 <= b for a, b in windows):
-                    continue
-                text = str(raw.get("word") or "").strip()
-                if _tokens(text):
-                    words.append(_Word(text, start, end, probability))
-            except (KeyError, TypeError, ValueError):
-                continue
-    return sorted(words, key=lambda word: word.start)
+    return _compose_asr(asr)[0]
 
 
 def _nearby(line, words: list[_Word]) -> list[_Word]:
@@ -301,7 +347,8 @@ def assess_lyrics(
     evidence = asr if isinstance(asr, dict) else {}
     reference_words = [word for line in expected for word in _tokens(line)]
     output_words = [word for line in lines for word in _tokens(line.norm)]
-    words = _asr_words(asr)
+    words, observation_conflicts = _compose_asr(asr)
+    issues.extend(observation_conflicts)
     asr_tokens = [token for word in words for token in _tokens(word.text)]
     if max(len(expected), len(lines)) > _MAX_LINES or max(len(reference_words), len(output_words), len(asr_tokens)) > _MAX_TOKENS:
         issue("comparison_limit_exceeded", detail="Input requires review; comparison was not truncated.")
@@ -448,7 +495,10 @@ def _accepted_retry(line, retries: list, used: set[int]) -> bool:
                     and isinstance(silence, (int, float)) and math.isfinite(silence)
                     and 0 <= silence < 0.6):
                 safe_segments.append(segment)
-        support = _support(line, _asr_words({"retry_segments": safe_segments}))
+        proof_words, proof_conflicts = _compose_asr({"retry_segments": safe_segments})
+        if proof_conflicts:
+            continue
+        support = _support(line, proof_words)
         if len(support) != len(candidate):
             continue
         if any(_tokens(a.text) != _tokens(b.text)
@@ -462,7 +512,7 @@ def _accepted_retry(line, retries: list, used: set[int]) -> bool:
     return False
 
 
-def _provisional_candidate(original, line, score, diagnostics, used_rows, words, duration, *, require_support=True):
+def _provisional_candidate(original, line, score, diagnostics, used_rows, observation_runs, duration, *, require_support=True):
     """Retain a witnessed GPU-kept phrase as uncertain, never resurrect a veto.
 
     Match an ordered diagnostic occurrence to the exact input LRC, text, score,
@@ -473,7 +523,9 @@ def _provisional_candidate(original, line, score, diagnostics, used_rows, words,
         return None
     if _timing_problems(line) or drop_unreliable_aligned_lines(original, None)[1]:
         return None
-    support = _support(line, words)
+    supports = [_support(line, words) for words in observation_runs]
+    support = next((words for words in supports if words and line.end is not None
+                    and min(line.end, words[-1].end) > max(line.start, words[0].start)), [])
     # This preserves an existing GPU-kept candidate with explicit uncertainty;
     # it does not promote it to an ASR-approved recovery. Low ASR confidence
     # must remain visible rather than silently deleting plausible aligned text.
@@ -567,6 +619,7 @@ def reconcile_alignment(
     filtered, _ = drop_unreliable_aligned_lines(repaired, scores)
     retained = filtered.splitlines()
     words = _asr_words(asr)
+    observation_runs = _observation_runs(asr)
     output, restored, timing = [], 0, 0
     used_retries: set[int] = set()
     used_rows: set[int] = set()
@@ -605,7 +658,7 @@ def reconcile_alignment(
             candidate = _provisional_candidate(
                 original, original_lines[0], current_score,
                 alignment_diagnostics if isinstance(alignment_diagnostics, dict) else {},
-                used_rows, words, duration, require_support=not keep,
+                used_rows, observation_runs, duration, require_support=not keep,
             ) if original_lines else None
             if candidate is not None:
                 body, candidate_issues = candidate

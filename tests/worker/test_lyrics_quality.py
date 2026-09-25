@@ -141,12 +141,14 @@ def test_oversized_input_reports_review_without_truncation():
     assert quality["status"] == "needs_review"
 
 
-def test_accepted_retry_replaces_overlapping_asr_instead_of_counting_twice():
+def test_conflicting_retry_keeps_base_observation_and_requires_review():
     original = asr(("silver wrong", 10))
     original["retry_segments"] = asr(("silver river", 10.05))["segments"]
-    assert [word.text for word in _asr_words(original)] == ["silver", "river"]
+    assert [word.text for word in _asr_words(original)] == ["silver", "wrong"]
     quality = assess_lyrics("silver river", line(), original)
-    assert quality["counts"]["asr_unmatched_words"] == 0
+    assert quality["status"] == "needs_review"
+    assert "asr_observation_conflict" in codes(quality)
+    assert quality["counts"]["asr_unmatched_words"] == 1
 
 
 def test_malformed_evidence_does_not_certify_alignment():
@@ -252,7 +254,7 @@ def test_malformed_asr_container_types_require_review_without_exception():
 
 
 def test_identical_full_crop_observations_with_jitter_count_only_once():
-    evidence = asr(("silver wrong", 10))
+    evidence = asr(("silver river", 10))
     evidence["retry_segments"] = [
         *asr(("silver river", 10))["segments"],
         *asr(("silver river", 10.15))["segments"],
@@ -269,10 +271,11 @@ def test_overlapping_disagreeing_crops_remain_visible():
         *asr(("golden river", 10.15))["segments"],
     ]}
     words = [word.text for word in _asr_words(evidence)]
-    assert "silver" in words and "golden" in words
+    assert words == ["silver", "river"]
     quality = assess_lyrics("silver river", line(), evidence)
     assert quality["status"] == "needs_review"
-    assert "asr_words_unrepresented" in codes(quality)
+    assert "asr_observation_conflict" in codes(quality)
+    assert any(issue.get("alternate_text") == "golden" for issue in quality["issues"])
 
 
 def test_close_real_repeated_words_are_not_collapsed():
@@ -551,3 +554,88 @@ def test_low_asr_confidence_preserves_existing_candidate_but_never_gpu_veto():
                                          alignment_diagnostics=diagnostics)
     assert len(result.splitlines()) == 7
     assert quality["counts"]["missing_lines"] == 1
+
+def _attempt(text, start, attempt, *, replaces=None):
+    segment = asr((text, start))["segments"][0]
+    segment.update(source="independent_crop_asr", attempt_id=attempt,
+                   attempt_phase="alternate" if replaces else "primary")
+    if replaces:
+        segment["replaces_attempt_id"] = replaces
+    return segment
+
+
+def test_alternate_wider_context_counts_each_audio_occurrence_once():
+    primary = _attempt("silver river", 10, "crop-0")
+    primary["words"][0]["probability"] = .1
+    alternate = _attempt("bright silver river returns", 9.5, "crop-1", replaces="crop-0")
+    evidence = {"segments": asr(("silver river", 10))["segments"],
+                "retry_segments": [primary, alternate]}
+    before = repr(evidence)
+    words = _asr_words(evidence)
+    assert [w.text for w in words] == ["bright", "silver", "river", "returns"]
+    assert words[1].probability == .99
+    quality = assess_lyrics("bright silver river returns", line("bright silver river returns", 9.5), evidence)
+    assert quality["status"] == "checked"
+    assert quality["counts"]["asr_unmatched_words"] == 0
+    assert repr(evidence) == before
+
+
+def test_alternate_cannot_hide_credible_base_lexical_contradiction():
+    evidence = asr(("silver thunder", 10))
+    evidence["retry_segments"] = [_attempt("silver river", 10, "crop-0"),
+                                  _attempt("silver river", 10.1, "crop-1", replaces="crop-0")]
+    quality = assess_lyrics("silver river", line(), evidence)
+    assert quality["status"] == "needs_review"
+    assert "asr_observation_conflict" in codes(quality)
+    assert [w.text for w in _asr_words(evidence)] == ["silver", "thunder"]
+
+
+def test_alternate_does_not_erase_repeated_word_occurrences():
+    evidence = {"retry_segments": [_attempt("echo echo", 10, "crop-0"),
+        _attempt("bright echo echo returns", 9.5, "crop-1", replaces="crop-0")]}
+    assert [w.text for w in _asr_words(evidence)] == ["bright", "echo", "echo", "returns"]
+
+
+def test_unrelated_alternate_metadata_cannot_upgrade_low_confidence():
+    primary = _attempt("silver river", 10, "crop-0")
+    primary["words"][0]["probability"] = .1
+    alternate = _attempt("silver river", 10.1, "crop-1", replaces="missing-crop")
+    quality = assess_lyrics("silver river", line(), {"retry_segments": [primary, alternate]})
+    assert quality["status"] == "needs_review"
+    assert "asr_confidence_low" in codes(quality)
+
+
+def test_extra_alternate_negation_is_visible_even_when_overlapping_word():
+    primary = _attempt("we surrender", 10, "crop-0")
+    alternate = _attempt("we never surrender", 10, "crop-1", replaces="crop-0")
+    quality = assess_lyrics("we surrender", line("we surrender"), {"retry_segments": [primary, alternate]})
+    assert quality["status"] == "needs_review"
+    assert "asr_observation_conflict" in codes(quality)
+    assert any(issue.get("alternate_text") == "never" for issue in quality["issues"])
+
+def test_provisional_support_uses_one_attempt_without_hiding_other_readings():
+    curated, raw, scores, evidence, diagnostics = _provisional_fixture()
+    evidence["segments"][0] = asr(("unrelated noisy words", 10))["segments"][0]
+    first = _attempt("silver river", 10, "crop-0")
+    second = _attempt("hums", 11, "crop-0")
+    evidence["retry_segments"] = [first, second]
+    result, quality = reconcile_alignment(curated, raw, scores, evidence,
+                                         alignment_diagnostics=diagnostics)
+    assert len(result.splitlines()) == 8
+    assert quality["status"] == "needs_review"
+    assert "asr_observation_conflict" in codes(quality)
+    second["attempt_id"] = "crop-other"
+    result, quality = reconcile_alignment(curated, raw, scores, evidence,
+                                         alignment_diagnostics=diagnostics)
+    assert len(result.splitlines()) == 7
+
+def test_conflicting_accepted_retry_evidence_cannot_authenticate_recovery():
+    import copy
+    text, raw, evidence, retry = _fast_retry()
+    conflict = copy.deepcopy(retry["evidence_segments"][0])
+    conflict["words"][0]["word"] = "golden"
+    conflict["text"] = "golden river"
+    retry["evidence_segments"].append(conflict)
+    result, quality = reconcile_alignment(text, raw, [None], evidence, accepted_retries=[retry])
+    assert result is None
+    assert quality["status"] == "needs_review"
