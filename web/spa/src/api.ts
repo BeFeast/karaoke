@@ -306,12 +306,24 @@ export interface LyricsLine {
 // Carries the raw LRC body plus `source` provenance (`lrclib_synced`,
 // `forced_aligned`, `whisper_asr_synced`, `whisper_asr`, …) so the UI can
 // label approximate ASR timing differently from real LRCLIB sync (#145).
+export interface LyricsQuality {
+  schema_version: 1;
+  status: "checked" | "needs_review" | "reviewed";
+  counts?: { expected_lines: number; matched_lines: number; output_lines: number; missing_lines: number; restored_lines: number };
+  issues: Array<{ code: string; text?: string; line_index?: number; start?: number; end?: number; detail?: string }>;
+  reviewed_at?: string;
+}
+
 export interface LyricsPayload {
   synced: boolean;
   lrc: string | null;
   lines: LyricsLine[] | null;
   plain: string | null;
   source: string;
+  quality?: LyricsQuality | null;
+  revision?: string;
+  // Present only when the API authorises this viewer to review this job.
+  review_job_id?: number | null;
 }
 
 // Fetch the structured lyrics payload for a job, or null on any failure
@@ -323,4 +335,13 @@ export async function getLyrics(token: string): Promise<LyricsPayload | null> {
   });
   if (!resp.ok) return null;
   return (await resp.json()) as LyricsPayload;
+}
+
+// Owner-only correction, protected against overwriting another review.
+export function saveLyricsReview(jobId: number, lrc: string, revision: string): Promise<LyricsPayload> {
+  return request<LyricsPayload>(`/jobs/${jobId}/lyrics-review`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ lrc, expected_revision: revision, confirm: true }),
+  });
 }

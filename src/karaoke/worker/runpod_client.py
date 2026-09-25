@@ -266,6 +266,10 @@ class RunpodClient:
             run_input["align_text"] = align_text
             if align_lang and align_lang.strip():
                 run_input["align_lang"] = align_lang
+        # Recovery probes share the existing wall/cost budget, never extend it.
+        rate = float(self.settings.runpod_hourly_rate_estimate or 0.68)
+        cost_ceiling_s = max_job_cost / rate * 3600 if max_job_cost > 0 else wall_ceiling
+        run_input["job_budget_s"] = min(wall_ceiling, cost_ceiling_s)
         # Whisper language hint (#260): independent of alignment — it applies
         # exactly when LRCLIB missed and the ASR transcript IS the product.
         if whisper_lang and whisper_lang.strip():
@@ -570,6 +574,21 @@ class RunpodClient:
             aligned_lrc_path = work_dir / "aligned.lrc"
             aligned_lrc_path.write_text(aligned, encoding="utf-8")
 
+        # Preserve pre-filter alignment and rejection/retry evidence, even when
+        # every line was rejected. Older workers simply omit these fields.
+        aligned_raw_lrc_path: Path | None = None
+        aligned_diagnostics_path: Path | None = None
+        raw = output.get("aligned_raw_lrc")
+        if isinstance(raw, str) and raw.strip():
+            aligned_raw_lrc_path = work_dir / "aligned.raw.lrc"
+            aligned_raw_lrc_path.write_text(raw, encoding="utf-8")
+        diagnostics = output.get("aligned_diagnostics")
+        if isinstance(diagnostics, dict):
+            aligned_diagnostics_path = work_dir / "aligned.diagnostics.json"
+            aligned_diagnostics_path.write_text(
+                json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
         # Prefer RunPod's reported execution time; fall back to wall clock.
         seconds = max(execution_ms / 1000.0, wall_seconds)
         rate = float(self.settings.runpod_hourly_rate_estimate or 0.68)
@@ -586,4 +605,6 @@ class RunpodClient:
             lyrics_txt_path=lyrics_txt_path,
             lyrics_json_path=lyrics_json_path,
             aligned_lrc_path=aligned_lrc_path,
+            aligned_raw_lrc_path=aligned_raw_lrc_path,
+            aligned_diagnostics_path=aligned_diagnostics_path,
         )

@@ -162,3 +162,14 @@ describe("parseLrc first-word line-start adjustment (#236)", () => {
     expect(line.t).toBe(5);
   });
 });
+
+import { sourceLabel } from "./SyncedLyrics";
+describe("lyrics provenance labels", () => {
+  test("owner corrections and vocal alignment are not mislabelled as LRCLIB", () => {
+    expect(sourceLabel("human_reviewed")).toBe("Owner reviewed");
+    expect(sourceLabel("forced_aligned")).toBe("Vocal alignment");
+    expect(sourceLabel("lrclib_synced")).toBe("LRCLIB");
+    expect(sourceLabel("whisper_asr")).toBe("ASR (approximate)");
+    expect(sourceLabel(null)).toBe("Unknown source");
+  });
+});

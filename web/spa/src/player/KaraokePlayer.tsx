@@ -27,6 +27,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BlendRail, lyricState, ProtoFader, type TimedLine } from "../components/stage-core";
 import { MBulbs, MWipe } from "../components/marks";
 import { Perf } from "../components/Perf";
+import type { LyricsQuality } from "../api";
 import { PHONE_QUERY, useCoarsePointer, usePhoneLayout } from "../lib/layout";
 import { useActiveTouchStart } from "../lib/touchGuards";
 import type { StageTheme } from "../theme";
@@ -388,11 +389,12 @@ export interface KaraokePlayerProps {
   artist: string | null;
   /** Plain lyrics for the perf overlay's no-synced-data fallback. */
   plainLyrics: string | null;
+  lyricsQuality?: LyricsQuality | null;
   /** Flip the room's persisted ◐ theme — shared with the perf overlay. */
   onToggleTheme: () => void;
 }
 
-export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, view, lines, theme, title, artist, plainLyrics, onToggleTheme }: KaraokePlayerProps) {
+export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, view, lines, theme, title, artist, plainLyrics, lyricsQuality, onToggleTheme }: KaraokePlayerProps) {
   const rootRef = useRef<HTMLElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [container, setContainer] = useState<HTMLElement | null>(null);
@@ -604,6 +606,7 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
           artist={artist}
           lines={lines}
           plain={plainLyrics}
+          lyricsQuality={lyricsQuality}
           theme={theme}
           onToggleTheme={onToggleTheme}
           onExit={exitPerf}

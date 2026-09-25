@@ -61,3 +61,25 @@ describe("uploadJob", () => {
     expect((calls[0].init.body as FormData).has("title")).toBe(false);
   });
 });
+
+import { saveLyricsReview, setTokenGetter } from "./api";
+
+describe("saveLyricsReview", () => {
+  afterEach(() => setTokenGetter(null));
+  test("saves the exact edited LRC with confirmation, revision, and owner auth", async () => {
+    const calls = captureFetch();
+    setTokenGetter(async () => "test-owner-token");
+    const lrc = "[00:02.00]Corrected line\n[00:05.00]Repeated line";
+    await saveLyricsReview(23, lrc, "revision-one");
+    expect(calls[0].path).toBe("/jobs/23/lyrics-review");
+    expect(calls[0].init.method).toBe("PUT");
+    expect(JSON.parse(calls[0].init.body as string)).toEqual({ lrc, expected_revision: "revision-one", confirm: true });
+    expect((calls[0].init.headers as Record<string, string>).Authorization).toBe("Bearer test-owner-token");
+  });
+  test("surfaces conflicts and validation errors without pretending save succeeded", async () => {
+    for (const status of [409, 422]) {
+      globalThis.fetch = (async () => new Response(JSON.stringify({ detail: "Review rejected" }), { status })) as unknown as typeof fetch;
+      await expect(saveLyricsReview(23, "[00:02]Words", "stale-revision")).rejects.toThrow(String(status));
+    }
+  });
+});

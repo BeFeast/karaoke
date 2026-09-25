@@ -81,6 +81,8 @@ class GpuJobResult:
     # lyrics against the vocal stem (#55). ``None`` when no ``align_text`` was
     # sent, or the handler/aligner produced nothing (old image, or failure).
     aligned_lrc_path: Path | None = None
+    aligned_raw_lrc_path: Path | None = None
+    aligned_diagnostics_path: Path | None = None
 
 
 # --------------------------------------------------------------------------

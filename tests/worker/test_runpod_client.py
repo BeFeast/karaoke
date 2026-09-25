@@ -12,6 +12,7 @@ network. Locks down the safety properties the lead reviews:
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 
 import pytest
@@ -424,6 +425,8 @@ def test_align_text_sent_and_aligned_lrc_materialised(settings, tmp_path):
         "lyrics_json": {},
         "aligned_lrc": aligned,
         "aligned_lang": "eng",
+        "aligned_raw_lrc": aligned + "\n[00:05.00]rejected line",
+        "aligned_diagnostics": {"schema_version": 1, "lines": [{"kept": False}]},
         "gpu_model": "L40",
         "elapsed_s": 12.0,
     }
@@ -450,6 +453,9 @@ def test_align_text_sent_and_aligned_lrc_materialised(settings, tmp_path):
     # The aligned LRC was written and surfaced on the result.
     assert result.aligned_lrc_path is not None
     assert result.aligned_lrc_path.read_text() == aligned
+    assert result.aligned_raw_lrc_path.read_text() == output["aligned_raw_lrc"]
+    assert json.loads(result.aligned_diagnostics_path.read_text()) == output["aligned_diagnostics"]
+    assert payload["job_budget_s"] == 900
 
 
 def test_no_align_text_means_no_aligned_path_and_no_payload_key(settings, tmp_path):
@@ -481,6 +487,8 @@ def test_no_align_text_means_no_aligned_path_and_no_payload_key(settings, tmp_pa
     assert "align_lang" not in payload
     assert "whisper_lang" not in payload
     assert result.aligned_lrc_path is None
+    assert result.aligned_raw_lrc_path is None
+    assert result.aligned_diagnostics_path is None
 
 
 def test_whisper_lang_sent_independently_of_alignment(settings, tmp_path):
@@ -762,3 +770,25 @@ def test_run_non_409_submit_error_stays_fatal(settings, tmp_path):
     with pytest.raises(RunpodError) as exc_info:
         client.run(_mix_wav(tmp_path), tmp_path / "work")
     assert not isinstance(exc_info.value, RunpodCapacityError)
+
+
+def test_raw_alignment_evidence_survives_empty_filtered_result(settings, tmp_path):
+    output = {
+        "vocals_b64": _b64(b"v"), "instrumental_b64": _b64(b"i"),
+        "lyrics_txt": "", "lyrics_json": {},
+        "aligned_raw_lrc": "[00:01.00]dropped words",
+        "aligned_diagnostics": {"schema_version": 1, "lines": [{"kept": False}],
+                                "retries": [{"outcome": "skipped", "reason": "budget"}]},
+    }
+    rec = _Recorder([
+        {"expect_in": "/run", "code": 200, "body": {"id": "raw-only"}},
+        {"expect_in": "/status/raw-only", "code": 200,
+         "body": {"status": "COMPLETED", "output": output}},
+    ])
+    settings.runpod_max_job_cost = 0.01
+    result = RunpodClient(settings, http=rec).run(_mix_wav(tmp_path), tmp_path / "work")
+    assert result.aligned_lrc_path is None
+    assert result.aligned_raw_lrc_path.read_text() == output["aligned_raw_lrc"]
+    assert json.loads(result.aligned_diagnostics_path.read_text()) == output["aligned_diagnostics"]
+    payload = next(c[2]["input"] for c in rec.calls if "/run" in c[1] and c[2])
+    assert payload["job_budget_s"] == pytest.approx(0.01 / 0.68 * 3600)

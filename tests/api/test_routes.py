@@ -697,6 +697,9 @@ def test_share_lyrics_empty_when_no_artifacts(client, tmp_path):
 
     assert r.status_code == 200, r.text
     body = r.json()
+    assert body.pop("quality") is None
+    assert len(body.pop("revision")) == 64
+    assert isinstance(body.pop("review_job_id"), int)
     assert body == {
         "synced": False,
         "lrc": None,

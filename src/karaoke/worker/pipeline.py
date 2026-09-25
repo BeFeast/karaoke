@@ -457,12 +457,95 @@ async def _mark_failed(
 # ---------------------------------------------------------------------------
 # lyrics resolution (LRCLIB synced > LRCLIB plain > Whisper ASR)
 # ---------------------------------------------------------------------------
+def _read_json_object(path: Path | None) -> dict | None:
+    if path is None:
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
 def _resolve_lyrics(
     lyrics: LyricsResult,
     exports_dir: Path,
     whisper_lyrics_txt: Path,
     aligned_lrc_path: Path | None = None,
     whisper_lyrics_json: Path | None = None,
+) -> dict[str, object]:
+    """Resolve exports, then audit the full text independently of selection.
+
+    Audio completion is not lyric approval. Missing text or uncertain timing
+    remains visible as needs_review, including with legacy GPU workers.
+    """
+    from karaoke.worker.lyrics_quality import assess_lyrics, reconcile_alignment
+
+    curated = lyrics.synced_lrc or lyrics.plain or lyrics.rejected_text
+    asr = _read_json_object(whisper_lyrics_json)
+    raw = None
+    scores = None
+    diagnostics = None
+    if aligned_lrc_path is not None:
+        with contextlib.suppress(OSError):
+            raw = aligned_lrc_path.read_text(encoding="utf-8")
+        try:
+            scores = json.loads(aligned_lrc_path.with_name("aligned.scores.json").read_text())
+            if not isinstance(scores, list):
+                scores = None
+        except (OSError, ValueError):
+            pass
+        diagnostics = _read_json_object(aligned_lrc_path.with_name("aligned.diagnostics.json"))
+    if diagnostics is None and whisper_lyrics_json is not None:
+        diagnostics = _read_json_object(whisper_lyrics_json.with_name("aligned.diagnostics.json"))
+    if diagnostics and not (asr or {}).get("retry_segments"):
+        asr = dict(asr or {})
+        asr["retry_segments"] = [
+            segment
+            for retry in (diagnostics.get("retries") or [])
+            if isinstance(retry, dict)
+            for segment in retry.get("evidence_segments", [])
+            if isinstance(segment, dict)
+        ]
+    aligned, recovery = reconcile_alignment(curated, raw, scores, asr)
+    provenance = _select_lyrics(
+        lyrics, exports_dir, whisper_lyrics_txt, aligned_lrc_path,
+        whisper_lyrics_json, aligned=aligned,
+    )
+    selected = None
+    if provenance["lrc_written"]:
+        selected = (exports_dir / "lyrics.lrc").read_text(encoding="utf-8")
+    else:
+        # An earlier attempt must never leak a stale timed export into a new
+        # untimed/instrumental result.
+        (exports_dir / "lyrics.lrc").unlink(missing_ok=True)
+    quality = assess_lyrics(
+        curated, selected, asr,
+        restored_lines=recovery.get("counts", {}).get("restored_lines", 0),
+        repaired_timing_lines=recovery.get("counts", {}).get("repaired_timing_lines", 0),
+    )
+    if provenance["instrumental"]:
+        quality["status"] = "needs_review"
+        quality["issues"] = [{"code": "instrumental_unverified", "detail": "Instrumental designation requires listening review."}]
+    quality["reconciliation"] = recovery
+    if diagnostics:
+        quality["retries"] = diagnostics.get("retries", [])
+        quality["retry_budget"] = diagnostics.get("retry_budget", {})
+    provenance["lyrics_quality"] = quality
+    (exports_dir / "lyrics.quality.json").write_text(
+        json.dumps(quality, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return provenance
+
+
+def _select_lyrics(
+    lyrics: LyricsResult,
+    exports_dir: Path,
+    whisper_lyrics_txt: Path,
+    aligned_lrc_path: Path | None = None,
+    whisper_lyrics_json: Path | None = None,
+    *,
+    aligned: str | None = None,
 ) -> dict[str, object]:
     """Apply the lyrics precedence and write the chosen export files.
 
@@ -525,7 +608,6 @@ def _resolve_lyrics(
         # keeping LRCLIB's line text + tags byte-identical; provenance stays
         # ``lrclib_synced``. Tolerant: a missing/garbage aligned LRC or any
         # unmergeable line degrades to the plain LRCLIB line exactly.
-        aligned = _read_aligned_lrc(aligned_lrc_path)
         merged_lrc, word_timing, eligible, matched_n = merge_lrclib_word_tags(
             lyrics.synced_lrc, aligned
         )
@@ -602,7 +684,6 @@ def _resolve_lyrics(
         # Promote to a synced export if the GPU force-aligned the plain text
         # into a usable LRC (#55). Tolerant: a missing/empty/garbage aligned
         # file degrades silently to the untimed plain-only branch.
-        aligned = _read_aligned_lrc(aligned_lrc_path)
         if aligned:
             lyrics_lrc.write_text(aligned, encoding="utf-8")
             return {
@@ -635,18 +716,16 @@ def _resolve_lyrics(
     # ``lyrics_align_reason`` records why alignment (not native synced) was
     # used. No usable aligned LRC → fall through to the Whisper floor below,
     # which records the rejection as before (#148 unchanged).
-    if lyrics.rejected_text:
-        aligned = _read_aligned_lrc(aligned_lrc_path)
-        if aligned:
-            lyrics_lrc.write_text(aligned, encoding="utf-8")
-            lyrics_txt.write_text(lyrics.rejected_text, encoding="utf-8")
-            return {
-                "lyrics_source": SOURCE_FORCED_ALIGNED,
-                "synced": True,
-                "instrumental": False,
-                "lrc_written": True,
-                "lyrics_align_reason": f"lrclib_{lyrics.rejected}",
-            }
+    if lyrics.rejected_text and aligned:
+        lyrics_lrc.write_text(aligned, encoding="utf-8")
+        lyrics_txt.write_text(lyrics.rejected_text, encoding="utf-8")
+        return {
+            "lyrics_source": SOURCE_FORCED_ALIGNED,
+            "synced": True,
+            "instrumental": False,
+            "lrc_written": True,
+            "lyrics_align_reason": f"lrclib_{lyrics.rejected}",
+        }
 
     # LRCLIB miss → keep the Whisper transcript (the ASR floor). When the GPU
     # job's segment timestamps are usable, also emit an approximate LRC so the
@@ -1075,6 +1154,7 @@ async def run_real_job(
             "vast_instance_id": gpu.vast_instance_id,
             "vast_cost": round(gpu.vast_cost, 6),
             "lyrics_source": lyrics_prov["lyrics_source"],
+            "lyrics_quality": lyrics_prov["lyrics_quality"],
             "synced": lyrics_prov["synced"],
             "instrumental": lyrics_prov["instrumental"],
         }
@@ -1136,12 +1216,15 @@ async def run_real_job(
                 )
             job.status = JobStatus.completed
             job.progress = 100
-            job.stage_note = None
+            job.stage_note = (
+                "Lyrics need review"
+                if lyrics_prov["lyrics_quality"]["status"] == "needs_review" else None
+            )
             job.completed_at = dt.datetime.now(dt.UTC)
             job.vast_instance_id = str(gpu.vast_instance_id)
             job.vast_cost_micros = round(gpu.vast_cost * 1_000_000)
             await session.commit()
-        ws_events.publish_stage(job_id, JobStatus.completed, 100)
+        ws_events.publish_stage(job_id, JobStatus.completed, 100, stage_note=job.stage_note)
     except Exception as exc:  # noqa: BLE001 — surface as a failed job, never crash the loop
         await _mark_failed(session_factory, job_id, f"{type(exc).__name__}: {exc}")
 
