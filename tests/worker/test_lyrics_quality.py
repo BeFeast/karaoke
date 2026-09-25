@@ -436,3 +436,118 @@ def test_full_asr_reason_cannot_bypass_provenance_or_evidence_guards():
                                              accepted_retries=[variant])
         assert result is None
         assert quality["status"] == "needs_review"
+
+
+def _provisional_fixture(zero_width=False):
+    texts = ["silver river runs"] + [f"bright meadow number {i}" for i in range(7)]
+    raw = "\n".join(line(text, 10 + i * 4) for i, text in enumerate(texts))
+    words = [{"text": word, "start": 10 + i * .5, "end": 10 + (i + 1) * .5}
+             for i, word in enumerate(texts[0].split())]
+    if zero_width:
+        words[0]["end"] = words[0]["start"]
+    row = {"text": texts[0], "raw_lrc": raw.splitlines()[0], "start": 10, "end": 11.5,
+           "score": -3, "kept": True, "rejection_reasons": [],
+           "timing_issues": ["relative_score_outlier"] + (["invalid_word_timestamps"] if zero_width else []),
+           "words": words}
+    evidence = asr(("silver river hums", 10), *[(text, 14 + i * 4) for i, text in enumerate(texts[1:])])
+    evidence["duration"] = 50
+    return "\n".join(texts), raw, [-3] + [-.1] * 7, evidence, {"lines": [row]}
+
+
+def test_relative_score_candidate_is_retained_as_uncertain_not_checked():
+    curated, raw, scores, evidence, diagnostics = _provisional_fixture()
+    result, quality = reconcile_alignment(curated, raw, scores, evidence,
+                                         alignment_diagnostics=diagnostics)
+    assert len(result.splitlines()) == 8
+    assert quality["counts"]["missing_words"] == 0
+    assert quality["counts"]["provisional_lines"] == 1
+    assert quality["status"] == "needs_review"
+    assert "alignment_text_uncertain" in codes(quality)
+
+
+def test_raw_zero_width_word_downgrades_to_line_timing_without_deleting_text():
+    curated, raw, scores, evidence, diagnostics = _provisional_fixture(zero_width=True)
+    result, quality = reconcile_alignment(curated, raw, scores, evidence,
+                                         alignment_diagnostics=diagnostics)
+    assert result.splitlines()[0] == "[00:10.00]silver river runs"
+    assert quality["status"] == "needs_review"
+    assert {"alignment_text_uncertain", "alignment_word_timing_unverified",
+            "word_timing_missing"} <= codes(quality)
+
+
+def test_invalid_or_vetoed_gpu_candidate_cannot_be_preserved():
+    import copy
+    curated, raw, scores, evidence, diagnostics = _provisional_fixture()
+    mutations = [
+        lambda row: row.update(kept=False, rejection_reasons=["low_voiced_overlap"]),
+        lambda row: row.update(rejection_reasons=["low_alignment_score"]),
+        lambda row: row.update(start=9),
+        lambda row: row.update(end=70),
+        lambda row: row.update(text="different words"),
+        lambda row: row.update(words=[]),
+        lambda row: row["words"][0].update(start=-1),
+        lambda row: row["words"][0].update(end=9),
+        lambda row: row.update(timing_issues=["implausible_word_pace"]),
+    ]
+    for mutate in mutations:
+        variant = copy.deepcopy(diagnostics)
+        mutate(variant["lines"][0])
+        result, quality = reconcile_alignment(curated, raw, scores, evidence,
+                                             alignment_diagnostics=variant)
+        assert len(result.splitlines()) == 7
+        assert quality["counts"]["missing_lines"] == 1
+
+
+def test_malformed_or_missing_old_diagnostics_do_not_enable_provisional_text():
+    curated, raw, scores, evidence, _ = _provisional_fixture()
+    for diagnostics in [None, {}, {"lines": 42}, {"lines": [42, {}]}]:
+        result, quality = reconcile_alignment(curated, raw, scores, evidence,
+                                             alignment_diagnostics=diagnostics)
+        assert len(result.splitlines()) == 7
+        assert quality["status"] == "needs_review"
+
+
+def test_crammed_absent_cut_verse_is_not_preserved_by_gpu_kept_flag():
+    curated, raw, scores, evidence, diagnostics = _provisional_fixture()
+    crammed = line("silver river runs", 10, .03)
+    raw = crammed + "\n" + "\n".join(raw.splitlines()[1:])
+    diagnostics["lines"][0].update(raw_lrc=crammed, end=10.09)
+    result, quality = reconcile_alignment(curated, raw, scores, evidence,
+                                         alignment_diagnostics=diagnostics)
+    assert len(result.splitlines()) == 7
+    assert quality["counts"]["missing_lines"] == 1
+
+
+def test_preservation_issue_follows_selected_occurrence_not_unrelated_export():
+    issue = {"code": "alignment_text_uncertain", "text": "silver river", "start": 10, "end": 11}
+    quality = assess_lyrics("silver river", line(), asr(("silver river", 10)),
+                            preservation_issues=[issue])
+    assert quality["status"] == "needs_review"
+    unrelated = assess_lyrics("silver river", line(start=30), asr(("silver river", 30)),
+                              preservation_issues=[issue])
+    assert unrelated["status"] == "checked"
+
+def test_zero_width_raw_word_is_downgraded_even_without_relative_score_drop():
+    curated, raw, scores, evidence, diagnostics = _provisional_fixture(zero_width=True)
+    scores[0] = -.1
+    diagnostics["lines"][0].update(score=-.1, timing_issues=["invalid_word_timestamps"])
+    result, quality = reconcile_alignment(curated, raw, scores, evidence,
+                                         alignment_diagnostics=diagnostics)
+    assert result.splitlines()[0] == "[00:10.00]silver river runs"
+    assert quality["status"] == "needs_review"
+    assert "alignment_word_timing_unverified" in codes(quality)
+
+def test_low_asr_confidence_preserves_existing_candidate_but_never_gpu_veto():
+    curated, raw, scores, evidence, diagnostics = _provisional_fixture()
+    for word in evidence["segments"][0]["words"]:
+        word["probability"] = .1
+    result, quality = reconcile_alignment(curated, raw, scores, evidence,
+                                         alignment_diagnostics=diagnostics)
+    assert len(result.splitlines()) == 8
+    assert quality["status"] == "needs_review"
+    assert "alignment_text_uncertain" in codes(quality)
+    diagnostics["lines"][0].update(kept=False, rejection_reasons=["low_voiced_overlap"])
+    result, quality = reconcile_alignment(curated, raw, scores, evidence,
+                                         alignment_diagnostics=diagnostics)
+    assert len(result.splitlines()) == 7
+    assert quality["counts"]["missing_lines"] == 1

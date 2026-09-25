@@ -510,6 +510,7 @@ def _resolve_lyrics(
     aligned, recovery = reconcile_alignment(
         curated, raw, scores, asr,
         accepted_retries=(diagnostics or {}).get("retries"),
+        alignment_diagnostics=diagnostics,
     )
     provenance = _select_lyrics(
         lyrics, exports_dir, whisper_lyrics_txt, aligned_lrc_path,
@@ -526,6 +527,7 @@ def _resolve_lyrics(
         curated, selected, asr,
         restored_lines=recovery.get("counts", {}).get("restored_lines", 0),
         repaired_timing_lines=recovery.get("counts", {}).get("repaired_timing_lines", 0),
+        preservation_issues=recovery.get("preservation_issues"),
     )
     if provenance["instrumental"]:
         quality["status"] = "needs_review"

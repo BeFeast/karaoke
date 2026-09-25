@@ -277,6 +277,7 @@ def assess_lyrics(
     *,
     restored_lines: int = 0,
     repaired_timing_lines: int = 0,
+    preservation_issues: list | None = None,
 ) -> dict[str, Any]:
     """Compare the full reference, selected output and independent ASR.
 
@@ -374,14 +375,25 @@ def assess_lyrics(
                     or line.end is not None and abs(support[-1].end - line.end) > 1
                 ):
                     issue("asr_word_timing_disagreement", line_index=i, text=line.norm, start=line.start)
+    selected_preservation = [
+        item for item in _list(preservation_issues) if isinstance(item, dict)
+        and isinstance(item.get("start"), (int, float))
+        and any(_tokens(str(item.get("text") or "")) == _tokens(line.norm)
+                and abs(item["start"] - line.start) <= 2 for line in lines)
+    ]
+    issues.extend(selected_preservation)
+    counts["provisional_lines"] = sum(
+        item.get("code") == "alignment_text_uncertain" for item in selected_preservation
+    )
     timing_codes = {"word_timing_missing", "word_timing_mismatch", "word_timing_collapsed",
                     "word_timing_gap", "line_word_timing_drift", "line_timing_overlap",
                     "timed_lyrics_unavailable", "asr_evidence_unavailable", "asr_line_unconfirmed",
-                    "asr_word_timing_disagreement", "asr_confidence_low", "word_timing_pace"}
+                    "asr_word_timing_disagreement", "asr_confidence_low", "word_timing_pace",
+                    "alignment_word_timing_unverified"}
     return dict(schema_version=1, status="needs_review" if issues else "checked",
                 text_confidence="uncertain" if any(i["code"] not in timing_codes or i["code"].startswith("asr_") for i in issues) else "checked",
                 timing_confidence="uncertain" if any(i["code"] in timing_codes for i in issues) else "checked",
-                counts=counts, issues=issues)
+                counts=counts, issues=issues, preservation_issues=selected_preservation)
 
 
 
@@ -449,6 +461,89 @@ def _accepted_retry(line, retries: list, used: set[int]) -> bool:
         return True
     return False
 
+
+def _provisional_candidate(original, line, score, diagnostics, used_rows, words, duration, *, require_support=True):
+    """Retain a witnessed GPU-kept phrase as uncertain, never resurrect a veto.
+
+    Match an ordered diagnostic occurrence to the exact input LRC, text, score,
+    and raw word span. Existing pace and ASR locality gates still apply. A zero
+    raw word width removes word highlighting, not the whole audible phrase.
+    """
+    if not isinstance(score, (int, float)) or not math.isfinite(score):
+        return None
+    if _timing_problems(line) or drop_unreliable_aligned_lines(original, None)[1]:
+        return None
+    support = _support(line, words)
+    # This preserves an existing GPU-kept candidate with explicit uncertainty;
+    # it does not promote it to an ASR-approved recovery. Low ASR confidence
+    # must remain visible rather than silently deleting plausible aligned text.
+    if require_support and (not support or line.end is None or
+            min(line.end, support[-1].end) <= max(line.start, support[0].start)):
+        return None
+    last_index = max(used_rows, default=-1)
+    for index, row in enumerate(_list((diagnostics or {}).get("lines"))):
+        if index <= last_index or not isinstance(row, dict):
+            continue
+        if row.get("raw_lrc") != original or row.get("kept") is not True:
+            continue
+        if row.get("rejection_reasons") != []:
+            continue
+        flags = row.get("timing_issues")
+        if not isinstance(flags, list) or any(
+            flag not in {"relative_score_outlier", "invalid_word_timestamps"} for flag in flags
+        ):
+            continue
+        if _tokens(str(row.get("text") or "")) != _tokens(line.norm):
+            continue
+        try:
+            start, end, raw_score = float(row["start"]), float(row["end"]), float(row["score"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if not all(math.isfinite(value) for value in (start, end, raw_score)):
+            continue
+        if (start < 0 or end <= start or abs(start - line.start) > .02
+                or abs(end - line.end) > .02 or abs(score - raw_score) > 1e-9
+                or duration is not None and end > duration):
+            continue
+        raw_words = _list(row.get("words"))
+        if len(raw_words) != len(line.word_starts):
+            continue
+        if _tokens(" ".join(str(w.get("text") or "") for w in raw_words
+                            if isinstance(w, dict))) != _tokens(line.norm):
+            continue
+        zero_width = False
+        previous_end = start
+        valid = True
+        for offset, word in enumerate(raw_words):
+            try:
+                a, b = float(word["start"]), float(word["end"])
+            except (KeyError, ValueError, TypeError):
+                valid = False
+                break
+            if (not math.isfinite(a) or not math.isfinite(b) or a < start or b > end
+                    or b < a or a < previous_end - .02
+                    or abs(a - line.word_starts[offset]) > .02):
+                valid = False
+                break
+            zero_width |= b == a
+            previous_end = b
+        if not valid:
+            continue
+        # An unspecified invalid-timestamp flag must not be hand-waved away.
+        if "invalid_word_timestamps" in flags and not zero_width:
+            continue
+        used_rows.add(index)
+        issues = [dict(code="alignment_text_uncertain", text=line.norm, start=start, end=end,
+                       detail="Existing voiced alignment retained as a candidate; alignment or independent ASR evidence is uncertain. Listen to confirm the words.")]
+        body = original
+        if zero_width:
+            body = _fmt_lrc_timestamp(start) + line.norm
+            issues.append(dict(code="alignment_word_timing_unverified", text=line.norm,
+                               start=start, end=end,
+                               detail="A raw aligned word has zero duration; word highlighting was removed. Line timing remains approximate."))
+        return body, issues
+    return None
+
 def reconcile_alignment(
     curated_text: str | None,
     raw_lrc: str | None,
@@ -456,6 +551,7 @@ def reconcile_alignment(
     asr: dict | None,
     *,
     accepted_retries: list | None = None,
+    alignment_diagnostics: dict | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
     """Filter alignment, recover ASR-supported lines and repair supported timing."""
     if not raw_lrc:
@@ -473,7 +569,12 @@ def reconcile_alignment(
     words = _asr_words(asr)
     output, restored, timing = [], 0, 0
     used_retries: set[int] = set()
-    for original, raw in zip(raw_lrc.splitlines(), repaired.splitlines(), strict=True):
+    used_rows: set[int] = set()
+    preservation: list = []
+    evidence = asr if isinstance(asr, dict) else {}
+    duration = evidence.get("duration")
+    duration = float(duration) if isinstance(duration, (int, float)) and math.isfinite(duration) and duration > 0 else None
+    for input_index, (original, raw) in enumerate(zip(raw_lrc.splitlines(), repaired.splitlines(), strict=True)):
         original_lines = _parse_aligner_lines(original)
         verified_retry = bool(original_lines) and _accepted_retry(
             original_lines[0], _list(accepted_retries), used_retries
@@ -494,7 +595,32 @@ def reconcile_alignment(
             output.append(original)
             continue
         line = parsed[0]
+        current_score = scores[input_index] if isinstance(scores, list) and input_index < len(scores) else None
+        has_zero_width = isinstance(alignment_diagnostics, dict) and any(
+            isinstance(row, dict) and row.get("raw_lrc") == original
+            and "invalid_word_timestamps" in _list(row.get("timing_issues"))
+            for row in _list(alignment_diagnostics.get("lines"))
+        )
+        if not keep or has_zero_width:
+            candidate = _provisional_candidate(
+                original, original_lines[0], current_score,
+                alignment_diagnostics if isinstance(alignment_diagnostics, dict) else {},
+                used_rows, words, duration, require_support=not keep,
+            ) if original_lines else None
+            if candidate is not None:
+                body, candidate_issues = candidate
+                output.append(body)
+                preservation.extend(candidate_issues)
+                continue
         if not keep:
+            if isinstance(alignment_diagnostics, dict) and any(
+                isinstance(row, dict) and row.get("raw_lrc") == original
+                for row in _list(alignment_diagnostics.get("lines"))
+            ):
+                # Known hard/invalid GPU evidence cannot be bypassed by the
+                # legacy score-only recovery path. Accepted repairs were
+                # independently authenticated above.
+                continue
             support = _support(line, words)
             # Restoration requires exact normalized ASR words: a fuzzy match
             # could otherwise insert a negation or other unperformed text.
@@ -516,5 +642,6 @@ def reconcile_alignment(
     if raw_lrc.endswith("\n"):
         result += "\n"
     return result or None, assess_lyrics(curated_text, result, asr,
-                                        restored_lines=restored, repaired_timing_lines=timing)
+                                        restored_lines=restored, repaired_timing_lines=timing,
+                                        preservation_issues=preservation)
 

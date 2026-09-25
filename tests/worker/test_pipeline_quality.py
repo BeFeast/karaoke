@@ -95,3 +95,30 @@ def test_accepted_crop_survives_export_selection_despite_timing_warning(tmp_path
     assert quality["status"] == "needs_review"
     assert "word_timing_pace" in {issue["code"] for issue in quality["issues"]}
     assert json.loads((export / "lyrics.quality.json").read_text()) == quality
+
+def test_provisional_alignment_warning_survives_final_selection(tmp_path):
+    work, export = _inputs(tmp_path)
+    stable = (work / "aligned.lrc").read_text().splitlines()[1]
+    first = "[00:01.00]<00:01.00>silver <00:01.50>river <00:01.90>"
+    raw = first + "\n" + "\n".join([stable] * 7)
+    curated = "silver river\n" + "\n".join(["bright meadow"] * 7)
+    scores = [-3] + [-.1] * 7
+    evidence = json.loads((work / "lyrics.json").read_text())
+    diagnostics = {"lines": [{"text": "silver river", "raw_lrc": first, "start": 1, "end": 1.9,
+        "score": -3, "kept": True, "rejection_reasons": [],
+        "timing_issues": ["relative_score_outlier", "invalid_word_timestamps"],
+        "words": [{"text": "silver", "start": 1, "end": 1},
+                  {"text": "river", "start": 1.5, "end": 1.9}]}]}
+    (work / "lyrics.txt").write_text(curated)
+    (work / "lyrics.json").write_text(json.dumps(evidence))
+    (work / "aligned.lrc").write_text(raw)
+    (work / "aligned.scores.json").write_text(json.dumps(scores))
+    (work / "aligned.diagnostics.json").write_text(json.dumps(diagnostics))
+    result = _resolve_lyrics(LyricsResult(plain=curated, source="lrclib_get"),
+                             export, work / "lyrics.txt", work / "aligned.lrc", work / "lyrics.json")
+    quality = result["lyrics_quality"]
+    assert quality["counts"]["missing_lines"] == 0
+    assert quality["counts"]["provisional_lines"] == 1
+    assert quality["status"] == "needs_review"
+    assert "alignment_text_uncertain" in {issue["code"] for issue in quality["issues"]}
+    assert (export / "lyrics.lrc").read_text().splitlines()[0] == "[00:01.00]silver river"
