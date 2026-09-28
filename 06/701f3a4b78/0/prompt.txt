@@ -1,0 +1,9 @@
+<task-notification>
+<task-id>bdexc35zr</task-id>
+<tool-use-id>toolu_0178rTSTgJtEZDfToqVVCw7s</tool-use-id>
+<output-file>/tmp/claude-1000/-home-god-src-karaoke/ee21a9c3-68d2-4800-abcf-373f973bbb63/tasks/bdexc35zr.output</output-file>
+<status>completed</status>
+<summary>Monitor "gpu-image r12 build run 36481088271 completion" stream ended</summary>
+<event>gpu-image run 36481088271: completed success</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
