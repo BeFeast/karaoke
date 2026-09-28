@@ -664,9 +664,11 @@ def _select_lyrics(
         # Constant-offset shift (#293): a music video that prepends a skit /
         # intro to the unchanged audio release keeps the curated timing exactly,
         # later by a constant. When the aligner's lines agree on that constant
-        # (median over paired lines, tight spread), ship the curated record
-        # shifted whole — every line, LRCLIB timing — rather than the aligner's
-        # lossy re-timing; the word-tag merge then lands on the shifted tags.
+        # (median over paired lines, tight spread) and kept nearly every
+        # curated line (so nothing the VAD veto removed as unsung comes back),
+        # ship the curated record shifted whole — every line, LRCLIB timing —
+        # rather than the aligner's lossy re-timing; the word-tag merge then
+        # lands on the shifted tags.
         synced_lrc = lyrics.synced_lrc
         lrclib_offset: float | None = None
         if aligned:

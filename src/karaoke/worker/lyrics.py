@@ -103,8 +103,11 @@ _MAX_INTRA_LINE_GAP_S = 4.0
 # timing exactly, just later by a constant. When the aligner's lines agree on
 # that constant (many lines, tight spread) the curated timing is shifted and
 # shipped whole instead of the aligner's lossy re-timing.
+# The aligner must have kept (nearly) the whole record: an output the r9 VAD
+# veto trimmed hard (#253) means curated lines are NOT sung in this cut, and
+# shifting the full record would put them back on screen.
 _OFFSET_MIN_LINES = 10
-_OFFSET_MIN_RATIO = 0.5
+_OFFSET_MIN_RATIO = 0.8
 _OFFSET_MAX_SPREAD_S = 1.0  # interquartile range of the per-line deltas
 _OFFSET_MIN_ABS_S = 2.0  # below this the word-tag merge's drift window copes
 
