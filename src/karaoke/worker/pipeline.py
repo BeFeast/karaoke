@@ -109,6 +109,32 @@ _REFERENCE_MIN_AGREEMENT = 0.12
 _POST_ASR_MIN_AGREEMENT = 0.2
 
 
+async def _post_asr_lookup(asr_doc: dict, source_meta: dict, canonical, lang_hint: str | None, settings):
+    """#262: ``(queries, hit, hit_text, agreement)`` — confident transcript
+    lines, the LRCLIB record found via titles identified on the web from those
+    lines (LRCLIB cannot search lyric text), its plain text and its word-bigram
+    agreement with the transcript (``None`` without a hit)."""
+    queries = _confident_asr_lines(asr_doc)
+    asr_text = " ".join(
+        str(seg.get("text") or "") for seg in asr_doc.get("segments") or [] if isinstance(seg, dict)
+    )
+    titles: list[str] = []
+    if queries and settings.web_reference_enabled:
+        for line in queries[:2]:
+            found = await asyncio.to_thread(_web_references(settings).identify_by_text, line, lang=lang_hint)
+            titles += [t for _, t in found if t not in titles]
+    hit = None
+    if titles:
+        hit = await asyncio.to_thread(
+            _LYRICS_SOURCE.search_by_text,
+            titles,
+            durations=(source_meta.get("duration"), canonical.duration if canonical else None),
+        )
+    hit_text = (hit.plain or (lrc_to_plain(hit.synced_lrc) if hit.synced_lrc else "")) if hit else ""
+    agreement = bigram_agreement(asr_text, hit_text, lang_hint) if hit_text else None
+    return queries, hit, hit_text, agreement
+
+
 def _confident_asr_lines(asr: dict, limit: int = 3) -> list[str]:
     """Up to ``limit`` transcript lines worth searching for (#262): >= 4
     words, mean word probability >= 0.7, not repetition loops; mid-song
@@ -502,7 +528,8 @@ async def _set_stage(
 
 
 async def _prior_24h_cost_micros(session_factory: async_sessionmaker) -> int:
-    """Sum vast_cost_micros over jobs completed in the last 24h (rolling cap)."""
+    """Sum GPU spend of the last 24h (rolling cap): jobs completed in the
+    window plus lyrics-only rebuild passes made in the window (#284)."""
     cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(hours=24)
     async with session_factory() as session:
         rows = await session.scalars(
@@ -512,7 +539,15 @@ async def _prior_24h_cost_micros(session_factory: async_sessionmaker) -> int:
                 Job.vast_cost_micros.is_not(None),
             )
         )
-        return sum(int(v) for v in rows if v is not None)
+        total = sum(int(v) for v in rows if v is not None)
+        rebuilds = await session.scalars(
+            select(Job.lyrics_rebuild_cost_micros).where(
+                Job.lyrics_rebuilt_at.is_not(None),
+                Job.lyrics_rebuilt_at >= cutoff,
+                Job.lyrics_rebuild_cost_micros.is_not(None),
+            )
+        )
+        return total + sum(int(v) for v in rebuilds if v is not None)
 
 
 async def _mark_failed(
@@ -1456,24 +1491,9 @@ async def run_real_job(
             and settings.post_asr_reference_enabled
         ):
             asr_doc = _read_json_object(gpu.lyrics_json_path) or {}
-            queries = _confident_asr_lines(asr_doc)
-            asr_text = " ".join(str(seg.get("text") or "") for seg in asr_doc.get("segments") or [] if isinstance(seg, dict))
-            hit = None
-            titles: list[str] = []
-            if queries and settings.web_reference_enabled:
-                for line in queries[:2]:
-                    found = await asyncio.to_thread(
-                        _web_references(settings).identify_by_text, line, lang=lang_hint
-                    )
-                    titles += [t for _, t in found if t not in titles]
-            if titles:
-                hit = await asyncio.to_thread(
-                    _LYRICS_SOURCE.search_by_text,
-                    titles,
-                    durations=(source_meta.get("duration"), canonical.duration if canonical else None),
-                )
-            hit_text = (hit.plain or (lrc_to_plain(hit.synced_lrc) if hit.synced_lrc else "")) if hit else ""
-            hit_agreement = bigram_agreement(asr_text, hit_text, lang_hint) if hit_text else None
+            queries, hit, hit_text, hit_agreement = await _post_asr_lookup(
+                asr_doc, source_meta, canonical, lang_hint, settings
+            )
             if hit is not None and hit_agreement is not None and hit_agreement >= _POST_ASR_MIN_AGREEMENT and _use_runpod(settings):
                 realign = await _run_gpu_with_capacity_retry(
                     session_factory, job_id, settings, client, gpu.vocals_path, work_dir / "realign",

@@ -324,6 +324,9 @@ export interface LyricsPayload {
   revision?: string;
   // Present only when the API authorises this viewer to review this job.
   review_job_id?: number | null;
+  // Lyrics-only rebuild (#284): present while one runs / after one failed.
+  rebuilding?: boolean;
+  rebuild_note?: string | null;
 }
 
 // Fetch the structured lyrics payload for a job, or null on any failure
@@ -338,6 +341,20 @@ export async function getLyrics(token: string): Promise<LyricsPayload | null> {
 }
 
 // Owner-only correction, protected against overwriting another review.
+/** Re-run only the lyrics stage on the stored vocal stem (#284). Owner only. */
+export function rebuildLyrics(jobId: number): Promise<{ status: string; job_id: number }> {
+  return request(`/jobs/${jobId}/lyrics-rebuild`, { method: "POST", headers: { Accept: "application/json" } });
+}
+
+/** Align owner-pasted lyrics to the vocals; the paste wins where it covers the song (#284). */
+export function pasteReferenceLyrics(jobId: number, text: string): Promise<{ status: string; job_id: number }> {
+  return request(`/jobs/${jobId}/lyrics-reference`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ text, confirm: true }),
+  });
+}
+
 export function saveLyricsReview(jobId: number, lrc: string, revision: string): Promise<LyricsPayload> {
   return request<LyricsPayload>(`/jobs/${jobId}/lyrics-review`, {
     method: "PUT",
