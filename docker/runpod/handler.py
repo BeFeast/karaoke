@@ -289,6 +289,11 @@ def _run_separation(input_wav: Path, out_dir: Path) -> tuple[Path, Path]:
 # over the coordinator's title-script hint (#260): the hint exists to break
 # LOW-confidence misdetection ties, not to overrule clear audio evidence.
 _LANG_DETECT_TRUST_P = 0.6
+# When the coordinator DID supply a hint (derived from the title's script),
+# the probe needs this much confidence to overrule it (r13): a Hebrew song
+# with a spoken English intro probed as ``en`` at 0.68 and the whole stem was
+# decoded as English gibberish (Idan Raichel — Mimaamakim, 2026-09-28).
+_LANG_HINT_OVERRIDE_P = 0.9
 
 
 def _transcribe(
@@ -352,7 +357,8 @@ def _transcribe(
         except Exception as exc:  # detection probe is best-effort; keep the hint
             LOG.warning("language probe failed (%s); keeping hint %r", exc, language)
             detected, prob = None, 0.0
-        if detected and prob >= _LANG_DETECT_TRUST_P:
+        needed = _LANG_HINT_OVERRIDE_P if language else _LANG_DETECT_TRUST_P
+        if detected and prob >= needed:
             language = detected
         model_name = _whisper_model_for(language)
     if model_name != _WHISPER_MODEL_NAME:

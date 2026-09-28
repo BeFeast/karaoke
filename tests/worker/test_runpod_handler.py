@@ -1115,3 +1115,18 @@ def test_vanilla_hebrew_detection_reroutes_when_probe_fails(monkeypatch, tmp_pat
     assert txt == "from ivrit" and js["model"] == handler._HEBREW_WHISPER_MODEL_NAME
     assert ivrit.transcribe_calls[0]["language"] == "he"
     assert len(vanilla.transcribe_calls) == 1
+
+
+def test_hint_survives_a_moderately_confident_contradicting_probe(monkeypatch, tmp_path):
+    """r13: hint ``he`` vs probe ``en`` @ 0.68 (spoken English intro) — the
+    hint rules and the stem goes to the fine-tune; ≥ 0.9 still overrides."""
+    handler = _load_handler()
+    models = _fake_models(monkeypatch, handler, "en", 0.68)
+    _, js = handler._transcribe(tmp_path / "v.wav", language="he")
+    assert js["model"] == handler._HEBREW_WHISPER_MODEL_NAME
+    assert models["ivrit"].transcribe_calls[0]["language"] == "he"
+    # no hint: 0.68 is enough to pick the language (and vanilla for en)
+    models = _fake_models(monkeypatch, handler, "en", 0.68)
+    _, js = handler._transcribe(tmp_path / "v.wav", language=None)
+    assert js["model"] == handler._WHISPER_MODEL_NAME
+    assert models["vanilla"].transcribe_calls[0]["language"] == "en"
