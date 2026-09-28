@@ -216,8 +216,14 @@ class RunpodClient:
         align_text: str | None = None,
         align_lang: str | None = None,
         whisper_lang: str | None = None,
+        mode: str = "both",
     ) -> GpuJobResult:
         """Submit one job and pull back the artifacts.
+
+        ``mode="lyrics"`` (#283/#284, r14 handler): ``mix_wav`` is an
+        already-separated vocal stem; the GPU only transcribes and aligns it.
+        No stems travel back — the result's ``vocals_path`` /
+        ``instrumental_path`` both point at the input stem.
 
         ``align_text`` (#55): when set, the handler force-aligns this plain
         text against the separated vocal stem and returns a synced LRC in
@@ -250,15 +256,19 @@ class RunpodClient:
         # (RunPod async /run has a ~10MB body cap; our 35-50MB wavs blow it up).
         # Otherwise fall back to base64 (works for tiny test inputs and tests).
         run_input: dict[str, Any]
+        if mode not in ("both", "lyrics"):
+            raise RunpodError(f"unsupported mode {mode!r}")
+        self._mode = mode
+        self._input_path = mix_wav
         if self._r2_configured():
             audio_url, _ = self._upload_to_r2(mix_wav)
-            run_input = {"audio_url": audio_url, "mode": "both"}
-            if getattr(self, "_r2_put_urls", None):
+            run_input = {"audio_url": audio_url, "mode": mode}
+            if mode == "both" and getattr(self, "_r2_put_urls", None):
                 run_input["vocals_put_url"] = self._r2_put_urls["vocals"]
                 run_input["instrumental_put_url"] = self._r2_put_urls["instrumental"]
         else:
             audio_b64 = base64.b64encode(mix_wav.read_bytes()).decode("ascii")
-            run_input = {"audio_base64": audio_b64, "mode": "both"}
+            run_input = {"audio_base64": audio_b64, "mode": mode}
 
         # Force-alignment (#55): pass the plain lyrics to the handler so it can
         # synthesize a synced LRC from the vocal stem inside the same GPU window.
@@ -546,7 +556,10 @@ class RunpodClient:
                     f"keys={sorted(output)}"
                 )
 
-        vocals_path, instrumental_path = self._handle_r2_output(output, work_dir)
+        if getattr(self, "_mode", "both") == "lyrics":
+            vocals_path = instrumental_path = self._input_path
+        else:
+            vocals_path, instrumental_path = self._handle_r2_output(output, work_dir)
 
         lyrics_txt_path = work_dir / "lyrics.txt"
         lyrics_txt_path.write_text(str(output["lyrics_txt"]), encoding="utf-8")
