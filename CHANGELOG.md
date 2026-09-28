@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.41.7] - 2026-09-28
+
+_Bump: patch_
+
+- fix(lyrics): wrong-song guards — a canonical candidate needs title evidence (cross-script titles need artist + duration); a curated reference must share word bigrams with a same-language ASR transcript (>= 0.12) or it is dropped as `asr_disagreement` (#281)
+
 ## [v0.41.6] - 2026-09-28
 
 _Bump: patch_
