@@ -179,3 +179,11 @@ fine-tune with `language="he"` pinned (its own language ID is unreliable).
 `lyrics.json` gains `model`, `language_detected`, `language_detected_probability`.
 The CPU selfcheck requires both `model.bin` files. Older images ignore nothing new:
 the handler contract is unchanged.
+
+
+## r14 — `mode: "lyrics"` (#283, #284)
+
+The input audio is an already-separated **vocal stem** (a finished job's `work/vocals.wav`):
+no separation, the stem is transcribed (same Hebrew routing as r11+) and, when `align_text`
+is given, force-aligned — including the retry pass. No stems are uploaded or returned. Used by
+the coordinator for references found after ASR, pasted reference lyrics and "Rebuild lyrics".
