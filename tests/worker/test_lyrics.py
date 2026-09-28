@@ -1717,3 +1717,17 @@ def test_ladder_prefers_the_candidate_by_the_right_artist():
     assert hit.found and hit.match_variant == "אחותי" and hit.plain == _GOOD_PLAIN
     assert rec.calls[-1][2] == {"q": "אחותי"}
     assert "Shiri" not in str(rec.calls[-1]) and hit.duration_gate == "source"  # 187 within ±5 of 189
+
+
+def test_ladder_matches_a_hebrew_artist_to_a_latin_record():
+    body = [_rec("Shuli Rand", "אחותי", 189, "\n".join(f"shuli line {i} of song" for i in range(6))),
+            _rec("Shiri Maimon", "אחותי", 187)]
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/search", "code": 200, "body": body},
+    ])
+    hit = LyricsSource(http=rec, retry_delays=(0,)).fetch(artist="שירי מימון", track="אחותי - קליפ", duration=189)
+    assert hit.found and hit.duration_gate == "source"
+    picked = [c for c in body if c["duration"] == 187][0]
+    assert hit.plain == picked["plainLyrics"]

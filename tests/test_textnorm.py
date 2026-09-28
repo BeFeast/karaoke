@@ -101,3 +101,12 @@ def test_bigram_agreement_separates_same_song_from_another():
     assert bigram_agreement(noisy, song, "he") > 0.4
     assert bigram_agreement(noisy, other, "he") == 0.0
     assert bigram_agreement("שתי מילים", song, "he") is None
+
+
+def test_name_skeleton_matches_names_across_scripts():
+    from karaoke.textnorm import name_skeleton
+
+    assert name_skeleton("שירי מימון") == name_skeleton("Shiri Maimon")
+    assert name_skeleton("עדן בן זקן") == name_skeleton("Eden Ben Zaken")
+    assert name_skeleton("אושרי כהן") == name_skeleton("Oshri Cohen")
+    assert name_skeleton("Shuli Rand") != name_skeleton("Shiri Maimon")
