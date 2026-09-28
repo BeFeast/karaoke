@@ -1459,10 +1459,17 @@ async def run_real_job(
             queries = _confident_asr_lines(asr_doc)
             asr_text = " ".join(str(seg.get("text") or "") for seg in asr_doc.get("segments") or [] if isinstance(seg, dict))
             hit = None
-            if queries:
+            titles: list[str] = []
+            if queries and settings.web_reference_enabled:
+                for line in queries[:2]:
+                    found = await asyncio.to_thread(
+                        _web_references(settings).identify_by_text, line, lang=lang_hint
+                    )
+                    titles += [t for _, t in found if t not in titles]
+            if titles:
                 hit = await asyncio.to_thread(
                     _LYRICS_SOURCE.search_by_text,
-                    queries,
+                    titles,
                     durations=(source_meta.get("duration"), canonical.duration if canonical else None),
                 )
             hit_text = (hit.plain or (lrc_to_plain(hit.synced_lrc) if hit.synced_lrc else "")) if hit else ""

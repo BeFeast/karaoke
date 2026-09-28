@@ -330,3 +330,9 @@ def test_cleanup_variants_no_longer_emit_credit_fragment():
 def test_cleanup_variants_take_the_segment_after_the_last_dash():
     assert track_cleanup_variants("הפרויקט של עידן רייכל - ממעמקים") == ["ממעמקים"]
     assert track_cleanup_variants("Song") == []
+
+
+def test_noise_only_tail_is_not_taken_as_the_track():
+    meta = derive_metadata({"title": "עדן בן זקן כולם באילת - עם מילים HD", "duration": 199})
+    assert (meta["artist"], meta["track"]) == (None, "עדן בן זקן כולם באילת")
+    assert derive_metadata({"title": "עדן חסון - מילים"})["track"] == "מילים"  # a song called «מילים»

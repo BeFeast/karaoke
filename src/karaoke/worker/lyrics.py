@@ -1183,10 +1183,10 @@ class LyricsSource:
     def search_by_text(
         self, queries: list[str], *, durations: tuple[int | None, ...] = ()
     ) -> LyricsResult | None:
-        """Post-ASR rung (#262): artist-free ``q=`` searches with transcript
-        lines, gated to the known durations like the #230 ladder. The caller
-        must still check the hit against the transcript (the query WAS the
-        transcript, so a hit here proves little on its own)."""
+        """Post-ASR rung (#262): artist-free ``q=`` searches with song titles
+        identified from the transcript (LRCLIB ``q`` matches titles/artists,
+        not lyric text), gated to the known durations like the #230 ladder.
+        The caller must still check the hit against the transcript."""
         known = tuple(durations)
         if not any(d is not None for d in known):
             return None

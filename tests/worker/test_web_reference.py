@@ -81,3 +81,26 @@ def test_no_searxng_and_nothing_found_is_a_quiet_miss():
     finder = WebReferenceFinder(ytm_lyrics=lambda v: None, genius=GeniusSource(http=http), http=http)
     assert finder.find(artist="a", track="b", video_id=None) is None
     assert finder.find_by_text("a b c d e") is None
+
+
+def test_identify_by_text_reads_titles_off_result_urls():
+    search = json.dumps({"results": [
+        {"url": "https://www.tab4u.com/lyrics/songs/1463_%D7%96%D7%95%D7%94%D7%A8_%D7%90%D7%A8%D7%92%D7%95%D7%91_-_%D7%94%D7%A4%D7%A8%D7%97_%D7%91%D7%92%D7%A0%D7%99.html", "title": "t"},
+        {"url": "https://www.musixmatch.com/lyrics/Eden-Ben-Zaken/%D7%9B%D7%95%D7%9C%D7%9D-%D7%91%D7%90%D7%99%D7%9C%D7%AA", "title": "t"},
+        {"url": "https://genius.com/Hadag-nahash-shirat-hasticker-lyrics", "title": "Hadag Nahash – Shirat HaSticker Lyrics | Genius Lyrics"},
+        {"url": "https://example.com/other", "title": "nothing"},
+    ]})
+    http = _Http([("http://sx/search", (200, search))])
+    finder = WebReferenceFinder(ytm_lyrics=lambda v: None, http=http, searxng_url="http://sx")
+    assert finder.identify_by_text("פול ווליום מזרח עם ידיים", lang="he") == [
+        ("זוהר ארגוב", "הפרח בגני"), ("Eden Ben Zaken", "כולם באילת"), ("Hadag Nahash", "Shirat HaSticker"),
+    ]
+    assert finder.identify_by_text("too short", lang="he") == []
+
+
+def test_tab4u_structure_lines_are_not_lyrics():
+    page = ('<div id="songContentTPL"><table>'
+            '<tr><td class="song_only">A47: x02030</td></tr><tr><td class="song_only">x5</td></tr>'
+            '<tr><td class="song_only">המשך פתיחה:</td></tr><tr><td class="song_only">שורה אמיתית של שיר</td></tr>'
+            '</table></div>')
+    assert extract_tab4u(page) == "שורה אמיתית של שיר"
