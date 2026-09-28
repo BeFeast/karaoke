@@ -58,3 +58,21 @@ describe("review draft lifecycle", () => {
     expect(saved.confirmed).toBe(false);
   });
 });
+
+describe("lyrics rebuild controls (#284)", () => {
+  test("owner sees rebuild and paste; public shares see neither", () => {
+    const html = renderToStaticMarkup(<LyricsReview {...props} />);
+    expect(html).toContain("Rebuild lyrics");
+    expect(html).toContain("Paste reference lyrics");
+    expect(renderToStaticMarkup(<LyricsReview {...props} lyrics={{ ...lyrics, review_job_id: null }} />)).toBe("");
+  });
+  test("a running rebuild disables both actions", () => {
+    const html = renderToStaticMarkup(<LyricsReview {...props} lyrics={{ ...lyrics, rebuilding: true }} />);
+    expect(html).toContain("Rebuilding lyrics…");
+    expect(html).toMatch(/disabled=""[^>]*>Rebuilding lyrics…/);
+  });
+  test("a failed rebuild shows its note", () => {
+    const html = renderToStaticMarkup(<LyricsReview {...props} lyrics={{ ...lyrics, rebuild_note: "Lyrics rebuild failed: RunpodError: busy" }} />);
+    expect(html).toContain("Lyrics rebuild failed: RunpodError: busy");
+  });
+});

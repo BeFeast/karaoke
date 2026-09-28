@@ -53,7 +53,13 @@ from karaoke.uploads import (
 )
 from karaoke.worker import job_cookies
 from karaoke.worker.lyrics import SPEECH_MARKER
-from karaoke.worker.scheduler import schedule_job
+from karaoke.worker.lyrics_rebuild import (
+    RebuildUnavailable,
+    check_rebuildable,
+    rebuild_running,
+    schedule_rebuild,
+)
+from karaoke.worker.scheduler import _use_runpod, schedule_job
 
 _log = logging.getLogger(__name__)
 
@@ -282,6 +288,20 @@ class LyricsPayload(BaseModel):
     quality: dict | None = None
     revision: str | None = None
     review_job_id: int | None = None
+    # Lyrics-only rebuild state (#284): a rebuild / pasted-reference run is in
+    # progress, and the last run's failure note (if it failed).
+    rebuilding: bool = False
+    rebuild_note: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_idle_rebuild_state(self, handler):  # type: ignore[no-untyped-def]
+        data = handler(self)
+        # Keep the pre-#284 payload shape unless a rebuild is running / failed.
+        if not data.get("rebuilding"):
+            data.pop("rebuilding", None)
+        if data.get("rebuild_note") is None:
+            data.pop("rebuild_note", None)
+        return data
 
 
 class LyricsReviewRequest(BaseModel):
@@ -1198,10 +1218,13 @@ def _lyrics_payload(job: Job, settings: Settings, *, can_review: bool = False) -
     except ValueError:
         meta = {}
     quality = meta.get("lyrics_quality")
+    note = job.stage_note if job.status == JobStatus.completed else None
     common = {
         "quality": quality if isinstance(quality, dict) else None,
         "revision": revision(files),
         "review_job_id": job.id if can_review and job.status == JobStatus.completed else None,
+        "rebuilding": job.status == JobStatus.completed and rebuild_running(settings, job),
+        "rebuild_note": note if note and note.startswith(("Rebuilding lyrics", "Lyrics rebuild")) else None,
     }
     source = meta.get("lyrics_source")
     if meta.get("instrumental"):
@@ -1242,6 +1265,66 @@ async def review_lyrics(
     )
     response.headers["Cache-Control"] = "private, no-store"
     return _lyrics_payload(job, settings, can_review=True)
+
+
+class LyricsReferenceRequest(BaseModel):
+    """Body for ``POST /jobs/{id}/lyrics-reference`` — owner-pasted lyrics."""
+
+    text: str = Field(min_length=1, max_length=65536)
+    confirm: bool = False
+
+
+def _start_lyrics_rebuild(job: Job, settings: Settings, owner: Owner, text: str | None) -> None:
+    if not _use_runpod(settings):
+        raise HTTPException(409, "Lyrics-only runs need the RunPod GPU backend")
+    try:
+        check_rebuildable(settings, job)
+    except RebuildUnavailable as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if rebuild_running(settings, job):
+        raise HTTPException(409, "A lyrics rebuild is already running for this job")
+    schedule_rebuild(get_session_factory(), job.id, settings, reference_text=text, requested_by=owner.subject)
+
+
+@router.post("/jobs/{job_id}/lyrics-rebuild", status_code=202, tags=["jobs"])
+async def rebuild_job_lyrics(
+    job_id: int,
+    owner: Owner = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object]:
+    """Re-run only the lyrics stage with the current pipeline on the job's
+    stored vocal stem (#284) — no download, no separation. Owner only."""
+    job = await session.get(Job, job_id)
+    if job is None or not _can_owner_view(owner, job):
+        raise HTTPException(404, "job not found")
+    _start_lyrics_rebuild(job, settings, owner, None)
+    return {"status": "started", "job_id": job.id}
+
+
+@router.post("/jobs/{job_id}/lyrics-reference", status_code=202, tags=["jobs"])
+async def paste_reference_lyrics(
+    job_id: int,
+    body: LyricsReferenceRequest,
+    owner: Owner = Depends(require_owner),
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object]:
+    """Align owner-pasted reference lyrics to the job's vocals (#284,
+    decision 4): the paste wins where it covers the song, the transcript
+    stays elsewhere. Owner only; the unlisted share token cannot."""
+    job = await session.get(Job, job_id)
+    if job is None or not _can_owner_view(owner, job):
+        raise HTTPException(404, "job not found")
+    if body.confirm is not True:
+        raise HTTPException(422, "Confirm that these are the lyrics of this recording")
+    lines = [ln.strip() for ln in body.text.splitlines() if ln.strip()]
+    if len(lines) < 2 or len(lines) > 400:
+        raise HTTPException(422, "Paste between 2 and 400 lines of lyrics")
+    if any(ch in body.text for ch in "<>"):
+        raise HTTPException(422, "Paste plain lyrics without timing tags")
+    _start_lyrics_rebuild(job, settings, owner, "\n".join(lines))
+    return {"status": "started", "job_id": job.id}
 
 
 _ALLOWED_ARTIFACTS: dict[str, tuple[str, str]] = {

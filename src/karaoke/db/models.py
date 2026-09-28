@@ -75,6 +75,11 @@ class Job(Base):
     # vast.ai bookkeeping (mocked in this skeleton).
     vast_instance_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     vast_cost_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Lyrics-only GPU passes after completion (#284: Rebuild lyrics, pasted
+    # reference, backfill). Counted in the rolling 24h GPU cap by their own
+    # timestamp, since completed_at of an old job is outside the window.
+    lyrics_rebuilt_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lyrics_rebuild_cost_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[dt.datetime] = mapped_column(
