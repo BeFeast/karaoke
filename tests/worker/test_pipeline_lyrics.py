@@ -1693,13 +1693,22 @@ async def test_run_real_job_post_asr_lrclib_hit_is_realigned_without_separation(
         for name in ("_download_audio", "_to_wav", "_wav_to_mp3"):
             monkeypatch.setattr(pipeline, name, fake_file)
         monkeypatch.setattr(pipeline, "_CANONICAL_RESOLVER", CanonicalResolver(search=lambda q: []))
+        searx = json.dumps({"results": [
+            {"url": "https://www.tab4u.com/lyrics/songs/99_נועה_קירל_-_לאב_סונג.html", "title": "x"},
+        ]})
+
+        def web_http(method, url_, params):
+            if url_.startswith("http://sx/search") and params and '"' in params.get("q", ""):
+                return 200, searx
+            return 404, ""
+
         monkeypatch.setattr(pipeline, "_WEB_REFERENCES",
-                            WebReferenceFinder(ytm_lyrics=lambda v: None, http=lambda *a: (404, "")))
+                            WebReferenceFinder(ytm_lyrics=lambda v: None, http=web_http, searxng_url="http://sx"))
         record = {"artistName": "Noa Kirel", "trackName": "לאב סונג", "duration": 79,
                   "plainLyrics": "\n".join(t for _, _, t in _HE_SUNG), "syncedLyrics": None}
 
         def lrclib(method, url_, params):
-            if params and "q" in params and "בתשע" in params["q"]:
+            if params and params.get("q") == "לאב סונג":  # the title found on the web, not the ASR text
                 return 200, [record]
             return 200, [] if "search" in url_ else {}
 

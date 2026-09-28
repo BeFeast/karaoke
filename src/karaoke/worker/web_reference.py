@@ -51,6 +51,10 @@ PROVIDER_TAB4U = "tab4u"
 _TAB4U_URL_RE = re.compile(r"^https?://(?:www\.)?tab4u\.com/(?:lyrics|tabs)/songs/[^?#]+\.html")
 _GENIUS_URL_RE = re.compile(r"^https?://(?:www\.)?genius\.com/[A-Za-z0-9-]+-lyrics$")
 _MIN_LINES = 4
+_TAB4U_NOISE_RE = re.compile(r":\s*$|^\s*[x×]\s*\d+\s*$|\bx\d{3,}\b|^[A-G][#b]?\w*\d*\s*:")
+_TAB4U_SLUG_RE = re.compile(r"/songs/\d+_(?P<artist>.+?)_-_(?P<title>.+?)\.html")
+_MUSIXMATCH_RE = re.compile(r"musixmatch\.com/lyrics/(?P<artist>[^/]+)/(?P<title>[^/?#]+)")
+_GENIUS_TITLE_RE = re.compile(r"^(?P<a>.+?)\s+[–-]\s+(?P<t>.+?)\s+Lyrics\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,9 +163,9 @@ def extract_tab4u(html: str) -> str:
     parser = _Tab4uExtractor()
     parser.feed(html)
     parser.close()
-    lines = parser.lines
-    # A leading "פתיחה:" / "פזמון:" label line is a section header, not lyrics.
-    lines = [ln for ln in lines if not re.fullmatch(r"[^\s:]{1,12}:", ln)]
+    # Section labels ("פתיחה:", "המשך פתיחה:"), repeat marks ("x5") and
+    # tablature rows ("A47: x02030") are page structure, not lyrics.
+    lines = [ln for ln in parser.lines if ln == "" or not _TAB4U_NOISE_RE.search(ln)]
     while lines and lines[0] == "":
         lines.pop(0)
     while lines and lines[-1] == "":
@@ -228,6 +232,38 @@ class WebReferenceFinder:
             return None
         suffix = " מילים" if lang == "he" else " lyrics"
         return self._searx_sites(f'"{line}"{suffix}', None, lang, must_contain=line)
+
+    def identify_by_text(self, line: str, *, lang: str | None = None, limit: int = 3) -> list[tuple[str, str]]:
+        """Post-ASR (#262): ``(artist, title)`` candidates for the song a
+        transcript line comes from, read off search-result URLs / titles
+        (tab4u and Musixmatch slugs, Genius page titles). LRCLIB cannot
+        search lyric text, but it can search the title this finds."""
+        if not self._searxng or len(line.split()) < 4:
+            return []
+        suffix = " מילים" if lang == "he" else " lyrics"
+        status, body = self._http("GET", f"{self._searxng}/search", {"q": f'"{line}"{suffix}', "format": "json"})
+        if status != 200 or not body:
+            return []
+        try:
+            results = json.loads(body).get("results") or []
+        except ValueError:
+            return []
+        found: list[tuple[str, str]] = []
+        for result in results[:10]:
+            url = urllib.parse.unquote(str(result.get("url") or ""))
+            title = str(result.get("title") or "")
+            match = _TAB4U_SLUG_RE.search(url) or _MUSIXMATCH_RE.search(url)
+            pair = None
+            if match:
+                pair = (match["artist"].replace("_", " ").replace("-", " "),
+                        match["title"].replace("_", " ").replace("-", " "))
+            elif "genius.com" in url and (g := _GENIUS_TITLE_RE.match(title)):
+                pair = (g["a"], g["t"])
+            if pair and pair[1].strip() and pair not in found:
+                found.append((pair[0].strip(), pair[1].strip()))
+            if len(found) >= limit:
+                break
+        return found
 
     # -- internals ---------------------------------------------------------------
     def _searx_sites(

@@ -360,6 +360,17 @@ def strip_credits(track: str | None) -> str | None:
     return cleaned or track
 
 
+_NOISE_QUALIFIER_RE = re.compile(r"^(?:hd|hq|4k|8k|\d{2,4}|official|video|lyrics?|קליפ|רשמי)$", re.IGNORECASE)
+
+
+def _is_noise_tail(text: str) -> bool:
+    """True for a multi-token segment made only of noise phrases and
+    qualifiers ("עם מילים HD", "Lyrics HD")."""
+    rest = re.sub(rf"(?i){_NOISE_PHRASE}", " ", text)
+    leftover = [t for t in rest.split() if not _NOISE_QUALIFIER_RE.match(t)]
+    return len(text.split()) >= 2 and not leftover
+
+
 def derive_metadata(info: dict | None) -> dict[str, object | None]:
     """Best-effort ``(artist, track, album, duration)`` from a yt-dlp info dict.
 
@@ -383,6 +394,12 @@ def derive_metadata(info: dict | None) -> dict[str, object | None]:
 
     if not artist or not track:
         parsed = parse_artist_track(_clean_str(info.get("title")))
+        # "עדן בן זקן כולם באילת - עם מילים HD" (#283): no artist/track dash,
+        # only a noise tail — the split made the noise the "track". Then the
+        # left side is the (artist-less) title. A single noise word stays a
+        # track ("עדן חסון - מילים" is a song called «מילים», #260).
+        if not track and parsed.artist and parsed.track and _is_noise_tail(parsed.track):
+            parsed = ParsedTitle(artist=None, track=parsed.artist)
         artist = artist or parsed.artist
         track = track or parsed.track
     # yt-dlp's structured ``track`` can still carry a producer credit (#281):
