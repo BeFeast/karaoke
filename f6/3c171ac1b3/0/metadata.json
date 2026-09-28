@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f63c171ac1b3",
+  "session_id": "ee21a9c3-68d2-4800-abcf-373f973bbb63",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-28T22:23:01.630523442Z",
+  "branch": "fix/299-provision-live-endpoint",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "scripts/runpod_provision.py",
+    "tests/test_runpod_provision.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "90347cc2d6a2",
+  "checkpoint_transcript_start": 1755,
+  "transcript_lines_at_start": 1755,
+  "compact_transcript_start": 310,
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 21927,
+    "cache_read_tokens": 3173353,
+    "output_tokens": 8007,
+    "api_call_count": 5
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-28T22:23:01.306594422Z",
+    "agent_lines": 181,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 181,
+    "total_lines_changed": 182,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
