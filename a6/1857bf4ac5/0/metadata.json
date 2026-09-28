@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "a61857bf4ac5",
+  "session_id": "ee21a9c3-68d2-4800-abcf-373f973bbb63",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-28T20:11:56.173782282Z",
+  "branch": "fix/293-offset-ratio",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "src/karaoke/worker/lyrics.py",
+    "src/karaoke/worker/pipeline.py",
+    "tests/worker/test_lyrics.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "a83ebf9ac9bc",
+  "checkpoint_transcript_start": 892,
+  "transcript_lines_at_start": 892,
+  "compact_transcript_start": 159,
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 12712,
+    "cache_read_tokens": 1445898,
+    "output_tokens": 5997,
+    "api_call_count": 3
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-28T20:11:55.97781755Z",
+    "agent_lines": 11,
+    "agent_removed": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 11,
+    "total_lines_changed": 15,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
