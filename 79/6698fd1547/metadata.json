@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "796698fd1547",
+  "strategy": "manual-commit",
+  "branch": "feat/293-lrclib-offset-shift",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "src/karaoke/worker/lyrics.py",
+    "src/karaoke/worker/pipeline.py",
+    "tests/worker/test_lyrics.py",
+    "tests/worker/test_pipeline_lyrics.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/79/6698fd1547/0/metadata.json",
+      "transcript": "/79/6698fd1547/0/full.jsonl",
+      "compact_transcript": "/79/6698fd1547/0/transcript.jsonl",
+      "content_hash": "/79/6698fd1547/0/content_hash.txt",
+      "prompt": "/79/6698fd1547/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 50935,
+    "cache_read_tokens": 7580480,
+    "output_tokens": 35135,
+    "api_call_count": 17
+  }
+}
