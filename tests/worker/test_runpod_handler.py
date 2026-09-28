@@ -255,6 +255,7 @@ def test_transcribe_passes_music_tuned_kwargs(monkeypatch, tmp_path):
     are passed through to faster-whisper, and auto language detection is kept."""
     fake = _RecordingWhisper()
     monkeypatch.setattr(handler, "_get_whisper", lambda *a, **k: fake)
+    monkeypatch.setattr(handler, "_load_probe_audio", lambda p: p)
     wav = tmp_path / "vocals.wav"
     wav.write_bytes(b"\x00")
 
@@ -297,6 +298,7 @@ def test_transcribe_hint_wins_on_low_confidence_detection(monkeypatch, tmp_path)
     transliterated-Latin gibberish."""
     fake = _RecordingWhisper(detect=("en", 0.456))
     monkeypatch.setattr(handler, "_get_whisper", lambda *a, **k: fake)
+    monkeypatch.setattr(handler, "_load_probe_audio", lambda p: p)
     wav = tmp_path / "vocals.wav"
     wav.write_bytes(b"\x00")
 
@@ -316,6 +318,7 @@ def test_transcribe_confident_detection_overrides_hint(monkeypatch, tmp_path):
     the title's language when the audio clearly says otherwise."""
     fake = _RecordingWhisper(detect=("en", 0.92))
     monkeypatch.setattr(handler, "_get_whisper", lambda *a, **k: fake)
+    monkeypatch.setattr(handler, "_load_probe_audio", lambda p: p)
     wav = tmp_path / "vocals.wav"
     wav.write_bytes(b"\x00")
 
@@ -329,6 +332,7 @@ def test_transcribe_probe_failure_keeps_hint(monkeypatch, tmp_path):
     """The detection probe is best-effort — an error keeps the hint."""
     fake = _RecordingWhisper(detect=RuntimeError("no cuda"))
     monkeypatch.setattr(handler, "_get_whisper", lambda *a, **k: fake)
+    monkeypatch.setattr(handler, "_load_probe_audio", lambda p: p)
     wav = tmp_path / "vocals.wav"
     wav.write_bytes(b"\x00")
 
@@ -997,6 +1001,7 @@ def _fake_models(monkeypatch, handler, detected, prob):
     models = {"vanilla": _FakeWhisper("vanilla", detected, prob), "ivrit": _FakeWhisper("ivrit", "en", 0.99)}
     by_name = {handler._WHISPER_MODEL_NAME: models["vanilla"], handler._HEBREW_WHISPER_MODEL_NAME: models["ivrit"]}
     monkeypatch.setattr(handler, "_get_whisper", lambda name=handler._WHISPER_MODEL_NAME: by_name[name])
+    monkeypatch.setattr(handler, "_load_probe_audio", lambda p: p)
     return models
 
 
@@ -1054,3 +1059,59 @@ def test_selfcheck_fails_on_missing_hebrew_whisper_model(tmp_path, monkeypatch, 
     shutil.rmtree(hebrew_dir)
     assert handler._selfcheck() == 1
     assert "hebrew whisper model.bin: not found" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# r12: working language probe, vanilla-detection reroute, hallucination guard
+# ---------------------------------------------------------------------------
+def test_degenerate_text_guard():
+    handler = _load_handler()
+    assert handler._degenerate_text("נא " * 111)
+    assert handler._degenerate_text("na na na na na na na na, na!")
+    assert not handler._degenerate_text("נא נא נא")  # too short to judge
+    assert not handler._degenerate_text("ממעמקים קראתי אלייך בואי אליי בשובך יחזור שוב האור")
+    assert not handler._degenerate_text(None)
+
+
+def test_transcribe_drops_degenerate_segments(monkeypatch, tmp_path):
+    handler = _load_handler()
+
+    class _Loop(_FakeWhisper):
+        def transcribe(self, path, **kw):
+            self.transcribe_calls.append(kw)
+            segs = [_Seg(10.0, 40.0, "נא " * 111), _Seg(50.0, 54.0, "ממעמקים קראתי אלייך")]
+            return iter(segs), _Info("he")
+
+    loop = _Loop("ivrit", "en", 0.99)
+    by_name = {handler._WHISPER_MODEL_NAME: _FakeWhisper("vanilla", "he", 0.95),
+               handler._HEBREW_WHISPER_MODEL_NAME: loop}
+    monkeypatch.setattr(handler, "_get_whisper", lambda name=handler._WHISPER_MODEL_NAME: by_name[name])
+    monkeypatch.setattr(handler, "_load_probe_audio", lambda p: p)
+    txt, js = handler._transcribe(tmp_path / "v.wav", language=None)
+    assert txt == "ממעמקים קראתי אלייך"
+    assert [s["start"] for s in js["segments"]] == [50.0]
+    assert js["dropped_degenerate_segments"] == 1
+
+
+def test_vanilla_hebrew_detection_reroutes_when_probe_fails(monkeypatch, tmp_path):
+    """No hint, probe raises (as it did on r10), vanilla's transcribe() says
+    Hebrew at high confidence → the transcript comes from the fine-tune."""
+    handler = _load_handler()
+
+    class _Probeless(_FakeWhisper):
+        def detect_language(self, audio, **kw):
+            raise RuntimeError("no probe")
+
+        def transcribe(self, path, **kw):
+            self.transcribe_calls.append(kw)
+            return iter([_Seg(0.0, 1.0, "from vanilla")]), _Info("he")
+
+    vanilla = _Probeless("vanilla", None, 0.0)
+    ivrit = _FakeWhisper("ivrit", "en", 0.99)
+    by_name = {handler._WHISPER_MODEL_NAME: vanilla, handler._HEBREW_WHISPER_MODEL_NAME: ivrit}
+    monkeypatch.setattr(handler, "_get_whisper", lambda name=handler._WHISPER_MODEL_NAME: by_name[name])
+    monkeypatch.setattr(handler, "_load_probe_audio", lambda p: p)
+    txt, js = handler._transcribe(tmp_path / "v.wav", language=None)
+    assert txt == "from ivrit" and js["model"] == handler._HEBREW_WHISPER_MODEL_NAME
+    assert ivrit.transcribe_calls[0]["language"] == "he"
+    assert len(vanilla.transcribe_calls) == 1

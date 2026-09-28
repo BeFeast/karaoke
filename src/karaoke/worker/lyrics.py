@@ -123,6 +123,26 @@ _WORD_MERGE_DRIFT_S = 2.0
 # cut performance show 40+.
 _MAX_CHARS_PER_SECOND = 30.0
 
+# ASR hallucination guard (#282 follow-up): a Whisper segment whose most
+# frequent token makes up this share of at least this many tokens is a
+# decoder repetition loop ("נא נא נא …" ×111 over an instrumental intro),
+# not lyrics. Mirrors the r12 GPU handler so older images are covered too.
+_DEGENERATE_MIN_TOKENS = 8
+_DEGENERATE_TOP_SHARE = 0.6
+
+
+def is_degenerate_segment_text(text: object) -> bool:
+    """True for a repetition-loop ASR segment (see ``_DEGENERATE_*``)."""
+    if not isinstance(text, str):
+        return False
+    tokens = [t.strip(".,!?-\u05f3\u05f4\"'") for t in text.split()]
+    tokens = [t for t in tokens if t]
+    if len(tokens) < _DEGENERATE_MIN_TOKENS:
+        return False
+    top = max(tokens.count(t) for t in set(tokens))
+    return top / len(tokens) >= _DEGENERATE_TOP_SHARE
+
+
 # Lyrics-source provenance values recorded in metadata.json.
 SOURCE_LRCLIB_SYNCED = "lrclib_synced"
 # LRCLIB text that we force-aligned against the vocal stem into a synced LRC
@@ -178,7 +198,7 @@ def whisper_segments_to_lrc(segments: list[dict[str, Any]] | None) -> str:
         if not isinstance(seg, dict):
             continue
         text = str(seg.get("text") or "").strip()
-        if not text:
+        if not text or is_degenerate_segment_text(text):
             continue
         words = _parse_words(seg.get("words"))
         if words is not None:

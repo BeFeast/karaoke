@@ -96,6 +96,12 @@ _WHISPER_MODEL_NAME = "large-v3-turbo"
 # language and ivrit is only ever asked to transcribe with ``language="he"``.
 _HEBREW_WHISPER_MODEL_NAME = "ivrit-ai/whisper-large-v3-turbo-ct2"
 _HEBREW_LANGS = frozenset({"he"})
+# Hallucination guard (r12): a segment whose most frequent token makes up
+# this share of at least ``_DEGENERATE_MIN_TOKENS`` tokens is a decoder
+# repetition loop ("נא נא נא …" ×111 over an instrumental intro, at a
+# confident logprob), not lyrics. Dropped before the transcript is assembled.
+_DEGENERATE_MIN_TOKENS = 8
+_DEGENERATE_TOP_SHARE = 0.6
 
 # Lazy-loaded audio-separator BS-Roformer model. Same lazy-load shape as the
 # Whisper model so the (large) separation weights only load when a job actually
@@ -174,6 +180,14 @@ def _get_whisper(model_name: str = _WHISPER_MODEL_NAME):
             model = WhisperModel(model_name, device=device, compute_type=compute_type)
             _WHISPER_MODELS[model_name] = model
     return model
+
+
+def _load_probe_audio(wav_path: Path):
+    """Decoded 16 kHz mono audio for ``WhisperModel.detect_language`` (which,
+    unlike ``transcribe``, does not accept a path)."""
+    from faster_whisper.audio import decode_audio  # type: ignore
+
+    return decode_audio(str(wav_path), sampling_rate=16000)
 
 
 def _whisper_model_for(language: str | None) -> str:
@@ -323,15 +337,20 @@ def _transcribe(
     full pass's choice instead of re-probing a few seconds of audio).
     """
     model = _get_whisper()
+    forced = model_name is not None
     detected, prob = None, 0.0
-    if model_name is None:
+    if not forced:
+        # ``detect_language`` takes decoded 16 kHz audio, not a path (r10
+        # passed the path and the probe silently failed on every job, so the
+        # title hint always ruled — r12).
         try:
             detected, prob, _ = model.detect_language(
-                str(wav_path),
+                _load_probe_audio(wav_path),
                 vad_filter=vad_filter,
                 language_detection_segments=4,
             )
-        except Exception:  # detection probe is best-effort; keep the hint
+        except Exception as exc:  # detection probe is best-effort; keep the hint
+            LOG.warning("language probe failed (%s); keeping hint %r", exc, language)
             detected, prob = None, 0.0
         if detected and prob >= _LANG_DETECT_TRUST_P:
             language = detected
@@ -357,11 +376,31 @@ def _transcribe(
         no_speech_threshold=0.6,
         hallucination_silence_threshold=2.0,
     )
+    # Second chance for the routing (r12): with no usable hint and a failed
+    # or unconfident probe, vanilla's own detection is the last word — a
+    # Hebrew stem must still be transcribed by the fine-tune.
+    if (
+        not forced
+        and model_name == _WHISPER_MODEL_NAME
+        and info.language in _HEBREW_LANGS
+        and info.language_probability is not None
+        and info.language_probability >= _LANG_DETECT_TRUST_P
+    ):
+        LOG.info("vanilla detected %s (p=%.2f); re-running on %s",
+                 info.language, info.language_probability, _HEBREW_WHISPER_MODEL_NAME)
+        return _transcribe(
+            wav_path, info.language, vad_filter=vad_filter, deadline=deadline,
+            model_name=_HEBREW_WHISPER_MODEL_NAME,
+        )
     segments: list[dict[str, Any]] = []
     text_lines: list[str] = []
+    dropped_degenerate = 0
     for seg in segments_iter:
         if deadline is not None and time.monotonic() >= deadline:
             raise TimeoutError("crop transcription retry deadline exceeded")
+        if _degenerate_text(seg.text):
+            dropped_degenerate += 1
+            continue
         seg_dict: dict[str, Any] = {
             "start": seg.start,
             "end": seg.end,
@@ -389,10 +428,21 @@ def _transcribe(
         "model": model_name,
         "language_detected": detected,
         "language_detected_probability": prob,
+        "dropped_degenerate_segments": dropped_degenerate,
         "segments": segments,
     }
     lyrics_txt = "\n".join(line for line in text_lines if line)
     return lyrics_txt, lyrics_json
+
+
+def _degenerate_text(text: str | None) -> bool:
+    """True for a repetition-loop segment (see ``_DEGENERATE_*``)."""
+    tokens = [t.strip(".,!?-\u05f3\u05f4\"'") for t in (text or "").split()]
+    tokens = [t for t in tokens if t]
+    if len(tokens) < _DEGENERATE_MIN_TOKENS:
+        return False
+    top = max(tokens.count(t) for t in set(tokens))
+    return top / len(tokens) >= _DEGENERATE_TOP_SHARE
 
 
 def _get_aligner():
