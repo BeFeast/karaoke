@@ -8,6 +8,7 @@ from karaoke.titles import (
     derive_metadata,
     normalize_title,
     parse_artist_track,
+    strip_credits,
     track_cleanup_variants,
 )
 
@@ -288,3 +289,39 @@ def test_derive_metadata_strips_whitespace_and_blank():
     # blank artist falls back to the title parse ("X"); blank-stripped track wins.
     assert meta["artist"] == "X"
     assert meta["track"] == "Real Track"
+
+
+# ---------------------------------------------------------------------------
+# Producer credits (#281)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("נועה קירל - לאב סונג (Prod. By Nuri)", ("נועה קירל", "לאב סונג")),
+        ("Static and Ben El - Tudo Bom (Prod. by Jordi) | סטטיק ובן אל", ("Static and Ben El", "Tudo Bom | סטטיק ובן אל")),
+        ("Artist - Song (Produced by Someone)", ("Artist", "Song")),
+        ("Artist - Song [prod. X & Y] (Official Video)", ("Artist", "Song")),
+        ("Artist - Song (Prod Nuri)", ("Artist", "Song")),
+        ("Artist - Production (Official Video)", ("Artist", "Production")),
+        ("Artist - Song (Prodigy Remix)", ("Artist", "Song (Prodigy Remix)")),
+    ],
+)
+def test_producer_credit_is_stripped(raw, expected):
+    parsed = parse_artist_track(normalize_title(raw))
+    assert (parsed.artist, parsed.track) == expected
+
+
+def test_strip_credits_on_structured_track():
+    assert strip_credits("לאב סונג (Prod. By Nuri)") == "לאב סונג"
+    assert strip_credits("Song") == "Song"
+    assert strip_credits(None) is None
+    assert strip_credits("(Prod. by X)") == "(Prod. by X)"  # nothing usable left → unchanged
+
+
+def test_derive_metadata_cleans_ytdlp_track_credit():
+    meta = derive_metadata({"artist": "נועה קירל", "track": "לאב סונג (Prod. By Nuri)", "duration": 227})
+    assert meta["track"] == "לאב סונג"
+
+
+def test_cleanup_variants_no_longer_emit_credit_fragment():
+    assert track_cleanup_variants(strip_credits("לאב סונג (Prod. By Nuri)")) == []

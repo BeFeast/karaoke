@@ -99,6 +99,15 @@ _NOISE_GROUP_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+# Bracketed producer credit, e.g. "(Prod. By Nuri)", "(Produced by Jordi)",
+# "[prod. X & Y]" (#281). Not a noise *word*: the credit content is arbitrary,
+# so it gets its own pattern. "prod" must end at a dot, at "uced" or at a word
+# boundary so "(Production)" / "(Prodigy Remix)" stay untouched.
+_PROD_CREDIT_RE = re.compile(
+    r"\s*[\(\[\{]\s*prod(?:uced\b|\.|\b)\s*(?:by\b\.?)?\s*[^\)\]\}]+[\)\]\}]",
+    re.IGNORECASE,
+)
+
 # Trailing/leading bare (un-bracketed) noise tags, e.g. "... | Official Video"
 # or a leading "MV| ...". We only strip these when delimited by a pipe so we
 # never chew into a legitimate title.
@@ -168,6 +177,7 @@ def normalize_title(raw: str | None) -> str:
     # Iterate: removing one noise group can reveal/adjoin another.
     for _ in range(6):
         new = _NOISE_GROUP_RE.sub(" ", text)
+        new = _PROD_CREDIT_RE.sub(" ", new)
         new = _BARE_PIPE_NOISE_RE.sub("", new)
         # Drop a trailing dash-delimited noise-only segment, but only while an
         # artist/track dash remains in the head — otherwise "Artist - מילים"
@@ -328,6 +338,17 @@ def track_cleanup_variants(track: str | None) -> list[str]:
     return variants
 
 
+def strip_credits(track: str | None) -> str | None:
+    """Drop a bracketed producer credit from a track name (#281); ``None``
+    when nothing usable remains."""
+    if not track:
+        return track
+    cleaned = _PROD_CREDIT_RE.sub(" ", track)
+    cleaned = _EMPTY_BRACKETS_RE.sub(" ", cleaned)
+    cleaned = _EDGE_JUNK_RE.sub("", _MULTISPACE_RE.sub(" ", cleaned)).strip()
+    return cleaned or track
+
+
 def derive_metadata(info: dict | None) -> dict[str, object | None]:
     """Best-effort ``(artist, track, album, duration)`` from a yt-dlp info dict.
 
@@ -353,6 +374,9 @@ def derive_metadata(info: dict | None) -> dict[str, object | None]:
         parsed = parse_artist_track(_clean_str(info.get("title")))
         artist = artist or parsed.artist
         track = track or parsed.track
+    # yt-dlp's structured ``track`` can still carry a producer credit (#281):
+    # "לאב סונג (Prod. By Nuri)" — LRCLIB stores the bare release title.
+    track = strip_credits(track)
 
     duration: int | None = None
     raw_duration = info.get("duration")

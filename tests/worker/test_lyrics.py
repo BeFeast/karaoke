@@ -1382,3 +1382,143 @@ def test_get_by_id_fetches_record_directly():
     assert hit.found and hit.synced_lrc == SYNCED_BODY and hit.source == "lrclib_get"
     assert not src.get_by_id(1).found
     assert [c[2] for c in rec.calls] == [None, None]
+
+
+# ---------------------------------------------------------------------------
+# #281: retry on transient LRCLIB failures; transient misses are not cached
+# ---------------------------------------------------------------------------
+def test_retries_503_then_succeeds():
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 503, "body": {"message": "ServerOverloaded"}},
+        {"expect_in": "/api/get", "code": 503, "body": None},
+        {"expect_in": "/api/get", "code": 200, "body": {"syncedLyrics": SYNCED_BODY}},
+    ])
+    src = LyricsSource(http=rec, retry_delays=(0, 0))
+    hit = src.fetch(artist="A", track="T", duration=100)
+    assert hit.found and hit.source == "lrclib_get"
+    assert len(rec.calls) == 3
+
+
+def test_transient_miss_is_not_cached_but_404_miss_is():
+    transient = [
+        {"expect_in": "/api/get", "code": 503, "body": None},
+        {"expect_in": "/api/get", "code": 0, "body": None},
+        {"expect_in": "/api/get", "code": 503, "body": None},
+        {"expect_in": "/api/search", "code": 503, "body": None},
+        {"expect_in": "/api/search", "code": 503, "body": None},
+        {"expect_in": "/api/search", "code": 503, "body": None},
+    ]
+    rec = _Recorder(list(transient) + [
+        # second fetch: LRCLIB is back and answers a clean 404 miss
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+    ])
+    src = LyricsSource(http=rec, retry_delays=(0, 0))
+    assert not src.fetch(artist="A", track="T").found
+    assert len(rec.calls) == 6
+    assert not src.fetch(artist="A", track="T").found
+    assert len(rec.calls) == 8  # re-queried: the transient miss was not cached
+    assert not src.fetch(artist="A", track="T").found
+    assert len(rec.calls) == 8  # the 404 miss is cached
+
+
+# ---------------------------------------------------------------------------
+# #281: canonical release metadata rungs + dual duration gate
+# ---------------------------------------------------------------------------
+def _record(artist, track, duration, synced=SYNCED_BODY):
+    return {"artistName": artist, "trackName": track, "duration": duration,
+            "syncedLyrics": synced, "plainLyrics": PLAIN_BODY, "instrumental": False}
+
+
+def test_canonical_artist_get_rung_lands_hebrew_upload():
+    """Parsed (Hebrew artist, track, video 227 s) misses; the canonical
+    (Latin artist, track, audio 179 s) /api/get rung hits."""
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/get", "code": 200, "body": _record("Noa Kirel", "לאב סונג", 179)},
+    ])
+    src = LyricsSource(http=rec, retry_delays=(0,))
+    hit = src.fetch(
+        artist="נועה קירל", track="לאב סונג", duration=227,
+        canonical_artist="Noa Kirel", canonical_track="לאב סונג", canonical_duration=179,
+    )
+    assert hit.found and hit.synced_lrc == SYNCED_BODY
+    assert hit.match_variant == "canonical:Noa Kirel"
+    params = rec.calls[2][2]
+    assert params["artist_name"] == "Noa Kirel" and params["duration"] == 179
+
+
+def test_canonical_title_rung_when_release_title_differs():
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/get", "code": 200, "body": _record("Static & Ben El", "Tudo bom", 190)},
+    ])
+    src = LyricsSource(http=rec, retry_delays=(0,))
+    hit = src.fetch(
+        artist="Static and Ben El", track="טודו בום", duration=200,
+        canonical_artist="Static", canonical_track="Tudo bom", canonical_duration=190,
+    )
+    assert hit.found and hit.match_variant == "canonical:Static/Tudo bom"
+    assert rec.calls[4][2]["track_name"] == "Tudo bom"
+
+
+def test_search_gate_accepts_canonical_duration_for_longer_video():
+    """The video is 48 s longer than the release; the only search candidate
+    matches the canonical audio duration, so it is accepted (not #148-rejected)
+    and tagged with the duration that admitted it."""
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": [_record("Noa Kirel", "לאב סונג", 179)]},
+    ])
+    src = LyricsSource(http=rec, retry_delays=(0,))
+    hit = src.fetch(
+        artist="Noa Kirel", track="לאב סונג", duration=227,
+        canonical_artist="Noa Kirel", canonical_duration=179,
+    )
+    assert hit.found and hit.source == "lrclib_search"
+    assert hit.duration_gate == "canonical"
+    assert hit.match_variant is None
+
+
+def test_search_gate_names_source_duration_when_video_matches():
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": [_record("A", "T", 200)]},
+    ])
+    hit = LyricsSource(http=rec, retry_delays=(0,)).fetch(
+        artist="A", track="T", duration=201, canonical_artist="A", canonical_duration=150
+    )
+    assert hit.found and hit.duration_gate == "source"
+
+
+def test_search_still_rejects_when_neither_duration_matches():
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": [_record("A", "T", 300)]},
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": [_record("A", "T", 300)]},
+    ])
+    hit = LyricsSource(http=rec, retry_delays=(0,)).fetch(
+        artist="A", track="T", duration=200, canonical_artist="B", canonical_duration=190
+    )
+    assert not hit.found and hit.rejected and hit.rejected.startswith("duration_mismatch")
+    assert hit.rejected_text == PLAIN_BODY
+
+
+def test_canonical_fields_are_part_of_the_cache_key():
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/get", "code": 404, "body": {"code": 404}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/get", "code": 200, "body": _record("Latin", "T", 100)},
+    ])
+    src = LyricsSource(http=rec, retry_delays=(0,))
+    assert not src.fetch(artist="A", track="T", duration=100).found
+    assert not src.fetch(artist="A", track="T", duration=100).found  # cached miss
+    hit = src.fetch(artist="A", track="T", duration=100, canonical_artist="Latin", canonical_duration=100)
+    assert hit.found and len(rec.calls) == 5

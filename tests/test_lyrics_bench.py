@@ -80,13 +80,16 @@ def test_run_score_reports_missing_reference(tmp_path):
     assert scores[0].cer is None and "no reference" in scores[0].note
 
 
-def test_load_reference_prefers_genius_then_lrclib(tmp_path):
-    (tmp_path / "synthetic.lrclib.lrc").write_text("[00:01.00]א ב")
+def test_load_reference_prefers_synced_lrclib_then_genius(tmp_path):
     (tmp_path / "synthetic.genius.txt").write_text("א ב ג")
+    (tmp_path / "synthetic.lrclib.txt").write_text("א ב")
     text, name, timed = bench.load_reference(tmp_path, SONG, "auto")
-    assert name == "genius" and timed is not None and timed.timed
-    text, name, _ = bench.load_reference(tmp_path, SONG, "lrclib")
-    assert name == "lrclib" and text.timed
+    assert name == "genius" and timed is None  # plain-only LRCLIB ranks below Genius
+    (tmp_path / "synthetic.lrclib.lrc").write_text("[00:01.00]א ב")
+    text, name, timed = bench.load_reference(tmp_path, SONG, "auto")
+    assert name == "lrclib" and text.timed and timed is not None
+    text, name, _ = bench.load_reference(tmp_path, SONG, "genius")
+    assert name == "genius" and not text.timed
 
 
 def test_render_table_has_medians_per_group():

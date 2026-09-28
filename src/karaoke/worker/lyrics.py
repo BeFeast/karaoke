@@ -40,6 +40,7 @@ from __future__ import annotations
 import math
 import re
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
@@ -61,6 +62,14 @@ _DURATION_REJECT_S = 5
 # Upper bound on the extra artist-free ``/api/search?q=`` calls the #230 cleanup
 # ladder may issue after the parsed ``(artist, track)`` lookup missed.
 _MAX_LADDER_QUERIES = 3
+# LRCLIB answers 503 ``ServerOverloaded`` in bursts (#281); a transport error
+# maps to status 0. Such calls are retried with these back-off delays, and a
+# lookup that still ended on a transient status is NOT cached as a miss.
+_TRANSIENT_STATUSES = frozenset({0, 429, 500, 502, 503, 504})
+_RETRY_DELAYS_S: tuple[float, ...] = (1.0, 3.0)
+# Which of the known durations let a search candidate through the gate.
+DURATION_GATE_SOURCE = "source"
+DURATION_GATE_CANONICAL = "canonical"
 
 # Matches an LRC line timestamp tag, e.g. "[01:23.45]" / "[01:23]", including
 # repeated tags on one line. Used to derive plain text from a synced LRC body.
@@ -723,7 +732,14 @@ class LyricsResult:
       the #230 fallback ladder (e.g. ``"Конь"`` for a title whose parsed track
       was ``«Конь». Голубой Ургант. …``), or ``None`` when the parsed
       ``(artist, track)`` matched directly. Surfaced in ``metadata.json`` as
-      ``lyrics_match_variant`` for debuggability only.
+      ``lyrics_match_variant`` for debuggability only. Canonical-metadata
+      rungs (#281) report ``"canonical:<artist>"`` / ``"canonical:<artist>/<track>"``.
+    * ``duration_gate`` — for ``/api/search`` hits, which known duration the
+      winning candidate was within tolerance of: ``"source"`` (the video /
+      upload itself) or ``"canonical"`` (the audio release resolved via
+      YouTube Music, #281 — a video longer than the release by a skit intro
+      still matches its LRCLIB record). ``None`` for ``/api/get`` hits and
+      unknown durations.
     """
 
     synced_lrc: str | None = None
@@ -733,6 +749,7 @@ class LyricsResult:
     rejected: str | None = None
     rejected_text: str | None = None
     match_variant: str | None = None
+    duration_gate: str | None = None
 
     @property
     def found(self) -> bool:
@@ -785,20 +802,36 @@ def _from_record(record: dict[str, Any], source: str) -> LyricsResult:
     return LyricsResult(synced_lrc=synced, plain=plain, source=source)
 
 
-def _duration_delta(record: dict[str, Any], duration: int | None) -> float | None:
-    """Absolute duration delta (seconds) between a candidate and the actual
-    audio, or ``None`` when either side is unknown/unparseable."""
+Durations = tuple[int | None, ...]
+
+
+def _duration_delta(record: dict[str, Any], durations: Durations) -> float | None:
+    """Smallest absolute duration delta (seconds) between a candidate and any
+    of the known durations (source video first, then the canonical audio
+    release, #281), or ``None`` when no duration is known/parseable."""
     rec_dur = record.get("duration")
-    if duration is None or rec_dur is None:
+    if rec_dur is None:
         return None
     try:
-        return abs(float(rec_dur) - float(duration))
+        rec = float(rec_dur)
     except (TypeError, ValueError):
         return None
+    deltas = [abs(rec - float(d)) for d in durations if d is not None]
+    return min(deltas) if deltas else None
+
+
+def _duration_gate(record: dict[str, Any], durations: Durations) -> str | None:
+    """Name the duration that admitted ``record`` (see ``LyricsResult.duration_gate``)."""
+    names = (DURATION_GATE_SOURCE, DURATION_GATE_CANONICAL)
+    for name, duration in zip(names, durations, strict=False):
+        delta = _duration_delta(record, (duration,))
+        if delta is not None and delta <= _DURATION_REJECT_S:
+            return name
+    return None
 
 
 def _score_candidate(
-    record: dict[str, Any], track: str, duration: int | None
+    record: dict[str, Any], track: str, durations: Durations
 ) -> tuple[int, float]:
     """Score a ``/api/search`` candidate. Higher is better.
 
@@ -806,7 +839,7 @@ def _score_candidate(
     Returns a tuple usable as a sort key (both ascending-friendly when negated).
     """
     # Duration proximity: within tolerance is best, then by absolute delta.
-    delta = _duration_delta(record, duration)
+    delta = _duration_delta(record, durations)
     within = 1 if delta is not None and delta <= _DURATION_TOLERANCE_S else 0
     if delta is None:
         delta = float("inf")
@@ -831,16 +864,57 @@ class LyricsSource:
     :func:`_default_http` so unit tests drive the lookup without the network.
     """
 
-    def __init__(self, *, http: HttpFn | None = None, base_url: str = LRCLIB_BASE) -> None:
+    def __init__(
+        self,
+        *,
+        http: HttpFn | None = None,
+        base_url: str = LRCLIB_BASE,
+        retry_delays: tuple[float, ...] = _RETRY_DELAYS_S,
+    ) -> None:
         self._http = http or _default_http
         self._base = base_url.rstrip("/")
-        self._cache: dict[tuple[str, str, int | None], LyricsResult] = {}
+        self._retry_delays = retry_delays
+        self._cache: dict[tuple, LyricsResult] = {}
         self._lock = threading.Lock()
+        # Per-thread "this lookup hit a transient failure" flag: fetch() runs
+        # in worker threads concurrently, one per job.
+        self._state = threading.local()
 
     def _cache_key(
-        self, artist: str | None, track: str | None, duration: int | None
-    ) -> tuple[str, str, int | None]:
-        return ((artist or "").strip().lower(), (track or "").strip().lower(), duration)
+        self,
+        artist: str | None,
+        track: str | None,
+        duration: int | None,
+        canonical_artist: str | None = None,
+        canonical_duration: int | None = None,
+    ) -> tuple:
+        return (
+            (artist or "").strip().lower(),
+            (track or "").strip().lower(),
+            duration,
+            (canonical_artist or "").strip().lower(),
+            canonical_duration,
+        )
+
+    def _request(
+        self, method: str, url: str, params: dict[str, Any] | None
+    ) -> tuple[int, Any]:
+        """``self._http`` with retry/back-off on transient statuses (#281).
+
+        Every attempt goes through the injectable seam. When the retries are
+        exhausted on a transient status the per-thread flag is raised so
+        :meth:`fetch` does not cache the resulting miss.
+        """
+        status, body = self._http(method, url, params)
+        for delay in self._retry_delays:
+            if status not in _TRANSIENT_STATUSES:
+                return status, body
+            if delay > 0:
+                time.sleep(delay)
+            status, body = self._http(method, url, params)
+        if status in _TRANSIENT_STATUSES:
+            self._state.transient = True
+        return status, body
 
     def fetch(
         self,
@@ -849,13 +923,24 @@ class LyricsSource:
         track: str | None,
         album: str | None = None,
         duration: int | None = None,
+        canonical_artist: str | None = None,
+        canonical_track: str | None = None,
+        canonical_duration: int | None = None,
     ) -> LyricsResult:
         """Look up lyrics for ``(artist, track[, album, duration])``.
 
         Tries the exact ``/api/get`` endpoint first, then the fuzzy
         ``/api/search`` fallback. Returns an empty :class:`LyricsResult`
         (``source="none"``) when LRCLIB has nothing — the caller then keeps the
-        Whisper transcript. Results are cached by ``(artist, track, duration)``.
+        Whisper transcript. Results are cached by ``(artist, track, duration,
+        canonical_artist, canonical_duration)``; a miss that ended on a
+        transient LRCLIB failure (503 burst, transport error) is not cached.
+
+        ``canonical_*`` (#281) describe the *audio release* as resolved via
+        YouTube Music — Latin artist, release title, release duration — for
+        uploads whose own metadata is native-script / credit-laden / a longer
+        video cut. They add up to two ``/api/get`` + two ``/api/search`` rungs
+        and widen the duration gate to accept either known duration.
         """
         track = _clean(track)
         if not track:
@@ -863,17 +948,26 @@ class LyricsSource:
             return LyricsResult(source="none")
         artist = _clean(artist)
         album = _clean(album)
+        canonical_artist = _clean(canonical_artist)
+        canonical_track = _clean(canonical_track)
 
-        key = self._cache_key(artist, track, duration)
+        key = self._cache_key(artist, track, duration, canonical_artist, canonical_duration)
         with self._lock:
             cached = self._cache.get(key)
         if cached is not None:
             return cached
 
-        result = self._lookup(artist, track, album, duration)
+        self._state.transient = False
+        result = self._lookup(
+            artist, track, album, duration, canonical_artist, canonical_track, canonical_duration
+        )
 
-        with self._lock:
-            self._cache[key] = result
+        transient_miss = (
+            not result.found and not result.rejected and getattr(self._state, "transient", False)
+        )
+        if not transient_miss:
+            with self._lock:
+                self._cache[key] = result
         return result
 
     def get_by_id(self, record_id: int) -> LyricsResult:
@@ -882,7 +976,7 @@ class LyricsSource:
         Bench/tooling entry point (#280): bypasses the search ladder and the
         cache so a known record can be pulled deterministically.
         """
-        status, body = self._http("GET", f"{self._base}/api/get/{int(record_id)}", None)
+        status, body = self._request("GET", f"{self._base}/api/get/{int(record_id)}", None)
         if status != 200 or not isinstance(body, dict):
             return LyricsResult(source="none")
         return _from_record(body, "lrclib_get")
@@ -894,13 +988,44 @@ class LyricsSource:
         track: str,
         album: str | None,
         duration: int | None,
+        canonical_artist: str | None = None,
+        canonical_track: str | None = None,
+        canonical_duration: int | None = None,
     ) -> LyricsResult:
-        get_result = self._try_get(artist, track, album, duration)
-        if get_result is not None and get_result.found:
-            return get_result
-        search_result = self._try_search(artist, track, duration)
-        if search_result is not None and search_result.found:
-            return search_result
+        durations: Durations = (duration, canonical_duration)
+        # Artist-scoped rungs, parsed metadata first, then the canonical
+        # release shape (#281): Latin artist + parsed track (LRCLIB curates
+        # many non-Latin songs under a Latin artistName with a native-script
+        # trackName), then Latin artist + release title when it differs.
+        attempts: list[tuple[str | None, str, str | None, int | None, str | None]] = [
+            (artist, track, album, duration, None)
+        ]
+        if canonical_artist:
+            if canonical_artist.casefold() != (artist or "").casefold():
+                attempts.append(
+                    (canonical_artist, track, None, canonical_duration, f"canonical:{canonical_artist}")
+                )
+            if canonical_track and canonical_track.casefold() != track.casefold():
+                attempts.append(
+                    (
+                        canonical_artist,
+                        canonical_track,
+                        None,
+                        canonical_duration,
+                        f"canonical:{canonical_artist}/{canonical_track}",
+                    )
+                )
+        search_result: LyricsResult | None = None
+        for rung_artist, rung_track, rung_album, rung_duration, variant in attempts:
+            get_result = self._try_get(rung_artist, rung_track, rung_album, rung_duration)
+            if get_result is not None and get_result.found:
+                return replace(get_result, match_variant=variant)
+            rung_search = self._try_search(rung_artist, rung_track, durations)
+            if rung_search is not None and rung_search.found:
+                return replace(rung_search, match_variant=variant)
+            # Keep the first #148 rejection (salvaged text) for the fall-through.
+            if search_result is None and rung_search is not None and rung_search.rejected:
+                search_result = rung_search
 
         # Fallback ladder (#230): the parsed (artist, track) missed. Retry with
         # progressively cleaned track variants via an artist-free
@@ -911,7 +1036,7 @@ class LyricsSource:
         # even with a mismatched artist, and a wrong-duration one is dropped.
         # Requires a known audio duration (the gate is the only safety net here)
         # and is bounded to ≤ _MAX_LADDER_QUERIES extra HTTP calls.
-        if duration is not None:
+        if any(d is not None for d in durations):
             variants = track_cleanup_variants(track)
             # Artist-free retry with the track itself (#260): LRCLIB search is
             # conjunctive and stores many non-Latin artists under a LATIN
@@ -932,7 +1057,7 @@ class LyricsSource:
             ):
                 variants.append(track)
             for variant in variants[:_MAX_LADDER_QUERIES]:
-                laddered = self._try_search_q(variant, duration)
+                laddered = self._try_search_q(variant, durations)
                 # An artist-free instrumental "match" is untrustworthy — the
                 # only evidence is duration, and marking a lyrical track
                 # instrumental drops its transcript entirely. Require lyrics.
@@ -961,25 +1086,25 @@ class LyricsSource:
             params["album_name"] = album
         if duration is not None:
             params["duration"] = duration
-        status, body = self._http("GET", f"{self._base}/api/get", params)
+        status, body = self._request("GET", f"{self._base}/api/get", params)
         if status == 200 and isinstance(body, dict):
             return _from_record(body, source="lrclib_get")
         return None
 
     def _try_search(
-        self, artist: str | None, track: str, duration: int | None
+        self, artist: str | None, track: str, durations: Durations
     ) -> LyricsResult | None:
         """Fuzzy match via ``GET /api/search``; pick the best candidate."""
         params: dict[str, Any] = {"track_name": track}
         if artist:
             params["artist_name"] = artist
-        status, body = self._http("GET", f"{self._base}/api/search", params)
+        status, body = self._request("GET", f"{self._base}/api/search", params)
         if status != 200 or not isinstance(body, list) or not body:
             return None
         candidates = [c for c in body if isinstance(c, dict)]
         if not candidates:
             return None
-        best = max(candidates, key=lambda c: _score_candidate(c, track, duration))
+        best = max(candidates, key=lambda c: _score_candidate(c, track, durations))
         # Hard reject (#148): a best candidate too far from the actual audio
         # duration is the wrong edit/cut — its synced timings would drift
         # against our track. Drop the record's lyrics/instrumental flag, but
@@ -988,7 +1113,7 @@ class LyricsSource:
         # force-aligns them against the actual vocal stem instead of falling
         # straight to the Whisper ASR floor. Unknown durations (either side)
         # are never rejected.
-        delta = _duration_delta(best, duration)
+        delta = _duration_delta(best, durations)
         if delta is not None and delta > _DURATION_REJECT_S:
             plain = _clean(best.get("plainLyrics"))
             synced = _clean(best.get("syncedLyrics"))
@@ -998,9 +1123,12 @@ class LyricsSource:
                 rejected=f"duration_mismatch ({round(delta, 1):g}s)",
                 rejected_text=salvaged or None,
             )
-        return _from_record(best, source="lrclib_search")
+        return replace(
+            _from_record(best, source="lrclib_search"),
+            duration_gate=_duration_gate(best, durations),
+        )
 
-    def _try_search_q(self, query: str, duration: int) -> LyricsResult | None:
+    def _try_search_q(self, query: str, durations: Durations) -> LyricsResult | None:
         """Artist-free fuzzy search via ``GET /api/search?q=<query>`` (#230).
 
         Scores candidates with :func:`_score_candidate` against ``query`` and
@@ -1010,10 +1138,10 @@ class LyricsSource:
         artist-scoped path this never salvages a wrong-duration record's text.
         Returns ``None`` on a transport miss, an empty result, or a
         gate-failing best candidate (so the ladder keeps trying / falls back)."""
-        status, body = self._http("GET", f"{self._base}/api/search", {"q": query})
+        status, body = self._request("GET", f"{self._base}/api/search", {"q": query})
         if status != 200 or not isinstance(body, list) or not body:
             return None
-        picked = self._pick_gated(body, query, duration)
+        picked = self._pick_gated(body, query, durations)
         if picked is not None:
             return picked
         # Editions expansion (#233): /api/search?q= returns LRCLIB's top-N by
@@ -1041,20 +1169,20 @@ class LyricsSource:
             if key not in pairs:
                 pairs.append(key)
         for artist_name, track_name in pairs[:_MAX_LADDER_QUERIES]:
-            status2, body2 = self._http(
+            status2, body2 = self._request(
                 "GET",
                 f"{self._base}/api/search",
                 {"artist_name": artist_name, "track_name": track_name},
             )
             if status2 != 200 or not isinstance(body2, list) or not body2:
                 continue
-            picked = self._pick_gated(body2, query, duration)
+            picked = self._pick_gated(body2, query, durations)
             if picked is not None:
                 return picked
         return None
 
     def _pick_gated(
-        self, body: list[Any], query: str, duration: int
+        self, body: list[Any], query: str, durations: Durations
     ) -> LyricsResult | None:
         """Duration-gate ``body`` BEFORE ranking, then pick the best candidate.
 
@@ -1066,10 +1194,13 @@ class LyricsSource:
             c
             for c in body
             if isinstance(c, dict)
-            and (delta := _duration_delta(c, duration)) is not None
+            and (delta := _duration_delta(c, durations)) is not None
             and delta <= _DURATION_REJECT_S
         ]
         if not candidates:
             return None
-        best = max(candidates, key=lambda c: _score_candidate(c, query, duration))
-        return _from_record(best, source="lrclib_search")
+        best = max(candidates, key=lambda c: _score_candidate(c, query, durations))
+        return replace(
+            _from_record(best, source="lrclib_search"),
+            duration_gate=_duration_gate(best, durations),
+        )

@@ -151,15 +151,18 @@ def ref_paths(refs_dir: Path, song_id: str) -> dict[str, Path]:
 def load_reference(refs_dir: Path, song: dict, prefer: str) -> tuple[Text | None, str, Text | None]:
     """``(text_reference, name, timed_reference)``.
 
-    ``prefer`` is ``auto`` (Genius text when present, else LRCLIB), ``genius``
-    or ``lrclib``. The timed reference (LRCLIB synced) drives the missing
-    sung regions report regardless of which text is scored.
+    ``prefer`` is ``auto`` (a synced LRCLIB record — curated against the
+    recording, repeats included — else Genius, else plain LRCLIB),
+    ``genius`` or ``lrclib``. Genius pages collapse repeated choruses and
+    add intro ad-libs, so they serve as the *independent* second reference
+    rather than the default. The timed reference (LRCLIB synced) drives the
+    missing sung regions report regardless of which text is scored.
     """
     paths = ref_paths(refs_dir, song["id"])
     timed = parse_lrc(paths["lrclib_lrc"].read_text(encoding="utf-8")) if paths["lrclib_lrc"].exists() else None
     lrclib = timed or (parse_plain(paths["lrclib_txt"].read_text(encoding="utf-8")) if paths["lrclib_txt"].exists() else None)
     genius = parse_plain(paths["genius_txt"].read_text(encoding="utf-8")) if paths["genius_txt"].exists() else None
-    order = {"auto": [("genius", genius), ("lrclib", lrclib)],
+    order = {"auto": [("lrclib", timed), ("genius", genius), ("lrclib", lrclib)],
              "genius": [("genius", genius)],
              "lrclib": [("lrclib", lrclib)]}[prefer]
     for name, text in order:
