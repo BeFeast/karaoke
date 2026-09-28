@@ -43,11 +43,12 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from difflib import SequenceMatcher
 from typing import Any
 
 import httpx
 
-from karaoke.textnorm import tokens
+from karaoke.textnorm import name_skeleton, tokens
 from karaoke.titles import track_cleanup_variants
 
 LRCLIB_BASE = "https://lrclib.net"
@@ -1002,11 +1003,22 @@ def _record_is_junk(record: dict[str, Any]) -> bool:
 
 
 def _artist_match(record: dict[str, Any], artists: tuple[str | None, ...]) -> int:
-    """1 when the record's artist shares a token (either script, >= 3 chars)
-    with one of ``artists``, else 0."""
+    """1 when the record's artist shares a token (>= 3 chars) with one of
+    ``artists``, or sounds the same across scripts ("שירי מימון" /
+    "Shiri Maimon", by consonant skeleton), else 0."""
+    have_name = str(record.get("artistName") or "")
     want = {t for a in artists if a for t in tokens(a) if len(t) >= 3}
-    have = {t for t in tokens(str(record.get("artistName") or "")) if len(t) >= 3}
-    return 1 if want & have else 0
+    have = {t for t in tokens(have_name) if len(t) >= 3}
+    if want & have:
+        return 1
+    have_sk = name_skeleton(have_name)
+    for artist in artists:
+        if not artist or not have_sk:
+            continue
+        want_sk = name_skeleton(artist)
+        if len(want_sk) >= 3 and SequenceMatcher(None, want_sk, have_sk, autojunk=False).ratio() >= 0.8:
+            return 1
+    return 0
 
 
 def _latin_tokens(text: str | None) -> set[str]:

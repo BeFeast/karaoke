@@ -191,3 +191,28 @@ def bigram_agreement(hypothesis: str, reference: str, lang: str | None = None) -
         return None
     ref_pairs = set(zip(ref, ref[1:], strict=False))
     return sum(1 for pair in pairs if pair in ref_pairs) / len(pairs)
+
+
+# Consonant skeletons for cross-script name matching ("שירי מימון" vs
+# "Shiri Maimon"): both sides reduce to one consonant-class string, vowels
+# and vowel letters (א ה ו י ע) dropped, sound-alike classes merged.
+_HE_SKELETON = str.maketrans({
+    "א": "", "ה": "", "ו": "", "י": "", "ע": "",
+    "ב": "b", "ג": "g", "ד": "d", "ז": "z", "ח": "K", "ט": "t", "כ": "K", "ך": "K",
+    "ל": "l", "מ": "m", "ם": "m", "נ": "n", "ן": "n", "ס": "s", "פ": "p", "ף": "p",
+    "צ": "C", "ץ": "C", "ק": "K", "ר": "r", "ש": "S", "ת": "t",
+})
+_LATIN_DIGRAPHS = (("sh", "S"), ("ch", "K"), ("kh", "K"), ("tz", "C"), ("ts", "C"), ("ph", "p"))
+_LATIN_SKELETON = str.maketrans({"v": "b", "w": "b", "f": "p", "c": "K", "k": "K", "q": "K", "x": "Ks",
+                                 "a": "", "e": "", "i": "", "o": "", "u": "", "y": "", "h": ""})
+
+
+def name_skeleton(name: str) -> str:
+    """Script-neutral consonant skeleton of a (person / band) name."""
+    text = strip_hebrew_marks(unicodedata.normalize("NFKC", name)).casefold()
+    text = "".join(ch for ch in text if ch.isalpha())
+    if has_hebrew(text):
+        return text.translate(_HE_SKELETON)
+    for digraph, cls in _LATIN_DIGRAPHS:
+        text = text.replace(digraph, cls)
+    return text.translate(_LATIN_SKELETON)
