@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.41.1] - 2026-09-28
+
+_Bump: patch_
+
+- fix(lyrics): drop word tags of an aligned line stretched over untranscribed speech — music-video dialogue no longer lights the first sung line's words (#281, #291)
+
 ## [v0.41.0] - 2026-09-28
 
 _Bump: minor_
