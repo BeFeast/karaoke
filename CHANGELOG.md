@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.41.6] - 2026-09-28
+
+_Bump: patch_
+
+- fix(lyrics): restore the canonical live/remix guard and the LRCLIB script-mismatch guard that #300 was meant to merge — absent from 0.41.5 (#281, #304)
+- fix(lyrics): single-word LRCLIB records ("probe") are ignored; bilingual YouTube Music artist split; clean canonical title as an artist-free rung; dash-tail track variant; exact-title + artist-overlap salvage for forced alignment (#289, #290, #304)
+- fix(download): retry an intermittent YouTube media 403 twice before failing the job (#305)
+- fix(provision): runpod_provision.py live-endpoint mode by id with Blackwell MIG exclusions; default image cuda12.4-r13 (#299, #306)
+
 ## [v0.41.5] - 2026-09-29
 
 _Bump: patch_
