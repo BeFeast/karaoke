@@ -49,14 +49,18 @@ class Api:
         return self.http.post(f"{self.base}{path}", headers=self.headers)
 
     def jobs(self) -> list[dict]:
+        """Every job, newest first, paging with the ``before_id`` cursor."""
         out: list[dict] = []
-        offset = 0
+        params: dict = {"limit": 200}
         while True:
-            page = self.get("/jobs", limit=100, offset=offset)
+            page = self.get("/jobs", **params)
             if not page:
                 return out
             out += page
-            offset += len(page)
+            last = min(j["id"] for j in page)
+            if params.get("before_id") == last:
+                return out  # a server without cursor support repeats the page
+            params["before_id"] = last
 
     def metadata(self, token: str) -> dict:
         return self.get(f"/share/{token}/metadata.json")

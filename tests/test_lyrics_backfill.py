@@ -36,7 +36,8 @@ class _Http:
 
     def get(self, url, params=None, headers=None):
         if url.endswith("/jobs"):
-            return _Resp(200, self.jobs if not params or params.get("offset", 0) == 0 else [])
+            before = (params or {}).get("before_id")
+            return _Resp(200, [j for j in self.jobs if before is None or j["id"] < before])
         token = url.split("/share/")[1].split("/")[0]
         if url.endswith("/metadata.json"):
             return _Resp(200, self.meta[token])

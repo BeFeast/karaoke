@@ -600,20 +600,24 @@ async def list_jobs(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
     limit: int = 50,
+    before_id: int | None = None,
 ) -> list[JobOut]:
     """List jobs for the caller, newest first.
 
     Owner-scoped: a Clerk user sees only their own jobs. Trusted-LAN and
     machine-bearer callers are treated as admin and see every job (matches
-    ``_can_owner_view``).
+    ``_can_owner_view``). ``before_id`` pages further back: only jobs with a
+    smaller id (pass the last id of the previous page).
     """
     limit = max(1, min(limit, 200))
     stmt = (
         select(Job)
-        .order_by(Job.created_at.desc())
+        .order_by(Job.created_at.desc(), Job.id.desc())
         .limit(limit)
         .options(selectinload(Job.artifacts))
     )
+    if before_id is not None:
+        stmt = stmt.where(Job.id < before_id)
     if owner.state not in {AuthState.trusted_lan, AuthState.machine_bearer}:
         stmt = stmt.where(Job.owner_subject == owner.subject)
     jobs = (await session.scalars(stmt)).all()
