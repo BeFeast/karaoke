@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.41.2] - 2026-09-28
+
+_Bump: patch_
+
+- feat(lyrics): ship the curated LRCLIB record shifted by a constant offset on skit-intro music videos — every line with LRCLIB timing instead of the aligner's lossy re-timing (#293, #294, #295)
+
 ## [v0.41.1] - 2026-09-28
 
 _Bump: patch_
