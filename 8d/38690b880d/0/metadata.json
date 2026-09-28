@@ -1,0 +1,71 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8d38690b880d",
+  "session_id": "ee21a9c3-68d2-4800-abcf-373f973bbb63",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-28T20:42:14.554735224Z",
+  "branch": "feat/282-ivrit-whisper",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docker/runpod/handler.py",
+    "src/karaoke/worker/lyrics.py",
+    "src/karaoke/worker/pipeline.py",
+    "tests/worker/test_lyrics.py",
+    "tests/worker/test_pipeline_lyrics.py",
+    "tests/worker/test_runpod_handler.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "437a46f6cf5f",
+  "checkpoint_transcript_start": 1124,
+  "transcript_lines_at_start": 1124,
+  "compact_transcript_start": 196,
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 30037,
+    "cache_read_tokens": 5044235,
+    "output_tokens": 19791,
+    "api_call_count": 9
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-28T20:42:14.301835718Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 6,
+    "total_committed": 0,
+    "total_lines_changed": 6,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 372,
+      "user_lines_removed": 6,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 84,
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".cursor/hooks.json": 40,
+        "docker/runpod/handler.py": 53,
+        "src/karaoke/worker/lyrics.py": 21,
+        "src/karaoke/worker/pipeline.py": 17,
+        "tests/worker/test_lyrics.py": 23,
+        "tests/worker/test_pipeline_lyrics.py": 18,
+        "tests/worker/test_runpod_handler.py": 61
+      },
+      "user_removed_per_file": {
+        "docker/runpod/handler.py": 3,
+        "src/karaoke/worker/lyrics.py": 1,
+        "src/karaoke/worker/pipeline.py": 2
+      }
+    }
+  ]
+}

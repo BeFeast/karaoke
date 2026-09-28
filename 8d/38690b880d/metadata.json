@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8d38690b880d",
+  "strategy": "manual-commit",
+  "branch": "feat/282-ivrit-whisper",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docker/runpod/handler.py",
+    "src/karaoke/worker/lyrics.py",
+    "src/karaoke/worker/pipeline.py",
+    "tests/worker/test_lyrics.py",
+    "tests/worker/test_pipeline_lyrics.py",
+    "tests/worker/test_runpod_handler.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8d/38690b880d/0/metadata.json",
+      "transcript": "/8d/38690b880d/0/full.jsonl",
+      "compact_transcript": "/8d/38690b880d/0/transcript.jsonl",
+      "content_hash": "/8d/38690b880d/0/content_hash.txt",
+      "prompt": "/8d/38690b880d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 30037,
+    "cache_read_tokens": 5044235,
+    "output_tokens": 19791,
+    "api_call_count": 9
+  }
+}
