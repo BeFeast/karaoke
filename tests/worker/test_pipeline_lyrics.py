@@ -1454,3 +1454,76 @@ def test_whisper_floor_drops_degenerate_segments_from_txt_and_lrc(tmp_path):
     assert prov["lyrics_source"] == "whisper_asr_synced"
     assert (exports / "lyrics.txt").read_text(encoding="utf-8") == "ממעמקים קראתי אלייך"
     assert "נא נא" not in (exports / "lyrics.lrc").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_run_real_job_drops_lrclib_record_in_the_wrong_script(tmp_path, monkeypatch):
+    """#281: a Hebrew upload must not align/ship a Latin transliteration record."""
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.config import Settings
+    from karaoke.db.models import Base, Job, JobStatus
+    from karaoke.db.session import create_engine_and_sessionmaker
+    from karaoke.worker.canonical import CanonicalResolver
+    from karaoke.worker.genius import GeniusSource
+    from karaoke.worker.lyrics import LyricsSource
+    from karaoke.worker.runpod_client import RunpodClient
+    from karaoke.worker.vast_client import GpuJobResult
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'script.db'}"
+    engine, factory = create_engine_and_sessionmaker(url)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with factory() as session:
+            job = Job(job_token="tok-script", owner_subject="owner",
+                      source_url="https://example.com/video", status=JobStatus.queued, progress=0)
+            session.add(job)
+            await session.commit()
+            await session.refresh(job)
+            job_id = job.id
+
+        monkeypatch.setattr(pipeline, "_ytdlp_metadata",
+                            lambda url, settings=None, **_: {"title": "שרית חדד - כשהלב בוכה", "duration": 285})
+
+        def fake_file(src, dest: Path, *a, **k):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"x")
+            return dest
+
+        monkeypatch.setattr(pipeline, "_download_audio", fake_file)
+        monkeypatch.setattr(pipeline, "_to_wav", fake_file)
+        monkeypatch.setattr(pipeline, "_wav_to_mp3", fake_file)
+        monkeypatch.setattr(pipeline, "_CANONICAL_RESOLVER", CanonicalResolver(search=lambda q: []))
+        script = [(200, {"syncedLyrics": "[00:14.36]Kshehalev bohe rak elokim shomea\n[00:21.68]Hake-ev ole metoh",
+                         "plainLyrics": "Kshehalev bohe rak elokim shomea\nHake-ev ole metoh"})]
+        monkeypatch.setattr(pipeline, "_LYRICS_SOURCE",
+                            LyricsSource(http=lambda m, u, p: script.pop(0), retry_delays=(0,)))
+        monkeypatch.setattr(pipeline, "_GENIUS_SOURCE", GeniusSource(http=lambda *a: (404, "")))
+        captured = {}
+
+        def fake_gpu_run(self, mix_wav, work_dir, *, align_text, align_lang, whisper_lang):
+            captured["align_text"] = align_text
+            work_dir.mkdir(parents=True, exist_ok=True)
+            (work_dir / "vocals.wav").write_bytes(b"x")
+            (work_dir / "no_vocals.wav").write_bytes(b"x")
+            (work_dir / "lyrics.txt").write_text("כשהלב בוכה רק אלוקים שומע")
+            (work_dir / "lyrics.json").write_text(json.dumps({"language": "he", "segments": []}))
+            return GpuJobResult(vast_instance_id="fake-1", vast_cost=0.0, gpu_model="fake",
+                                vocals_path=work_dir / "vocals.wav",
+                                instrumental_path=work_dir / "no_vocals.wav",
+                                lyrics_txt_path=work_dir / "lyrics.txt",
+                                lyrics_json_path=work_dir / "lyrics.json")
+
+        monkeypatch.setattr(RunpodClient, "run", fake_gpu_run)
+        settings = Settings(database_url=url, runpod_api_key="k", runpod_endpoint_id="ep",
+                            artifact_root=str(tmp_path))
+        await pipeline.run_real_job(factory, job_id, settings)
+        async with factory() as session:
+            job = await session.get(Job, job_id)
+            assert job.status == JobStatus.completed, job.error
+        assert captured["align_text"] is None
+        metadata = json.loads((tmp_path / "tok-script" / "exports" / "metadata.json").read_text())
+        assert metadata["lyrics_source"] == "whisper_asr"
+        assert metadata["lyrics_lrclib_rejected"] == "script_mismatch"
+    finally:
+        await engine.dispose()

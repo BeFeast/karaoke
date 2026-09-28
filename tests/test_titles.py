@@ -325,3 +325,8 @@ def test_derive_metadata_cleans_ytdlp_track_credit():
 
 def test_cleanup_variants_no_longer_emit_credit_fragment():
     assert track_cleanup_variants(strip_credits("לאב סונג (Prod. By Nuri)")) == []
+
+
+def test_cleanup_variants_take_the_segment_after_the_last_dash():
+    assert track_cleanup_variants("הפרויקט של עידן רייכל - ממעמקים") == ["ממעמקים"]
+    assert track_cleanup_variants("Song") == []

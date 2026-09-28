@@ -1160,6 +1160,21 @@ async def run_real_job(
         lang_hint = _script_lang_hint(source_meta.get("track")) or _script_lang_hint(
             title, source_meta.get("artist"), source_meta.get("track")
         )
+        # Script sanity (#281): a record whose text is in another script than
+        # the track's language is a transliteration / another song under the
+        # same canonical title (a Latin "Kshehalev bohe…" for a Hebrew upload,
+        # 2026-09-28). Treat it as a miss rather than aligning or shipping it.
+        record_text = (
+            lyrics.plain
+            or (lrc_to_plain(lyrics.synced_lrc) if lyrics.synced_lrc else None)
+            or lyrics.rejected_text
+        )
+        if lang_hint and record_text and _script_lang_hint(record_text) != lang_hint:
+            _log.warning(
+                "job %s: LRCLIB record script %r does not match track language %r — dropped",
+                job_id, _script_lang_hint(record_text), lang_hint,
+            )
+            lyrics = LyricsResult(source="none", rejected="script_mismatch")
         align_text: str | None = None
         align_lang: str | None = None
         if lyrics.synced_lrc:
