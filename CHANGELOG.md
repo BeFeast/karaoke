@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.41.3] - 2026-09-28
+
+_Bump: patch_
+
+- feat(gpu): Hebrew stems transcribe on the ivrit-ai large-v3-turbo fine-tune; working language probe; hallucination guard (GPU image `cuda12.4-r12`, coordinator records `whisper_model` and drops repetition-loop ASR segments) (#282, #297)
+
 ## [v0.41.2] - 2026-09-28
 
 _Bump: patch_
