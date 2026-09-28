@@ -51,7 +51,7 @@ PROVIDER_TAB4U = "tab4u"
 _TAB4U_URL_RE = re.compile(r"^https?://(?:www\.)?tab4u\.com/(?:lyrics|tabs)/songs/[^?#]+\.html")
 _GENIUS_URL_RE = re.compile(r"^https?://(?:www\.)?genius\.com/[A-Za-z0-9-]+-lyrics$")
 _MIN_LINES = 4
-_TAB4U_NOISE_RE = re.compile(r":\s*$|^\s*[x×]\s*\d+\s*$|\bx\d{3,}\b|^[A-G][#b]?\w*\d*\s*:")
+_TAB4U_NOISE_RE = re.compile(r":\s*$|:\s*[x×]\s*\d+\s*$|^\s*[x×]\s*\d+\s*$|\bx\d{3,}\b|^[A-G][#b]?\w*\d*\s*:")
 _TAB4U_SLUG_RE = re.compile(r"/songs/\d+_(?P<artist>.+?)_-_(?P<title>.+?)\.html")
 _MUSIXMATCH_RE = re.compile(r"musixmatch\.com/lyrics/(?P<artist>[^/]+)/(?P<title>[^/?#]+)")
 _GENIUS_TITLE_RE = re.compile(r"^(?P<a>.+?)\s+[–-]\s+(?P<t>.+?)\s+Lyrics\b", re.IGNORECASE)
@@ -178,8 +178,12 @@ def _enough(text: str | None) -> bool:
 
 
 def _title_evidence(page_title: str, track: str, lang: str | None) -> bool:
-    want = set(tokens(track, lang))
-    return bool(want) and bool(want & set(tokens(page_title, lang)))
+    """At least half of the track's content words (>= 3 letters) appear —
+    one shared function word («של») is not evidence."""
+    want = {t for t in tokens(track, lang) if len(t) >= 3} or set(tokens(track, lang))
+    if not want:
+        return False
+    return len(want & set(tokens(page_title, lang))) >= max(1, (len(want) + 1) // 2)
 
 
 class WebReferenceFinder:

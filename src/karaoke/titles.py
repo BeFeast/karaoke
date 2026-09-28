@@ -289,7 +289,32 @@ _SENTENCE_CUT_RE = re.compile(r"\.\s|\.$|//|\|")
 _ABBREV_TOKEN_RE = re.compile(r"(?:^|\s)([^\W\d_]{1,2})\.$", re.UNICODE)
 
 
-def track_cleanup_variants(track: str | None) -> list[str]:
+_SEGMENT_NOISE = {"קליפ", "clip", "official", "video", "lyrics", "lyric", "מילים", "hd", "hq", "4k", "audio"}
+_HEBREW_RE = re.compile("[\u05d0-\u05ea]")
+
+
+def _title_segment(text: str, artists: tuple[str | None, ...] = ()) -> str | None:
+    """The likeliest title among the dash-separated segments of a parsed
+    track that still carries an ``artist - title`` split (#290):
+    "הפרויקט של עידן רייכל - ממעמקים" -> "ממעמקים",
+    "אחותי - קליפ - Shiri Maimon" (artist "Shiri Maimon") -> "אחותי".
+    Noise segments and segments naming the artist are dropped; among the
+    rest, the upload's main script wins, then the last segment."""
+    parts = [p.strip() for p in _ANY_DASH_SEP_RE.split(text) if p.strip()]
+    if len(parts) < 2:
+        return None
+    artist_words = {w.casefold() for a in artists if a for w in a.split() if len(w) >= 3}
+    keep = [
+        p for p in parts
+        if not all(w.casefold() in _SEGMENT_NOISE for w in p.split())
+        and not (artist_words and {w.casefold() for w in p.split()} & artist_words)
+    ]
+    if _HEBREW_RE.search(text) and any(_HEBREW_RE.search(p) for p in keep):
+        keep = [p for p in keep if _HEBREW_RE.search(p)]
+    return keep[-1] if keep else None
+
+
+def track_cleanup_variants(track: str | None, artists: tuple[str | None, ...] = ()) -> list[str]:
     """Progressively cleaned track-name variants for a *fallback* LRCLIB lookup.
 
     Applied only when the parsed ``(artist, track)`` already missed (see
@@ -340,9 +365,8 @@ def track_cleanup_variants(track: str | None) -> list[str]:
     #    the segment after the LAST spaced dash is the likeliest title. Only
     #    while the ladder has room (the caller issues <= 3 queries).
     if len(variants) < 2:
-        parts = _ANY_DASH_SEP_RE.split(text)
-        tail = parts[-1].strip() if len(parts) > 1 else ""
-        if len(tail) >= 3 and tail.lower() not in seen:
+        tail = _title_segment(text, artists)
+        if tail and len(tail) >= 3 and tail.lower() not in seen:
             variants.append(tail)
             seen.add(tail.lower())
 

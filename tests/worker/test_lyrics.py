@@ -1702,3 +1702,18 @@ def test_exact_title_without_artist_overlap_is_not_salvaged():
         artist="The Idan Raichel Project", track="הפרויקט של עידן רייכל - ממעמקים", duration=288,
     )
     assert not hit.found and hit.rejected is None
+
+
+def test_ladder_prefers_the_candidate_by_the_right_artist():
+    """Two songs titled «אחותי»: Shiri Maimon 187 s and Shuli Rand 189 s; the
+    video is 189 s. Duration alone would take Shuli Rand's."""
+    body = [_rec("Shuli Rand", "אחותי", 189), _rec("Shiri Maimon", "אחותי", 187)]
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/search", "code": 200, "body": body},
+    ])
+    hit = LyricsSource(http=rec, retry_delays=(0,)).fetch(artist="Shiri Maimon", track="אחותי - קליפ", duration=189)
+    assert hit.found and hit.match_variant == "אחותי" and hit.plain == _GOOD_PLAIN
+    assert rec.calls[-1][2] == {"q": "אחותי"}
+    assert "Shiri" not in str(rec.calls[-1]) and hit.duration_gate == "source"  # 187 within ±5 of 189

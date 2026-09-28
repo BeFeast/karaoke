@@ -104,3 +104,12 @@ def test_tab4u_structure_lines_are_not_lyrics():
             '<tr><td class="song_only">המשך פתיחה:</td></tr><tr><td class="song_only">שורה אמיתית של שיר</td></tr>'
             '</table></div>')
     assert extract_tab4u(page) == "שורה אמיתית של שיר"
+
+
+def test_title_evidence_ignores_a_shared_function_word():
+    from karaoke.worker.web_reference import _title_evidence
+
+    assert not _title_evidence("שיר אחר של מישהו", "הקוד של הבנות", "he")
+    assert _title_evidence("אגם חזן - הקוד של הבנות", "הקוד של הבנות", "he")
+    assert extract_tab4u('<div id="songContentTPL"><table><tr><td class="song_only">פתיחה: x5</td></tr>'
+                         '<tr><td class="song_only">שורה אמיתית</td></tr></table></div>') == "שורה אמיתית"
