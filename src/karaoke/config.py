@@ -194,6 +194,12 @@ class Settings(BaseSettings):
     # NFS-mounted artifact root inside the coordinator container.
     artifact_root: str = "/srv/artifacts"
 
+    # ---- Lyrics: multi-source word vote (#281) ----
+    # Fetch a second reference text (Genius) next to LRCLIB and let the ASR
+    # transcript settle the words they disagree on. Kill switch: ``false``
+    # skips the Genius fetch and ships LRCLIB text verbatim.
+    word_vote_enabled: bool = True  # KARAOKE_WORD_VOTE_ENABLED
+
 
 _settings: Settings | None = None
 
