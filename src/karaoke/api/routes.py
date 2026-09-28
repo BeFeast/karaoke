@@ -52,6 +52,7 @@ from karaoke.uploads import (
     upload_display_name,
 )
 from karaoke.worker import job_cookies
+from karaoke.worker.lyrics import SPEECH_MARKER
 from karaoke.worker.scheduler import schedule_job
 
 _log = logging.getLogger(__name__)
@@ -239,6 +240,10 @@ class LyricsLine(BaseModel):
     text: str
     end: float | None = None
     words: list[LyricsWord] | None = None
+    # Non-sung speech (#283): the LRC line text carried a leading
+    # ``[speech]`` marker, stripped from ``text``. Shown dimmed, never
+    # highlighted as singing. Omitted when false.
+    speech: bool = False
 
     @model_serializer(mode="wrap")
     def _omit_empty_word_timing(self, handler):  # type: ignore[no-untyped-def]
@@ -248,6 +253,8 @@ class LyricsLine(BaseModel):
         for key in ("end", "words"):
             if data.get(key) is None:
                 data.pop(key, None)
+        if not data.get("speech"):
+            data.pop("speech", None)
         return data
 
 
@@ -1073,6 +1080,10 @@ def _parse_lrc_lines(lrc: str) -> list[LyricsLine]:
         # Strip the leading [..] tags, keeping any inline <..> word tags.
         body = _LRC_TAG_RE.sub("", raw)
         text = _LRC_WORD_TAG_RE.sub("", body).strip()
+        speech = text.startswith(SPEECH_MARKER)
+        if speech:
+            text = text[len(SPEECH_MARKER):].strip()
+            body = body.replace(SPEECH_MARKER, "", 1)
         if not text:
             continue
         words, end = _parse_lrc_words(body)
@@ -1082,7 +1093,8 @@ def _parse_lrc_lines(lrc: str) -> list[LyricsLine]:
                     t=round(_lrc_tag_seconds(tag), 3),
                     text=text,
                     end=end,
-                    words=words,
+                    words=None if speech else words,
+                    speech=speech,
                 )
             )
     lines.sort(key=lambda line: line.t)

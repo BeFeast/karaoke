@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { detectLyricsDirection, detectTextDirection, parseLrc } from "./SyncedLyrics";
+import { detectLyricsDirection, detectTextDirection, parseLrc, sungLines } from "./SyncedLyrics";
 
 describe("parseLrc word tags (#221)", () => {
   test("enhanced line parses words + end, display text stays clean", () => {
@@ -171,5 +171,21 @@ describe("lyrics provenance labels", () => {
     expect(sourceLabel("lrclib_synced")).toBe("LRCLIB");
     expect(sourceLabel("whisper_asr")).toBe("ASR (approximate)");
     expect(sourceLabel(null)).toBe("Unknown source");
+  });
+});
+
+describe("speech lines (#283)", () => {
+  test("[speech] marker is stripped, flagged, and has no word timing", () => {
+    const lines = parseLrc(
+      "[00:03.60][speech] זה סבבה לך המקום נכון\n[00:56.66]<00:56.66>תדע <00:57.00>זה <00:57.30>פשע <00:57.60>",
+    );
+    expect(lines[0]).toEqual({ t: 3.6, text: "זה סבבה לך המקום נכון", speech: true });
+    expect(lines[1].speech).toBeUndefined();
+    expect(lines[1].words?.length).toBe(3);
+  });
+
+  test("sungLines drops speech so the player never highlights it", () => {
+    const lines = parseLrc("[00:01.00][speech] hello there friend\n[00:05.00]sung line");
+    expect(sungLines(lines).map((l) => l.text)).toEqual(["sung line"]);
   });
 });

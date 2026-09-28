@@ -84,7 +84,7 @@ def parse_lrc(body: str) -> Text:
             continue
         stamps = [_tag_seconds(m) for m in _LRC_TAG_RE.finditer(raw)]
         text = _LRC_STRIP_RE.sub(" ", raw).strip()
-        if not text:
+        if not text or text.startswith("[speech]"):  # non-sung dialogue (#283) is not lyrics
             continue
         lines.append(Line(text=re.sub(r"\s{2,}", " ", text), start=min(stamps) if stamps else None))
     lines.sort(key=lambda ln: (ln.start is None, ln.start or 0.0))

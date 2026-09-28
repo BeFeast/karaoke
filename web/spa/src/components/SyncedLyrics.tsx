@@ -36,6 +36,20 @@ export interface LyricLine {
   words?: LyricWord[];
   /** Line sung-end in seconds from a trailing `<mm:ss.xx>` tag; else undefined. */
   end?: number;
+  /**
+   * Non-sung speech (a music video's dialogue, #283): the LRC text carried a
+   * leading `[speech]` marker. Shown dimmed and labelled, never highlighted as
+   * singing, and left out of the karaoke wipe (see `sungLines`).
+   */
+  speech?: boolean;
+}
+
+/** LRC text marker for non-sung speech lines (mirrors the server's SPEECH_MARKER). */
+export const SPEECH_MARKER = "[speech]";
+
+/** Only the sung lines — what the player / performance wipe may highlight. */
+export function sungLines(lines: LyricLine[]): LyricLine[] {
+  return lines.filter((line) => !line.speech);
 }
 
 // Leading line timestamp: [mm:ss], [mm:ss.xx], [mm:ss.xxx] (also tolerates a
@@ -126,9 +140,18 @@ export function parseLrc(body: string): LyricLine[] {
       lastTagEnd = LINE_TAG.lastIndex;
     }
     if (stamps.length === 0) continue; // metadata line (e.g. [ti:], [ar:]) or blank
-    const bodyText = raw.slice(lastTagEnd);
-    const text = bodyText.replace(WORD_TAG, "").trim();
+    let bodyText = raw.slice(lastTagEnd);
+    let text = bodyText.replace(WORD_TAG, "").trim();
+    const speech = text.startsWith(SPEECH_MARKER);
+    if (speech) {
+      text = text.slice(SPEECH_MARKER.length).trim();
+      bodyText = bodyText.replace(SPEECH_MARKER, "");
+    }
     if (!text) continue; // drop blank / no-text lines
+    if (speech) {
+      for (const t of stamps) lines.push({ t, text, speech: true });
+      continue;
+    }
     const { words, end } = parseWordTags(bodyText);
     // Repeated leading tags share the same parsed words (like the server).
     for (const t of stamps) lines.push({ t, text, words, end });
@@ -316,8 +339,10 @@ export function SyncedLyrics({
               ref={(el) => {
                 lineRefs.current[i] = el;
               }}
-              className={`synced-lyrics-line${i === active ? " is-active" : i < active ? " is-sung" : ""}`}
-              aria-current={i === active ? "true" : undefined}
+              className={`synced-lyrics-line${
+                line.speech ? " is-speech" : i === active ? " is-active" : i < active ? " is-sung" : ""
+              }`}
+              aria-current={i === active && !line.speech ? "true" : undefined}
             >
               <button
                 type="button"
@@ -326,6 +351,7 @@ export function SyncedLyrics({
                 title={`Seek to ${formatTimestamp(line.t)}`}
                 dir="auto"
               >
+                {line.speech ? <span className="synced-lyrics-speech-tag">[speech] </span> : null}
                 {line.text}
               </button>
             </li>
@@ -357,6 +383,8 @@ export function sourceLabel(source: string | null): string {
     case "whisper_asr_synced":
     case "whisper_asr": return "ASR (approximate)";
     case "forced_aligned": return "Vocal alignment";
+    case "asr_reference_corrected": return "ASR + web reference";
+    case "lrclib_plain": return "LRCLIB (untimed)";
     case "lrclib_synced": return "LRCLIB";
     default: return "Unknown source";
   }

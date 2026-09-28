@@ -20,7 +20,7 @@ import { goDashboard, itemUrl } from "../router";
 import { type StageTheme, useStageTheme } from "../theme";
 import { MBulbs, MicMark } from "./marks";
 import { timeLines } from "./stage-core";
-import { parseLrc, SyncedLyrics } from "./SyncedLyrics";
+import { parseLrc, sungLines, SyncedLyrics } from "./SyncedLyrics";
 import { Toast } from "./Toast";
 import { LyricsReview } from "./LyricsQuality";
 
@@ -287,7 +287,9 @@ function StageBody({
   // Timed lyric lines for the wipe / setlist modules — LRC start stamps with
   // derived sing durations (stage-core.timeLines).
   const lines = useMemo(() => (lyrics?.lrc ? parseLrc(lyrics.lrc) : []), [lyrics?.lrc]);
-  const timed = useMemo(() => timeLines(lines, payload.duration), [lines, payload.duration]);
+  // Speech lines (#283) are listed but never sung: the player's wipe and the
+  // performance view get the sung lines only.
+  const timed = useMemo(() => timeLines(sungLines(lines), payload.duration), [lines, payload.duration]);
 
   // Meta row, real data only: duration · split <relative completed_at>.
   // Cost + receipt are deliberately absent (recorded deviation — they are not

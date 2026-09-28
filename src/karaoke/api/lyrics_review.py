@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from karaoke.db.models import Artifact, Job
-from karaoke.worker.lyrics import lrc_to_plain
+from karaoke.worker.lyrics import SPEECH_MARKER, lrc_to_plain
 
 LOG = logging.getLogger(__name__)
 
@@ -67,6 +67,10 @@ def validate_lrc(body: str, duration: float | None) -> str:
         start = _seconds(tag)
         rest = raw[tag.end() :]
         text = _WORD.sub("", rest).strip()
+        # A leading "[speech]" marks non-sung dialogue (#283) — the only
+        # bracketed text a reviewer may keep.
+        if text.startswith(SPEECH_MARKER):
+            text = text[len(SPEECH_MARKER):].strip()
         if not text or any(char in text for char in "<>[]"):
             raise HTTPException(422, f"Line {number}: invalid or empty lyric text")
         word_tags = list(_WORD.finditer(rest))
