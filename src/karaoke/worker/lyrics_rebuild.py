@@ -224,7 +224,7 @@ async def rebuild_lyrics(
             )
             if not aligned_body.strip():
                 raise RuntimeError("the pasted lyrics could not be aligned to the vocals")
-            merged = merge_reference_with_asr(aligned_body, asr_lrc)
+            merged = merge_reference_with_asr(aligned_body, asr_lrc, asr_doc.get("segments") or [], lang_hint)
             (out / "lyrics.lrc").write_text(merged, encoding="utf-8")
             (out / "lyrics.txt").write_text(lrc_to_plain(merged), encoding="utf-8")
             from karaoke.worker.lyrics_quality import assess_lyrics
