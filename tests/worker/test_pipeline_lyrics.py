@@ -1380,3 +1380,59 @@ async def test_run_real_job_word_vote_disabled_skips_genius(tmp_path, monkeypatc
         assert "lyrics_word_vote" not in metadata and metadata["lyrics_provider"] == "lrclib"
     finally:
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# #293: constant-offset shift of the curated record on a skit-intro video
+# ---------------------------------------------------------------------------
+def _stamp(sec):
+    return f"[{int(sec) // 60:02d}:{sec % 60:05.2f}]"
+
+
+def test_select_lyrics_shifts_curated_record_by_constant_offset(tmp_path):
+    from karaoke.worker.pipeline import _select_lyrics
+
+    n = 12
+    synced = "\n".join(f"{_stamp(10 + i * 4)}line {i}" for i in range(n))
+    # Aligner: everything +45.4 s; line 0 pinned to speech, lines 5-6 drifted.
+    drift = {0: -50.0, 5: 6.0, 6: 3.5}
+    aligned = "\n".join(
+        f"{_stamp(10 + i * 4 + 45.4 + drift.get(i, 0.0))}<{_stamp(10 + i * 4 + 45.4 + drift.get(i, 0.0))[1:-1]}>line "
+        f"<{_stamp(10 + i * 4 + 45.6 + drift.get(i, 0.0))[1:-1]}>{i} <{_stamp(10 + i * 4 + 46.0 + drift.get(i, 0.0))[1:-1]}>"
+        for i in range(n)
+    )
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper_txt = tmp_path / "whisper.txt"
+    whisper_txt.write_text("asr")
+    prov = _select_lyrics(
+        LyricsResult(synced_lrc=synced, source="lrclib_get"), exports, whisper_txt, None, None,
+        aligned=aligned,
+    )
+    assert prov["lyrics_source"] == "lrclib_synced"
+    assert prov["lyrics_lrclib_offset_s"] == 45.4
+    assert prov.get("lyrics_word_timing") == "forced_aligned"
+    lines = (exports / "lyrics.lrc").read_text().splitlines()
+    assert len(lines) == n  # every curated line survives, LRCLIB timing + offset
+    assert lines[0].startswith("[00:55.40]line 0")  # shifted, no word tags (aligner drifted)
+    assert lines[5].startswith("[01:15.40]line 5")
+    assert "<01:19.40>line" in lines[6 - 6 + 1] or "<" in lines[1]  # dense lines get word tags
+    assert (exports / "lyrics.txt").read_text() == "\n".join(f"line {i}" for i in range(n))
+
+
+def test_select_lyrics_without_reliable_offset_keeps_previous_behaviour(tmp_path):
+    from karaoke.worker.pipeline import _select_lyrics
+
+    n = 12
+    synced = "\n".join(f"{_stamp(10 + i * 4)}line {i}" for i in range(n))
+    scattered = "\n".join(f"{_stamp(10 + i * 4 + 40 + (i % 3) * 3.0)}line {i}" for i in range(n))
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper_txt = tmp_path / "whisper.txt"
+    whisper_txt.write_text("asr")
+    prov = _select_lyrics(
+        LyricsResult(synced_lrc=synced, source="lrclib_get"), exports, whisper_txt, None, None,
+        aligned=scattered,
+    )
+    assert "lyrics_lrclib_offset_s" not in prov
+    assert prov["lyrics_source"] == "forced_aligned"  # #253 fallback as before

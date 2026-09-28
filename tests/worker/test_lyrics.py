@@ -1553,3 +1553,52 @@ def test_repair_single_strayed_first_word_still_uses_the_pull_in_rule():
 def test_repair_leaves_dense_head_with_strayed_tail_to_the_asr_repair():
     body = "[00:10.00]<00:10.00>silver <00:10.50>river <00:30.00>flows <00:45.00>away <00:45.50>\n"
     assert "<00:30.00>flows" in repair_aligned_lrc(body)
+
+
+# ---------------------------------------------------------------------------
+# #293: constant-offset shift of a curated record (skit-intro music videos)
+# ---------------------------------------------------------------------------
+from karaoke.worker.lyrics import (  # noqa: E402
+    estimate_lrclib_offset,
+    lrclib_offset_is_reliable,
+    shift_lrc,
+)
+
+
+def _synced(n, step=4.0, start=10.0):
+    return "\n".join(f"[{_fmt(start + i * step)}]line {i}" for i in range(n))
+
+
+def _fmt(sec):
+    return f"{int(sec) // 60:02d}:{sec % 60:05.2f}"
+
+
+def _aligned(n, offset, step=4.0, start=10.0, drift=None):
+    drift = drift or {}
+    return "\n".join(
+        f"[{_fmt(start + i * step + offset + drift.get(i, 0.0))}]line {i}" for i in range(n)
+    )
+
+
+def test_estimate_offset_median_ignores_drifted_lines():
+    synced = _synced(46)
+    aligned = _aligned(46, 45.4, drift={0: -50.0, 18: 8.0, 19: 5.3, 20: 1.7})
+    offset, matched, spread = estimate_lrclib_offset(synced, aligned)
+    assert abs(offset - 45.4) < 0.05 and matched == 46 and spread < 0.1
+    assert lrclib_offset_is_reliable((offset, matched, spread), 46)
+
+
+def test_offset_not_reliable_when_lines_disagree_or_too_few():
+    synced = _synced(12)
+    scattered = _aligned(12, 45.0, drift={i: (i % 3) * 3.0 for i in range(12)})
+    assert not lrclib_offset_is_reliable(estimate_lrclib_offset(synced, scattered), 12)
+    assert not lrclib_offset_is_reliable(estimate_lrclib_offset(_synced(6), _aligned(6, 45.0)), 6)
+    assert not lrclib_offset_is_reliable(estimate_lrclib_offset(synced, _aligned(12, 1.0)), 12)
+    assert estimate_lrclib_offset(synced, None) is None
+    assert estimate_lrclib_offset(synced, "[00:10.00]totally different\n") is None
+
+
+def test_shift_lrc_moves_all_tags_and_keeps_text():
+    body = "[ar:x]\n[00:10.38]<00:10.38>a <00:10.90>b <00:11.20>\n[00:12.49]c\n"
+    assert shift_lrc(body, 45.4) == "[ar:x]\n[00:55.78]<00:55.78>a <00:56.30>b <00:56.60>\n[00:57.89]c\n"
+    assert shift_lrc("[00:01.00]x", -5.0) == "[00:00.00]x"
