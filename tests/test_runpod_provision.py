@@ -153,3 +153,74 @@ def test_flush_restore_failure_is_loud_and_nonzero(prov, monkeypatch, capsys):
     assert "MAY BE LEFT PAUSED" in err
     assert f'curl -X PATCH "{prov.API_BASE}/endpoints/ep_test"' in err
     assert f"-d '{{\"workersMax\": {target}}}'" in err
+
+
+# ---------------------------------------------------------------------------
+# #299: live-endpoint mode (RUNPOD_ENDPOINT_ID) — template per image tag,
+# only templateId is PATCHed, Blackwell MIG exclusions are kept/added
+# ---------------------------------------------------------------------------
+def _live_fakes(monkeypatch, mod, *, endpoint_template, templates, gpu_ids):
+    calls: list[tuple] = []
+
+    def fake_request(method, path, token, body=None):
+        calls.append((method, path, body))
+        if method == "GET" and path == "/templates":
+            return templates
+        if method == "POST" and path == "/templates":
+            return {"id": "tmpl-new"}
+        if method == "GET" and path.startswith("/endpoints/"):
+            return {"id": "ep-live", "templateId": endpoint_template, "workersMax": 3}
+        return {}
+
+    graphql_calls: list[str] = []
+
+    def fake_graphql(token, query):
+        graphql_calls.append(query)
+        if query.startswith("mutation"):
+            return {"saveEndpoint": {"id": "ep-live"}}
+        return {"myself": {"endpoints": [{
+            "id": "ep-live", "name": "karaoke-poc-2", "templateId": endpoint_template,
+            "gpuIds": gpu_ids, "workersMax": 3, "workersMin": 0, "idleTimeout": 5,
+            "scalerType": "QUEUE_DELAY", "scalerValue": 4,
+        }]}}
+
+    monkeypatch.setattr(mod, "_request", fake_request)
+    monkeypatch.setattr(mod, "_graphql", fake_graphql)
+    monkeypatch.setenv("RUNPOD_ENDPOINT_ID", "ep-live")
+    return calls, graphql_calls
+
+
+_WITH_EXCLUSIONS = "ADA_24,AMPERE_24," + ",".join(
+    "-" + g for g in (
+        "NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb",
+        "NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 2g.48gb",
+    )
+)
+
+
+def test_live_mode_creates_tag_template_repoints_and_flushes(prov, monkeypatch):
+    calls, gql = _live_fakes(monkeypatch, prov, endpoint_template="tmpl-old", templates=[], gpu_ids=_WITH_EXCLUSIONS)
+    assert prov.main() == 0
+    post = [c for c in calls if c[0] == "POST" and c[1] == "/templates"][0]
+    assert post[2]["name"] == "karaoke-" + prov.TEMPLATE_SPEC["imageName"].rsplit(":", 1)[-1].replace("cuda12.4-", "")
+    patches = [c for c in calls if c[0] == "PATCH" and c[1] == "/endpoints/ep-live"]
+    assert patches[0][2] == {"templateId": "tmpl-new"}  # nothing but the template
+    assert {"workersMax": 0} in [p[2] for p in patches]
+    assert not any(q.startswith("mutation") for q in gql)
+
+
+def test_live_mode_is_a_noop_on_the_same_image(prov, monkeypatch):
+    name = "karaoke-" + prov.TEMPLATE_SPEC["imageName"].rsplit(":", 1)[-1].replace("cuda12.4-", "")
+    templates = [{"id": "tmpl-cur", "name": name, "imageName": prov.TEMPLATE_SPEC["imageName"]}]
+    calls, _ = _live_fakes(monkeypatch, prov, endpoint_template="tmpl-cur", templates=templates, gpu_ids=_WITH_EXCLUSIONS)
+    assert prov.main() == 0
+    assert not [c for c in calls if c[0] == "PATCH"]
+
+
+def test_live_mode_adds_missing_mig_exclusions(prov, monkeypatch):
+    _, gql = _live_fakes(monkeypatch, prov, endpoint_template="tmpl-old", templates=[], gpu_ids="ADA_24,AMPERE_24")
+    assert prov.main() == 0
+    mutation = [q for q in gql if q.startswith("mutation")][0]
+    assert "-NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb" in mutation
+    assert "-NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 2g.48gb" in mutation
+    assert '"ADA_24,AMPERE_24,' in mutation
