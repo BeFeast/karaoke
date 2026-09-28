@@ -470,6 +470,19 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 .synced-lyrics-line.is-sung .synced-lyrics-seek {
   color: var(--lyric-prev);
 }
+/* Non-sung speech (#283): dimmed, italic, never highlighted as singing. */
+.synced-lyrics-line.is-speech .synced-lyrics-seek {
+  color: var(--lyric-dim);
+  opacity: 0.6;
+  font-style: italic;
+  font-size: 14px;
+}
+.synced-lyrics-speech-tag {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  opacity: 0.8;
+}
 .synced-lyrics-line.is-active .synced-lyrics-seek {
   color: var(--accent);
   font-size: 21px;

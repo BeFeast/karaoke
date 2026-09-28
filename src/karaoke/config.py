@@ -200,6 +200,17 @@ class Settings(BaseSettings):
     # skips the Genius fetch and ships LRCLIB text verbatim.
     word_vote_enabled: bool = True  # KARAOKE_WORD_VOTE_ENABLED
 
+    # ---- Lyrics: web references (#283) ----
+    # When LRCLIB gives no words: YouTube Music lyrics -> Genius -> tab4u (via
+    # SearXNG). Transcript-first — the reference corrects words only.
+    web_reference_enabled: bool = True  # KARAOKE_WEB_REFERENCE_ENABLED
+    # After ASR, search the transcript's confident lines (LRCLIB, then web);
+    # an LRCLIB hit costs one extra separation-free GPU pass (#262).
+    post_asr_reference_enabled: bool = True  # KARAOKE_POST_ASR_REFERENCE_ENABLED
+    # SearXNG JSON API base (e.g. http://10.10.0.13:13161); empty disables
+    # the tab4u / quoted-line rungs.
+    searxng_url: str = ""  # KARAOKE_SEARXNG_URL
+
 
 _settings: Settings | None = None
 

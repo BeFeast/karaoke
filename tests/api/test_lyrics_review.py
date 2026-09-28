@@ -369,3 +369,16 @@ def test_cancelled_commit_does_not_start_recovery_or_overwrite_waiter(tmp_path):
             "[00:01.00]my correction", lyrics_review.revision(original), "alice"))
     assert session.relocks == 0
     assert (export / "lyrics.lrc").read_bytes() == newer
+
+
+def test_speech_lines_are_flagged_in_the_payload_and_accepted_on_review():
+    from karaoke.api.lyrics_review import validate_lrc
+    from karaoke.api.routes import _parse_lrc_lines
+
+    lrc = "[00:03.60][speech] זה סבבה לך המקום נכון\n[00:56.66]<00:56.66>תדע <00:57.00>זה <00:57.30>פשע <00:57.60>\n"
+    lines = _parse_lrc_lines(lrc)
+    assert lines[0].speech is True and lines[0].text == "זה סבבה לך המקום נכון" and lines[0].words is None
+    dumped = lines[1].model_dump()
+    assert "speech" not in dumped and dumped["words"]
+    assert lines[0].model_dump()["speech"] is True
+    assert validate_lrc(lrc, 200.0) == lrc

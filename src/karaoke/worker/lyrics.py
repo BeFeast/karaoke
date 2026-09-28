@@ -143,6 +143,11 @@ def is_degenerate_segment_text(text: object) -> bool:
     return top / len(tokens) >= _DEGENERATE_TOP_SHARE
 
 
+# A lyrics.lrc line whose text starts with this marker is non-sung speech
+# (a music video's dialogue, #283): shown dimmed, never highlighted as
+# singing, and left out of every plain-text view.
+SPEECH_MARKER = "[speech]"
+
 # Lyrics-source provenance values recorded in metadata.json.
 SOURCE_LRCLIB_SYNCED = "lrclib_synced"
 # LRCLIB text that we force-aligned against the vocal stem into a synced LRC
@@ -155,6 +160,9 @@ SOURCE_LRCLIB_PLAIN = "lrclib_plain"
 # when LRCLIB missed entirely, so any LRCLIB-derived source always wins.
 SOURCE_WHISPER_ASR_SYNCED = "whisper_asr_synced"
 SOURCE_WHISPER_ASR = "whisper_asr"
+# Whisper transcript whose words a web reference corrected (#283, decision 3):
+# the transcript stays the base — reference lines it never heard are absent.
+SOURCE_ASR_REFERENCE_CORRECTED = "asr_reference_corrected"
 SOURCE_INSTRUMENTAL = "instrumental"
 
 
@@ -319,7 +327,7 @@ def lrc_to_plain(lrc: str) -> str:
     out: list[str] = []
     for line in lrc.splitlines():
         stripped = LRC_WORD_TAG_RE.sub("", LRC_TIMESTAMP_RE.sub("", line)).strip()
-        if stripped:
+        if stripped and not stripped.startswith(SPEECH_MARKER):
             out.append(stripped)
     return "\n".join(out)
 
@@ -1171,6 +1179,22 @@ class LyricsSource:
         if status != 200 or not isinstance(body, dict):
             return LyricsResult(source="none")
         return _from_record(body, "lrclib_get")
+
+    def search_by_text(
+        self, queries: list[str], *, durations: tuple[int | None, ...] = ()
+    ) -> LyricsResult | None:
+        """Post-ASR rung (#262): artist-free ``q=`` searches with transcript
+        lines, gated to the known durations like the #230 ladder. The caller
+        must still check the hit against the transcript (the query WAS the
+        transcript, so a hit here proves little on its own)."""
+        known = tuple(durations)
+        if not any(d is not None for d in known):
+            return None
+        for query in queries[:_MAX_LADDER_QUERIES]:
+            hit = self._try_search_q(query, known)
+            if hit is not None and hit.found and not hit.instrumental:
+                return replace(hit, match_variant=f"post_asr:{query[:40]}")
+        return None
 
     # -- internals ----------------------------------------------------------
     def _lookup(

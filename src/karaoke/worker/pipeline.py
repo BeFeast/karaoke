@@ -45,11 +45,19 @@ from karaoke.textnorm import bigram_agreement
 from karaoke.titles import derive_metadata
 from karaoke.uploads import UPLOAD_PREFIX, upload_display_name
 from karaoke.worker import job_cookies
+from karaoke.worker.asr_reference import (
+    correct_asr_lrc,
+    insert_speech_lines,
+    mark_edge_lines_as_speech,
+    speech_lines_outside_lyrics,
+    strip_speech_lines,
+)
 from karaoke.worker.canonical import CanonicalResolver
 from karaoke.worker.genius import GeniusSource
 from karaoke.worker.lyrics import (
     DURATION_GATE_CANONICAL,
     LRC_TIMESTAMP_RE,
+    SOURCE_ASR_REFERENCE_CORRECTED,
     SOURCE_FORCED_ALIGNED,
     SOURCE_INSTRUMENTAL,
     SOURCE_LRCLIB_PLAIN,
@@ -70,6 +78,7 @@ from karaoke.worker.lyrics import (
     shift_lrc,
     whisper_segments_to_lrc,
 )
+from karaoke.worker.web_reference import WebReference, WebReferenceFinder
 
 _log = logging.getLogger(__name__)
 
@@ -79,11 +88,44 @@ _LYRICS_SOURCE = LyricsSource()
 _CANONICAL_RESOLVER = CanonicalResolver()
 # Genius second-reference client (#281 word vote), same lifetime/cache model.
 _GENIUS_SOURCE = GeniusSource()
+# Web-reference cascade (#283), built on first use with the configured SearXNG.
+_WEB_REFERENCES: WebReferenceFinder | None = None
+
+
+def _web_references(settings) -> WebReferenceFinder:
+    global _WEB_REFERENCES
+    if _WEB_REFERENCES is None:
+        _WEB_REFERENCES = WebReferenceFinder(
+            genius=_GENIUS_SOURCE, searxng_url=getattr(settings, "searxng_url", "") or None
+        )
+    return _WEB_REFERENCES
 
 # Minimum word-bigram agreement between the ASR transcript and a curated
 # reference (see textnorm.bigram_agreement): own song >= 0.32, other songs
 # <= 0.052 on the #280 bench.
 _REFERENCE_MIN_AGREEMENT = 0.12
+# A record found from the transcript's own words (#262) is held to a higher
+# bar: the query was the transcript, so a weak match proves less.
+_POST_ASR_MIN_AGREEMENT = 0.2
+
+
+def _confident_asr_lines(asr: dict, limit: int = 3) -> list[str]:
+    """Up to ``limit`` transcript lines worth searching for (#262): >= 4
+    words, mean word probability >= 0.7, not repetition loops; mid-song
+    lines first (intros/outros are likelier dialogue or ad-libs)."""
+    segments = [seg for seg in asr.get("segments") or [] if isinstance(seg, dict)]
+    scored: list[tuple[float, str]] = []
+    for idx, seg in enumerate(segments):
+        text = " ".join(str(seg.get("text") or "").split())
+        words = seg.get("words") or []
+        probs = [w.get("probability") for w in words if isinstance(w, dict) and isinstance(w.get("probability"), (int, float))]
+        if len(text.split()) < 4 or not probs or sum(probs) / len(probs) < 0.7:
+            continue
+        if is_degenerate_segment_text(text):
+            continue
+        middle = abs(idx - len(segments) / 2) / max(len(segments), 1)
+        scored.append((middle - sum(probs) / len(probs) * 0.1, text.strip(" .,!?")))
+    return [text for _, text in sorted(scored)[:limit]]
 
 # Lyrics sources whose text came from the LRCLIB reference (provenance, #281).
 _LRCLIB_DERIVED_SOURCES = frozenset(
@@ -520,8 +562,16 @@ def _resolve_lyrics(
     *,
     second_text: str | None = None,
     lang: str | None = None,
+    web_reference: WebReference | None = None,
 ) -> dict[str, object]:
     """Resolve exports, then audit the full text independently of selection.
+
+    ``web_reference`` (#283) is a non-LRCLIB reference. It never replaces the
+    transcript: on the ASR floor it corrects the transcript's words line by
+    line (:mod:`karaoke.worker.asr_reference`, decision 3) and unmatched
+    leading/trailing transcript lines become ``[speech]``. Around a curated
+    (LRCLIB) result, transcript segments before the first / after the last
+    sung line that match no lyric line are added as ``[speech]`` lines.
 
     Audio completion is not lyric approval. Missing text or uncertain timing
     remains visible as needs_review, including with legacy GPU workers.
@@ -620,8 +670,11 @@ def _resolve_lyrics(
             selected = _voted(selected)
             (exports_dir / "lyrics.lrc").write_text(selected, encoding="utf-8")
         provenance["lyrics_word_vote"] = vote
+    selected, curated = _apply_reference_policy(
+        provenance, exports_dir, selected, curated, asr, web_reference, lang
+    )
     quality = assess_lyrics(
-        curated, selected, asr,
+        curated, strip_speech_lines(selected) if selected else selected, asr,
         restored_lines=recovery.get("counts", {}).get("restored_lines", 0),
         repaired_timing_lines=recovery.get("counts", {}).get("repaired_timing_lines", 0),
         preservation_issues=recovery.get("preservation_issues"),
@@ -640,6 +693,57 @@ def _resolve_lyrics(
         json.dumps(quality, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return provenance
+
+
+def _apply_reference_policy(
+    provenance: dict[str, object],
+    exports_dir: Path,
+    selected: str | None,
+    curated: str | None,
+    asr: dict | None,
+    web_reference: WebReference | None,
+    lang: str | None,
+) -> tuple[str | None, str | None]:
+    """[speech] marking + transcript-first web-reference correction (#283).
+    Rewrites ``lyrics.lrc`` / ``lyrics.txt`` in place; returns the new
+    ``(selected, curated)`` for the audit."""
+    if not selected or not asr:
+        return selected, curated
+    segments = [seg for seg in asr.get("segments") or [] if isinstance(seg, dict)]
+    lrc_path = exports_dir / "lyrics.lrc"
+    source = provenance["lyrics_source"]
+    if source in _LRCLIB_DERIVED_SOURCES:
+        speech = speech_lines_outside_lyrics(selected, segments, lang)
+        if speech:
+            selected = insert_speech_lines(selected, speech)
+            lrc_path.write_text(selected, encoding="utf-8")
+            provenance["lyrics_speech_lines"] = len(speech)
+        return selected, curated
+    if source != SOURCE_WHISPER_ASR_SYNCED or web_reference is None:
+        return selected, curated
+    asr_text = " ".join(str(seg.get("text") or "") for seg in segments)
+    agreement = bigram_agreement(asr_text, web_reference.text, lang)
+    if agreement is None or agreement < _REFERENCE_MIN_AGREEMENT:
+        provenance["lyrics_web_reference_rejected"] = (
+            f"asr_disagreement ({agreement:.2f})" if agreement is not None else "asr_too_short"
+        )
+        return selected, curated
+    corrected, stats = correct_asr_lrc(selected, web_reference.text, lang)
+    corrected, speech_n = mark_edge_lines_as_speech(corrected, stats.unmatched)
+    lrc_path.write_text(corrected, encoding="utf-8")
+    (exports_dir / "lyrics.txt").write_text(lrc_to_plain(corrected), encoding="utf-8")
+    provenance.update(
+        lyrics_source=SOURCE_ASR_REFERENCE_CORRECTED,
+        lyrics_reference_provider=web_reference.provider,
+        lyrics_reference_url=web_reference.url,
+        lyrics_policy="asr_base_reference_words",
+        lyrics_reference_corrections=stats.corrections,
+        lyrics_reference_matched_lines=f"{stats.matched_lines}/{stats.lines}",
+        lyrics_reference_agreement=round(agreement, 3),
+    )
+    if speech_n:
+        provenance["lyrics_speech_lines"] = speech_n
+    return corrected, web_reference.text
 
 
 def _select_lyrics(
@@ -1254,6 +1358,23 @@ async def run_real_job(
                 with contextlib.suppress(OSError):
                     (work_dir / "genius.txt").write_text(second.text, encoding="utf-8")
 
+        # Web reference (#283): only when LRCLIB gave no words at all. Found
+        # before the GPU window so the post-GPU step needs no network.
+        web_reference: WebReference | None = None
+        if not align_text and not lyrics.instrumental and settings.web_reference_enabled:
+            web_reference = await asyncio.to_thread(
+                _web_references(settings).find,
+                artist=source_meta.get("artist"),
+                track=source_meta.get("track"),
+                video_id=canonical.video_id if canonical else None,
+                latin_artist=canonical.artist if canonical else None,
+                lang=lang_hint,
+            )
+            if web_reference is not None:
+                _log.info("job %s: web reference %s %s", job_id, web_reference.provider, web_reference.url)
+                with contextlib.suppress(OSError):
+                    (work_dir / "web_reference.txt").write_text(web_reference.text, encoding="utf-8")
+
         # --- separating (provision + /demucs) -------------------------------
         if not await _set_stage(session_factory, job_id, JobStatus.separating, 45):
             return
@@ -1321,15 +1442,61 @@ async def run_real_job(
         # the Whisper transcript — synthesizing an approximate LRC from its
         # segment timestamps when usable (#145). Never fails the job over
         # alignment.
+        # Post-ASR references (#262): LRCLIB missed on metadata alone, but the
+        # transcript's confident lines may find the record (artist-free,
+        # duration-gated, then checked against the transcript). A hit is
+        # force-aligned in a second, separation-free GPU pass on the vocal
+        # stem. Otherwise, without a web reference yet, a quoted transcript
+        # line is searched on the web.
+        aligned_path, asr_json_path = gpu.aligned_lrc_path, gpu.lyrics_json_path
+        extra_gpu_cost = 0.0
+        post_asr: str | None = None
+        if (
+            not (lyrics.synced_lrc or lyrics.plain or lyrics.rejected_text or lyrics.instrumental)
+            and settings.post_asr_reference_enabled
+        ):
+            asr_doc = _read_json_object(gpu.lyrics_json_path) or {}
+            queries = _confident_asr_lines(asr_doc)
+            asr_text = " ".join(str(seg.get("text") or "") for seg in asr_doc.get("segments") or [] if isinstance(seg, dict))
+            hit = None
+            if queries:
+                hit = await asyncio.to_thread(
+                    _LYRICS_SOURCE.search_by_text,
+                    queries,
+                    durations=(source_meta.get("duration"), canonical.duration if canonical else None),
+                )
+            hit_text = (hit.plain or (lrc_to_plain(hit.synced_lrc) if hit.synced_lrc else "")) if hit else ""
+            hit_agreement = bigram_agreement(asr_text, hit_text, lang_hint) if hit_text else None
+            if hit is not None and hit_agreement is not None and hit_agreement >= _POST_ASR_MIN_AGREEMENT and _use_runpod(settings):
+                realign = await _run_gpu_with_capacity_retry(
+                    session_factory, job_id, settings, client, gpu.vocals_path, work_dir / "realign",
+                    align_text=hit_text, align_lang=_align_lang(source_meta, hint=lang_hint),
+                    whisper_lang=lang_hint, mode="lyrics",
+                )
+                extra_gpu_cost += realign.vast_cost
+                lyrics = hit
+                aligned_path, asr_json_path = realign.aligned_lrc_path, realign.lyrics_json_path
+                post_asr = f"lrclib ({hit_agreement:.2f})"
+            elif web_reference is None and settings.web_reference_enabled:
+                for line in queries:
+                    web_reference = await asyncio.to_thread(
+                        _web_references(settings).find_by_text, line, lang=lang_hint
+                    )
+                    if web_reference is not None:
+                        post_asr = f"web:{web_reference.provider}"
+                        break
         lyrics_prov = _resolve_lyrics(
             lyrics,
             exports_dir,
             gpu.lyrics_txt_path,
-            gpu.aligned_lrc_path,
-            gpu.lyrics_json_path,
+            aligned_path,
+            asr_json_path,
             second_text=second_text,
             lang=lang_hint,
+            web_reference=web_reference,
         )
+        if post_asr:
+            lyrics_prov["lyrics_post_asr_reference"] = post_asr
 
         lyrics_txt = exports_dir / "lyrics.txt"
         lyrics_lrc = exports_dir / "lyrics.lrc"
@@ -1344,7 +1511,7 @@ async def run_real_job(
             "device": "vast",
             "gpu_model": gpu.gpu_model,
             "vast_instance_id": gpu.vast_instance_id,
-            "vast_cost": round(gpu.vast_cost, 6),
+            "vast_cost": round(gpu.vast_cost + extra_gpu_cost, 6),
             "lyrics_source": lyrics_prov["lyrics_source"],
             "lyrics_quality": lyrics_prov["lyrics_quality"],
             "synced": lyrics_prov["synced"],
@@ -1376,6 +1543,13 @@ async def run_real_job(
             metadata["lyrics_word_timing"] = lyrics_prov["lyrics_word_timing"]
         # Curated timing shifted onto a longer video cut (#293) — only when the
         # constant-offset shift was applied; the value is the shift in seconds.
+        for key in (
+            "lyrics_reference_provider", "lyrics_reference_url", "lyrics_policy",
+            "lyrics_reference_corrections", "lyrics_reference_matched_lines",
+            "lyrics_web_reference_rejected", "lyrics_speech_lines", "lyrics_post_asr_reference",
+        ):
+            if lyrics_prov.get(key) is not None:
+                metadata[key] = lyrics_prov[key]
         if lyrics_prov.get("lyrics_reference_agreement") is not None:
             metadata["lyrics_reference_agreement"] = lyrics_prov["lyrics_reference_agreement"]
         if lyrics_prov.get("lyrics_lrclib_offset_s") is not None:
@@ -1438,7 +1612,7 @@ async def run_real_job(
             job.stage_note = None
             job.completed_at = dt.datetime.now(dt.UTC)
             job.vast_instance_id = str(gpu.vast_instance_id)
-            job.vast_cost_micros = round(gpu.vast_cost * 1_000_000)
+            job.vast_cost_micros = round((gpu.vast_cost + extra_gpu_cost) * 1_000_000)
             await session.commit()
         ws_events.publish_stage(job_id, JobStatus.completed, 100, stage_note=job.stage_note)
     except Exception as exc:  # noqa: BLE001 — surface as a failed job, never crash the loop
@@ -1469,6 +1643,7 @@ async def _run_gpu_with_capacity_retry(
     align_text: str | None,
     align_lang: str | None,
     whisper_lang: str | None = None,
+    mode: str = "both",
 ):
     """Run the GPU stage, auto-retrying transient RunPod capacity stalls.
 
@@ -1506,6 +1681,7 @@ async def _run_gpu_with_capacity_retry(
                     client.run, mix_wav, work_dir,
                     align_text=align_text, align_lang=align_lang,
                     whisper_lang=whisper_lang,
+                    **({"mode": mode} if mode != "both" else {}),
                 )
             )
         except RunpodColdStartError as exc:

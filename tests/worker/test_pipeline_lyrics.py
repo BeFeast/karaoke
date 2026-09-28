@@ -1573,3 +1573,172 @@ def test_resolve_lyrics_skips_the_agreement_gate_for_a_wrong_language_transcript
         LyricsResult(synced_lrc=right, source="lrclib_get"), exports, whisper_txt, None, asr, lang="he"
     )
     assert prov["lyrics_source"] == "lrclib_synced" and "lyrics_reference_agreement" not in prov
+
+
+# ---------------------------------------------------------------------------
+# #283: [speech] around curated lyrics; transcript-first web references;
+# #262 post-ASR LRCLIB re-query with a separation-free realign pass
+# ---------------------------------------------------------------------------
+def _asr_doc(tmp_path, segments, lang="he", name="lyrics.json"):
+    body = {"language": lang, "segments": [
+        {"start": a, "end": b, "text": t,
+         "words": [{"word": w, "start": a + i * 0.3, "end": a + i * 0.3 + 0.25, "probability": 0.95}
+                   for i, w in enumerate(t.split())]}
+        for a, b, t in segments
+    ]}
+    return _whisper_json(tmp_path, json.dumps(body, ensure_ascii=False), name=name)
+
+
+_HE_SUNG = [
+    (56.7, 57.9, "תדע זה פשע"),
+    (57.94, 60.0, "מישהו צריך להתערב"),
+    (60.1, 64.0, "כל יום בתשע אתה רואה לי את הלב"),
+    (64.8, 68.3, "מפחיד להתאהב אוהב שזה כואב"),
+    (72.4, 74.1, "מאמי תיראה מה נהיה ממני"),
+]
+
+
+def test_speech_lines_are_added_around_curated_lyrics(tmp_path):
+    from karaoke.worker.pipeline import _resolve_lyrics
+
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    lrc = "\n".join(f"[{int(a) // 60:02d}:{a % 60:05.2f}]{t}" for a, _, t in _HE_SUNG)
+    asr = _asr_doc(tmp_path, [(3.6, 5.3, "זה סבבה לך המקום, נכון?"), *_HE_SUNG])
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=lrc, source="lrclib_get"), exports, _whisper(tmp_path), None, asr, lang="he"
+    )
+    assert prov["lyrics_source"] == "lrclib_synced" and prov["lyrics_speech_lines"] == 1
+    out = (exports / "lyrics.lrc").read_text(encoding="utf-8").splitlines()
+    assert out[0] == "[00:03.60][speech] זה סבבה לך המקום, נכון?"
+    assert "זה סבבה" not in (exports / "lyrics.txt").read_text(encoding="utf-8")
+    quality = json.loads((exports / "lyrics.quality.json").read_text())
+    assert quality["counts"]["output_lines"] == len(_HE_SUNG)
+
+
+def test_web_reference_corrects_the_asr_floor_without_adding_lines(tmp_path):
+    from karaoke.worker.pipeline import _resolve_lyrics
+    from karaoke.worker.web_reference import WebReference
+
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    heard = [(a, b, t.replace("בתשע", "בתשה").replace("להתאהב", "להתהב")) for a, b, t in _HE_SUNG]
+    asr = _asr_doc(tmp_path, [(3.6, 5.3, "זה סבבה לך המקום, נכון?"), *heard])
+    ref = WebReference(
+        text="\n".join(t for _, _, t in _HE_SUNG) + "\nשורה שלא הושרה בכלל בביצוע הזה",
+        provider="ytmusic", url="ytmusic:X",
+    )
+    prov = _resolve_lyrics(
+        LyricsResult(source="none"), exports, _whisper(tmp_path, "asr"), None, asr, lang="he", web_reference=ref
+    )
+    assert prov["lyrics_source"] == "asr_reference_corrected"
+    assert prov["lyrics_reference_provider"] == "ytmusic" and prov["lyrics_reference_corrections"] >= 2
+    lrc = (exports / "lyrics.lrc").read_text(encoding="utf-8")
+    assert "בתשע" in lrc and "להתאהב" in lrc and "לא הושרה" not in lrc
+    assert "[speech] זה סבבה לך המקום" in lrc
+    assert "זה סבבה" not in (exports / "lyrics.txt").read_text(encoding="utf-8")
+
+
+def test_web_reference_that_disagrees_with_the_asr_is_ignored(tmp_path):
+    from karaoke.worker.pipeline import _resolve_lyrics
+    from karaoke.worker.web_reference import WebReference
+
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    asr = _asr_doc(tmp_path, _HE_SUNG)
+    ref = WebReference(text="\n".join(["מילים אחרות לגמרי של שיר אחר"] * 6), provider="genius", url="u")
+    prov = _resolve_lyrics(
+        LyricsResult(source="none"), exports, _whisper(tmp_path, "asr"), None, asr, lang="he", web_reference=ref
+    )
+    assert prov["lyrics_source"] == "whisper_asr_synced"
+    assert prov["lyrics_web_reference_rejected"].startswith("asr_disagreement")
+
+
+@pytest.mark.asyncio
+async def test_run_real_job_post_asr_lrclib_hit_is_realigned_without_separation(tmp_path, monkeypatch):
+    """#262: title metadata is garbage, LRCLIB misses; the transcript's lines
+    find the record, and a second GPU pass (mode="lyrics", on the vocal stem)
+    aligns it."""
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.config import Settings
+    from karaoke.db.models import Base, Job, JobStatus
+    from karaoke.db.session import create_engine_and_sessionmaker
+    from karaoke.worker.canonical import CanonicalResolver
+    from karaoke.worker.lyrics import LyricsSource
+    from karaoke.worker.runpod_client import RunpodClient
+    from karaoke.worker.vast_client import GpuJobResult
+    from karaoke.worker.web_reference import WebReferenceFinder
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'postasr.db'}"
+    engine, factory = create_engine_and_sessionmaker(url)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with factory() as session:
+            job = Job(job_token="tok-postasr", owner_subject="owner",
+                      source_url="https://example.com/v", status=JobStatus.queued, progress=0)
+            session.add(job)
+            await session.commit()
+            await session.refresh(job)
+            job_id = job.id
+
+        monkeypatch.setattr(pipeline, "_ytdlp_metadata",
+                            lambda url, settings=None, **_: {"title": "קליפ חדש עם מילים HD", "duration": 80})
+
+        def fake_file(src, dest: Path, *a, **k):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"x")
+            return dest
+
+        for name in ("_download_audio", "_to_wav", "_wav_to_mp3"):
+            monkeypatch.setattr(pipeline, name, fake_file)
+        monkeypatch.setattr(pipeline, "_CANONICAL_RESOLVER", CanonicalResolver(search=lambda q: []))
+        monkeypatch.setattr(pipeline, "_WEB_REFERENCES",
+                            WebReferenceFinder(ytm_lyrics=lambda v: None, http=lambda *a: (404, "")))
+        record = {"artistName": "Noa Kirel", "trackName": "לאב סונג", "duration": 79,
+                  "plainLyrics": "\n".join(t for _, _, t in _HE_SUNG), "syncedLyrics": None}
+
+        def lrclib(method, url_, params):
+            if params and "q" in params and "בתשע" in params["q"]:
+                return 200, [record]
+            return 200, [] if "search" in url_ else {}
+
+        monkeypatch.setattr(pipeline, "_LYRICS_SOURCE", LyricsSource(http=lrclib, retry_delays=(0,)))
+        calls = []
+
+        def fake_gpu_run(self, mix_wav, work_dir, *, align_text, align_lang, whisper_lang, mode="both"):
+            calls.append((mode, mix_wav.name, align_text is not None))
+            work_dir.mkdir(parents=True, exist_ok=True)
+            asr = _asr_doc(work_dir.parent / "asrtmp" / mode, _HE_SUNG)
+            (work_dir / "lyrics.json").write_text(asr.read_text(encoding="utf-8"), encoding="utf-8")
+            (work_dir / "lyrics.txt").write_text("\n".join(t for _, _, t in _HE_SUNG))
+            if mode == "both":
+                (work_dir / "vocals.wav").write_bytes(b"x")
+                (work_dir / "no_vocals.wav").write_bytes(b"x")
+                return GpuJobResult(vast_instance_id="gpu-1", vast_cost=0.01, gpu_model="fake",
+                                    vocals_path=work_dir / "vocals.wav",
+                                    instrumental_path=work_dir / "no_vocals.wav",
+                                    lyrics_txt_path=work_dir / "lyrics.txt",
+                                    lyrics_json_path=work_dir / "lyrics.json")
+            aligned = "\n".join(f"[{int(a) // 60:02d}:{a % 60:05.2f}]{t}" for a, _, t in _HE_SUNG)
+            (work_dir / "aligned.lrc").write_text(aligned, encoding="utf-8")
+            return GpuJobResult(vast_instance_id="gpu-2", vast_cost=0.004, gpu_model="fake",
+                                vocals_path=mix_wav, instrumental_path=mix_wav,
+                                lyrics_txt_path=work_dir / "lyrics.txt",
+                                lyrics_json_path=work_dir / "lyrics.json",
+                                aligned_lrc_path=work_dir / "aligned.lrc")
+
+        monkeypatch.setattr(RunpodClient, "run", fake_gpu_run)
+        settings = Settings(database_url=url, runpod_api_key="k", runpod_endpoint_id="ep",
+                            artifact_root=str(tmp_path))
+        await pipeline.run_real_job(factory, job_id, settings)
+        async with factory() as session:
+            job = await session.get(Job, job_id)
+            assert job.status == JobStatus.completed, job.error
+            assert job.vast_cost_micros == 14000
+        assert calls == [("both", "mix.wav", False), ("lyrics", "vocals.wav", True)]
+        metadata = json.loads((tmp_path / "tok-postasr" / "exports" / "metadata.json").read_text())
+        assert metadata["lyrics_source"] in ("forced_aligned", "lrclib_plain")
+        assert metadata["lyrics_post_asr_reference"].startswith("lrclib")
+    finally:
+        await engine.dispose()

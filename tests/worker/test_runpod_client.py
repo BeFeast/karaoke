@@ -792,3 +792,39 @@ def test_raw_alignment_evidence_survives_empty_filtered_result(settings, tmp_pat
     assert json.loads(result.aligned_diagnostics_path.read_text()) == output["aligned_diagnostics"]
     payload = next(c[2]["input"] for c in rec.calls if "/run" in c[1] and c[2])
     assert payload["job_budget_s"] == pytest.approx(0.01 / 0.68 * 3600)
+
+
+def test_lyrics_mode_sends_the_stem_and_needs_no_stems_back(settings, tmp_path):
+    """#283/#284 (r14): mode="lyrics" ships a vocal stem, the handler returns
+    only ASR + alignment, and the result points at the input stem."""
+    stem = tmp_path / "vocals.wav"
+    stem.write_bytes(b"RIFFstem")
+    out_dir = tmp_path / "rebuild"
+    output = {
+        "lyrics_txt": "שורה",
+        "lyrics_json": {"language": "he", "segments": []},
+        "aligned_lrc": "[00:01.00]שורה",
+        "aligned_line_scores": [-0.2],
+        "gpu_model": "RTX 4090",
+    }
+    rec = _Recorder([
+        {"expect_in": "/run", "code": 200, "body": {"id": "rp-lyr-1"}},
+        {"expect_in": "/status/rp-lyr-1", "code": 200,
+         "body": {"status": "COMPLETED", "executionTime": 9000, "output": output}},
+    ])
+    result = RunpodClient(settings, http=rec).run(
+        stem, out_dir, align_text="שורה", align_lang="heb", whisper_lang="he", mode="lyrics"
+    )
+    body = rec.calls[0][2]
+    assert body["input"]["mode"] == "lyrics" and "vocals_put_url" not in body["input"]
+    assert base64.b64decode(body["input"]["audio_base64"]) == b"RIFFstem"
+    assert result.vocals_path == stem and result.aligned_lrc_path == out_dir / "aligned.lrc"
+    assert (out_dir / "aligned.lrc").read_text() == "[00:01.00]שורה"
+    assert not (out_dir / "vocals.wav").exists()
+
+
+def test_unknown_mode_is_refused_before_any_http(settings, tmp_path):
+    rec = _Recorder([])
+    with pytest.raises(RunpodError, match="unsupported mode"):
+        RunpodClient(settings, http=rec).run(_mix_wav(tmp_path), tmp_path / "w", mode="demucs")
+    assert rec.calls == []
