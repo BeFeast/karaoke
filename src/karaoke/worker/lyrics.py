@@ -98,6 +98,16 @@ _MIN_SPLIT_GAP_S = 1.0
 # trailing dense cluster's start and loses its word tags.
 _MAX_INTRA_LINE_GAP_S = 4.0
 
+# Constant-offset shift of a curated LRCLIB record (#293). A music video that
+# prepends a skit / intro to the unchanged audio release keeps LRCLIB's line
+# timing exactly, just later by a constant. When the aligner's lines agree on
+# that constant (many lines, tight spread) the curated timing is shifted and
+# shipped whole instead of the aligner's lossy re-timing.
+_OFFSET_MIN_LINES = 10
+_OFFSET_MIN_RATIO = 0.5
+_OFFSET_MAX_SPREAD_S = 1.0  # interquartile range of the per-line deltas
+_OFFSET_MIN_ABS_S = 2.0  # below this the word-tag merge's drift window copes
+
 # Max drift (seconds) between an aligner line's start and the curated LRCLIB
 # line tag before we distrust the alignment and leave that line plain (#222).
 # A wider gap means the aligner squeezed the words somewhere they don't belong;
@@ -691,6 +701,112 @@ def drop_unreliable_aligned_lines(
     if body.endswith("\n"):
         filtered += "\n"
     return filtered, dropped
+
+
+def _curated_lines(synced_lrc: str) -> list[tuple[float, str]]:
+    """``(start, casefolded norm)`` for single-tag non-empty curated lines."""
+    out: list[tuple[float, str]] = []
+    for raw in synced_lrc.splitlines():
+        tag = _LRC_TAG_CAP_RE.match(raw)
+        if tag is None:
+            continue
+        text = raw[tag.end() :]
+        if _LRC_TAG_CAP_RE.match(text):
+            continue
+        norm = " ".join(LRC_WORD_TAG_RE.sub("", text).split()).casefold()
+        if norm:
+            out.append((_tag_seconds(tag), norm))
+    return out
+
+
+def _lcs_pairs(left: list[str], right: list[str]) -> list[tuple[int, int]]:
+    width = len(right) + 1
+    directions = bytearray((len(left) + 1) * width)
+    previous = [0] * width
+    for i, token in enumerate(left, 1):
+        row = [0] * width
+        for j, other in enumerate(right, 1):
+            if token == other:
+                row[j] = previous[j - 1] + 1
+                directions[i * width + j] = 1
+            elif previous[j] >= row[j - 1]:
+                row[j] = previous[j]
+                directions[i * width + j] = 2
+            else:
+                row[j] = row[j - 1]
+                directions[i * width + j] = 3
+        previous = row
+    i, j = len(left), len(right)
+    pairs: list[tuple[int, int]] = []
+    while i and j:
+        direction = directions[i * width + j]
+        if direction == 1:
+            pairs.append((i - 1, j - 1))
+            i, j = i - 1, j - 1
+        elif direction == 2:
+            i -= 1
+        else:
+            j -= 1
+    return pairs[::-1]
+
+
+def estimate_lrclib_offset(
+    synced_lrc: str, aligned_lrc: str | None
+) -> tuple[float, int, float] | None:
+    """``(offset_s, matched_lines, spread_s)`` of the curated timing against the
+    aligner's (#293), or ``None`` when fewer than two lines pair up.
+
+    Lines pair by casefolded text in order (LCS, each line once); the offset is
+    the median of ``aligner_start - curated_start`` over the pairs and the
+    spread is the interquartile range, so a few aligner lines that drifted
+    onto neighbouring audio do not move the estimate. The caller decides
+    whether the estimate is trustworthy (see ``_OFFSET_*``).
+    """
+    if not aligned_lrc or not aligned_lrc.strip():
+        return None
+    curated = _curated_lines(synced_lrc)
+    aligner = _parse_aligner_lines(aligned_lrc)
+    pairs = _lcs_pairs([norm for _, norm in curated], [al.norm.casefold() for al in aligner])
+    deltas = sorted(aligner[j].start - curated[i][0] for i, j in pairs)
+    if len(deltas) < 2:
+        return None
+    n = len(deltas)
+    median = (deltas[n // 2] + deltas[(n - 1) // 2]) / 2
+    q1 = deltas[n // 4]
+    q3 = deltas[(3 * n) // 4 if (3 * n) // 4 < n else n - 1]
+    return median, n, q3 - q1
+
+
+def lrclib_offset_is_reliable(estimate: tuple[float, int, float] | None, curated_lines: int) -> bool:
+    if estimate is None:
+        return False
+    offset, matched, spread = estimate
+    return (
+        abs(offset) >= _OFFSET_MIN_ABS_S
+        and matched >= _OFFSET_MIN_LINES
+        and matched >= _OFFSET_MIN_RATIO * max(curated_lines, 1)
+        and spread <= _OFFSET_MAX_SPREAD_S
+    )
+
+
+def shift_lrc(body: str, offset_s: float) -> str:
+    """Shift every ``[..]`` line tag and ``<..>`` word tag by ``offset_s``
+    (clamped at 0), keeping everything else byte-identical."""
+
+    def _line(m: re.Match[str]) -> str:
+        return _fmt_lrc_timestamp(max(0.0, _tag_seconds(m) + offset_s))
+
+    def _word(m: re.Match[str]) -> str:
+        return _fmt_lrc_word_tag(max(0.0, _tag_seconds(m) + offset_s))
+
+    out = []
+    for raw in body.splitlines():
+        if re.match(r"^\[[a-zA-Z]+:", raw):
+            out.append(raw)
+            continue
+        out.append(_LRC_WORD_TAG_CAP_RE.sub(_word, _LRC_TAG_CAP_RE.sub(_line, raw)))
+    shifted = "\n".join(out)
+    return shifted + ("\n" if body.endswith("\n") else "")
 
 
 def aligned_text_agreement(

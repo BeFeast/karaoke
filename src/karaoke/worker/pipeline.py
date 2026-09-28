@@ -57,11 +57,15 @@ from karaoke.worker.lyrics import (
     SOURCE_WHISPER_ASR_SYNCED,
     LyricsResult,
     LyricsSource,
+    _curated_lines,
     aligned_text_agreement,
     drop_unreliable_aligned_lines,
+    estimate_lrclib_offset,
     lrc_to_plain,
+    lrclib_offset_is_reliable,
     merge_lrclib_word_tags,
     repair_aligned_lrc,
+    shift_lrc,
     whisper_segments_to_lrc,
 )
 
@@ -657,8 +661,26 @@ def _select_lyrics(
         # keeping LRCLIB's line text + tags byte-identical; provenance stays
         # ``lrclib_synced``. Tolerant: a missing/garbage aligned LRC or any
         # unmergeable line degrades to the plain LRCLIB line exactly.
+        # Constant-offset shift (#293): a music video that prepends a skit /
+        # intro to the unchanged audio release keeps the curated timing exactly,
+        # later by a constant. When the aligner's lines agree on that constant
+        # (median over paired lines, tight spread), ship the curated record
+        # shifted whole — every line, LRCLIB timing — rather than the aligner's
+        # lossy re-timing; the word-tag merge then lands on the shifted tags.
+        synced_lrc = lyrics.synced_lrc
+        lrclib_offset: float | None = None
+        if aligned:
+            estimate = estimate_lrclib_offset(lyrics.synced_lrc, aligned)
+            curated_count = len(_curated_lines(lyrics.synced_lrc))
+            if lrclib_offset_is_reliable(estimate, curated_count):
+                lrclib_offset = round(estimate[0], 2)
+                synced_lrc = shift_lrc(lyrics.synced_lrc, lrclib_offset)
+                _log.info(
+                    "lrclib_synced shifted by %+.2fs (%d/%d lines, spread %.2fs)",
+                    lrclib_offset, estimate[1], curated_count, estimate[2],
+                )
         merged_lrc, word_timing, eligible, matched_n = merge_lrclib_word_tags(
-            lyrics.synced_lrc, aligned
+            synced_lrc, aligned
         )
         # Match-quality gate (#237): the aligner tried to fit the curated text
         # onto the actual vocal and almost nothing landed — the record is the
@@ -725,6 +747,8 @@ def _select_lyrics(
             }
             if word_timing:
                 prov["lyrics_word_timing"] = SOURCE_FORCED_ALIGNED
+            if lrclib_offset is not None:
+                prov["lyrics_lrclib_offset_s"] = lrclib_offset
             return prov
 
     if lyrics.plain and align_coverage_reject is None:
@@ -1264,6 +1288,10 @@ async def run_real_job(
         # line; provenance stays ``lrclib_synced``.
         if lyrics_prov.get("lyrics_word_timing"):
             metadata["lyrics_word_timing"] = lyrics_prov["lyrics_word_timing"]
+        # Curated timing shifted onto a longer video cut (#293) — only when the
+        # constant-offset shift was applied; the value is the shift in seconds.
+        if lyrics_prov.get("lyrics_lrclib_offset_s") is not None:
+            metadata["lyrics_lrclib_offset_s"] = lyrics_prov["lyrics_lrclib_offset_s"]
         # Which cleaned track variant hit via the #230 fallback ladder — only
         # present when the parsed (artist, track) missed and a variant matched.
         if lyrics.match_variant:
