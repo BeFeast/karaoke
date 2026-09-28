@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bmfx7h51q</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-god-src-karaoke/ee21a9c3-68d2-4800-abcf-373f973bbb63/tasks/bmfx7h51q.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll prod until all 14 baseline jobs reach a terminal state" completed (exit code 0)</summary>
+</task-notification>

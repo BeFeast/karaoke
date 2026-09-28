@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8ce2aab33c65",
+  "strategy": "manual-commit",
+  "branch": "feat/281-lrclib-matching",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "pyproject.toml",
+    "scripts/lyrics_bench.py",
+    "src/karaoke/titles.py",
+    "src/karaoke/worker/canonical.py",
+    "src/karaoke/worker/lyrics.py",
+    "src/karaoke/worker/pipeline.py",
+    "tests/test_lyrics_bench.py",
+    "tests/test_titles.py",
+    "tests/worker/test_canonical.py",
+    "tests/worker/test_lyrics.py",
+    "tests/worker/test_pipeline_lyrics.py",
+    "uv.lock"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8c/e2aab33c65/0/metadata.json",
+      "transcript": "/8c/e2aab33c65/0/full.jsonl",
+      "compact_transcript": "/8c/e2aab33c65/0/transcript.jsonl",
+      "content_hash": "/8c/e2aab33c65/0/content_hash.txt",
+      "prompt": "/8c/e2aab33c65/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 82506,
+    "cache_read_tokens": 3092015,
+    "output_tokens": 57104,
+    "api_call_count": 12
+  }
+}
