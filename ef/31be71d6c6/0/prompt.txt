@@ -1,0 +1,13 @@
+Ты executor-thread для задачи «Hebrew lyrics accuracy — фазы 0–1» в проекте Karaoke.
+1. Прочитай brief: /home/god/Obsidian Vault/Dev/Areas/karaoke/specs/2026-09-28-hebrew-lyrics-accuracy.md. Решения в нём приняты, не пересматривай их.
+2. Прочитай AGENTS.md в корне этого репозитория и инструкции по пути к затрагиваемому коду.
+3. Canonical repo — Forgejo BeFeast/karaoke (main = live v0.40.1); локальный origin смотрит на GitHub и устарел. Сначала синхронизируйся с Forgejo main (см. brief §Контекст).
+4. Работай только внутри этого checkout; ссылки на файлы давай как пути репозитория.
+5. Твой объём — фазы 0 (#280) и 1 (#281) epic #279; фазы 2–4 не начинай.
+6. Сначала предложи план по brief, дождись подтверждения, потом выполняй до verification (merge → release cut → live-verify примера).
+7. Отчёт: handover /home/god/Obsidian Vault/Dev/Areas/karaoke/handovers/2026-09-28-hebrew-lyrics-accuracy.md плюс комментарии в Forgejo #280/#281.
+Проверь состояние checkout командой git status --short --branch до начала.
+
+---
+
+approved

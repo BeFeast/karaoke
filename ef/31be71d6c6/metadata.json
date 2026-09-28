@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "ef31be71d6c6",
+  "strategy": "manual-commit",
+  "branch": "feat/280-hebrew-lyrics-bench",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".gitignore",
+    "bench/songs.json",
+    "scripts/lyrics_bench.py",
+    "src/karaoke/textnorm.py",
+    "src/karaoke/worker/genius.py",
+    "src/karaoke/worker/lyrics.py",
+    "tests/test_lyrics_bench.py",
+    "tests/test_textnorm.py",
+    "tests/worker/test_genius.py",
+    "tests/worker/test_lyrics.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ef/31be71d6c6/0/metadata.json",
+      "transcript": "/ef/31be71d6c6/0/full.jsonl",
+      "compact_transcript": "/ef/31be71d6c6/0/transcript.jsonl",
+      "content_hash": "/ef/31be71d6c6/0/content_hash.txt",
+      "prompt": "/ef/31be71d6c6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 369696,
+    "cache_read_tokens": 3451639,
+    "output_tokens": 74054,
+    "api_call_count": 27
+  }
+}
