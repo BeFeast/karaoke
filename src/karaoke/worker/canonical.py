@@ -156,7 +156,13 @@ def _plausible(
         else None
     )
     duration_ok = delta is not None and delta <= _MAX_DURATION_DELTA_S
-    accept = title_overlap > 0 or artist_overlap > 0 or duration_ok
+    # Title evidence is required: an artist match alone admits the artist's
+    # OTHER songs (YouTube Music offered «מילים יפות מאלה», 287 s, for an
+    # upload of «ממעמקים», 288 s — same artist, coincident length). The one
+    # exception is a release title in another script ("Tudo bom" for
+    # "טודו בום"), where tokens cannot overlap: then artist AND duration must.
+    cross_script = has_hebrew(cand.title) != has_hebrew(track)
+    accept = title_overlap > 0 or (cross_script and artist_overlap > 0 and duration_ok)
     if delta is not None and delta > _MAX_DURATION_DELTA_S:
         accept = False
     if _markers(cand.title) - _markers(track):
