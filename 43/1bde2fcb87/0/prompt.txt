@@ -1,0 +1,211 @@
+<task-notification>
+<task-id>bjytcb2y1</task-id>
+<tool-use-id>toolu_01Q2cf4f8bHELsepiD26fPss</tool-use-id>
+<output-file>/tmp/claude-1000/-home-god-src-karaoke/ee21a9c3-68d2-4800-abcf-373f973bbb63/tasks/bjytcb2y1.output</output-file>
+<status>completed</status>
+<summary>Background command "Wait for the two resubmitted jobs and rescore the 0.41.5+r12 run" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bsg043mgm</task-id>
+<tool-use-id>toolu_01XERt1JBXqdrcehdrJisKR1</tool-use-id>
+<output-file>/tmp/claude-1000/-home-god-src-karaoke/ee21a9c3-68d2-4800-abcf-373f973bbb63/tasks/bsg043mgm.output</output-file>
+<status>completed</status>
+<summary>Monitor "gpu-image r13 build run 36489088798 completion" stream ended</summary>
+<event>gpu-image run 36489088798: completed success</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bv25k657u</task-id>
+<tool-use-id>toolu_01Su6W3SsptKi9W6ZVW4o6pW</tool-use-id>
+<output-file>/tmp/claude-1000/-home-god-src-karaoke/ee21a9c3-68d2-4800-abcf-373f973bbb63/tasks/bv25k657u.output</output-file>
+<status>completed</status>
+<summary>Background command "Repoint the endpoint to r13, flush, and verify the ASR-floor tracks plus the example" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+yep, go ahead with all of it
+
+---
+
+<task-notification>
+<task-id>ab884041517c13c3b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/tmp/claude-1000/-home-god-src-karaoke/ee21a9c3-68d2-4800-abcf-373f973bbb63/tasks/ab884041517c13c3b.output</output-file>
+<status>completed</status>
+<summary>Agent "Map code for lyrics phases 3-4" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything below is from reading the code at `94d5971` (v0.41.5).
+
+## Feature A
+
+### 1. `docker/runpod/handler.py` job input contract
+Keys read by `handler(event)` (1240):
+- **Audio:** `audio_url` (a GET URL, fetched with urllib, 1252/1283-1291) or `audio_base64` (1251). One of the two is required (1253).
+- **`mode`:** `"demucs"`, `"whisper"` or `"both"`, default `"both"`. Any other value raises `ValueError` (1260-1262).
+- **`align_text`** (str, 1267) and **`align_lang`** (ISO-639-3, default `"eng"`, 1270).
+- **`whisper_lang`** (ISO-639-1, lowercased; empty means auto-detect, 1276-1280).
+- **`vocals_put_url` / `instrumental_put_url`:** presigned PUT URLs. The upload path is used only when both are present (1303-1305).
+- **`job_budget_s`:** used only for the retry deadline in "both" (1345).
+- Nothing else is read.
+
+**Alignment runs only if separation runs.** `want_align = bool(align_text…) and mode in ("demucs","both")` (1281), and alignment also needs `vocals_path is not None` (1336). So `mode="whisper"` never aligns.
+
+**What `mode="whisper"` does:** it does not separate. It transcribes the input file directly: `target = vocals_path if mode == "both" else in_wav` (1330).
+
+**Feasibility on an already-separated stem, without handler changes:**
+- **Whisper only:** feasible. Send vocals.wav with `mode="whisper"`.
+- **Forced alignment:** not possible without separation. `mode="demucs"`/`"both"` re-runs BS-Roformer on the input (1317-1319). Running it on vocals.wav would probably still work, but it costs a full separation.
+- An "align-only / skip-separation" mode needs a handler change. The seam is 1281 and 1336: let `vocals_path = in_wav` when a new flag or mode is set.
+
+**Result dict** (1307-1368):
+- Separation modes: `vocals_uploaded`/`instrumental_uploaded: True` on the PUT path, otherwise `vocals_b64`/`instrumental_b64` inline (1320-1327).
+- Whisper modes: `lyrics_txt`, `lyrics_json` (1333-1334).
+- When alignment ran: `aligned_lrc`, `aligned_lang`, `aligned_line_scores` (1356-1357, only if the LRC is non-empty), `aligned_raw_lrc` (1363), and always `aligned_diagnostics` (1364, schema_version 1 with `lines`/`retries`, plus `alignment_error`/`retry_error`).
+- Always: `gpu_model`, `elapsed_s`.
+- All text is returned inline in the RunPod output JSON (~10 MB cap). Only the WAV stems go out through the R2 presigned PUTs (`_put_file`, 1220).
+- The docstring (12-51) is out of date: it does not list `audio_url`, the put URLs or `whisper_lang`.
+
+### 2. `src/karaoke/worker/runpod_client.py`
+- **`RunpodClient.__init__(settings, *, prior_24h_cost_micros=0, http=None, r2_uploader=None)`** (175). The `http` and `r2_uploader` arguments are test seams.
+- **`run(mix_wav, work_dir, *, align_text=None, align_lang=None, whisper_lang=None) -&gt; GpuJobResult`** (211):
+  1. `_check_daily_cap()` runs before any HTTP call (238).
+  2. If R2 is configured (`_r2_configured`, 414), `_upload_to_r2` (422) uploads to key `jobs/{ts}-{uuid12}/mix.wav`, presigns a GET, and presigns PUTs for `…/vocals.wav` and `…/instrumental.wav` (442-476). `run_input = {"audio_url", "mode": "both", vocals_put_url, instrumental_put_url}` (253-258). Without R2 it sends base64 (260-261).
+  3. **`mode` is hard-coded to `"both"`** (255, 261).
+  4. It then adds `align_text`/`align_lang` (265-268), `job_budget_s = min(wall_ceiling, max_job_cost/rate*3600)` (270-272) and `whisper_lang` (275-276).
+  5. `POST /run`, then polls `/status/{id}` every `runpod_poll_interval_s` (319-390). A queue ceiling raises `RunpodCapacityError`/`RunpodColdStartError`; a wall backstop raises `RunpodTimeoutError`; the per-job cost check runs before each poll (348-357). The `finally` cancels any non-terminal job (391-403).
+- **`_materialise`** (533):
+  - Requires `lyrics_txt` and `lyrics_json`, otherwise raises (542-547).
+  - Always calls `_handle_r2_output` (480), which raises "stems missing" if there are no stems (527-530). **So a `mode="whisper"` output fails `_materialise` today.**
+  - Writes into `work_dir`: `vocals.wav`, `instrumental.wav`, `lyrics.txt`, `lyrics.json`, and optionally `aligned.scores.json`, `aligned.lrc`, `aligned.raw.lrc`, `aligned.diagnostics.json` (549-590).
+  - Cost is `max(execTime, wall)/3600 * runpod_hourly_rate_estimate` (593-595).
+  - Caution: if `work_dir` is the job's real `work/`, a second pass overwrites `vocals.wav`, `lyrics.json` and `aligned.*` in place.
+- **`GpuJobResult`** (`vast_client.py:70-85`): `vast_instance_id`, `vast_cost`, `gpu_model`, `vocals_path`, `instrumental_path`, `lyrics_txt_path`, `lyrics_json_path`, `aligned_lrc_path=None`, `aligned_raw_lrc_path=None`, `aligned_diagnostics_path=None`.
+- **Passing vocals.wav plus a different mode is not feasible without client changes**, for three reasons: the mode is hard-coded, stems are required in `_materialise`, and the handler cannot align without separating. Sending vocals.wav as `mix_wav` with mode "both" works today, at the cost of a second separation.
+- **`_run_gpu_with_capacity_retry(session_factory, job_id, settings, client, mix_wav, work_dir, *, align_text, align_lang, whisper_lang=None)`** (`pipeline.py:1394`):
+  - It sets the job to `transcribing`/75 before each attempt (1427-1436) and raises `PipelineError` if the job was cancelled or failed.
+  - It calls `client.run` via `asyncio.to_thread` (1437-1443).
+  - It retries only capacity-class errors (1444-1507).
+  - It mutates `Job.status`, so a lyrics-only re-run through it would flip a completed job back to `transcribing`.
+
+### 3. Artifact persistence (`pipeline.run_real_job`, 1011)
+- `job_root = artifact_root/job_token`, with `work/` and `exports/` beneath it (1035-1038).
+- **work/:** `source.audio` (1052), `mix.wav` (1100), `genius.txt` (1190, only when found), and everything `_materialise` writes (`vocals.wav`, `instrumental.wav`, `lyrics.txt`, `lyrics.json`, `aligned.*`). Lyric reviews also write backups to `work/lyrics-reviews/&lt;uuid&gt;/`.
+- **exports/:** `karaoke.mp3`, `vocals.mp3` (1245-1248), `lyrics.txt`, `lyrics.lrc`, `lyrics.quality.json` (`_resolve_lyrics`, 589), `metadata.json` (1337).
+- **Nothing cleans `work/` after completion.** A grep for `rmtree` finds only `routes._remove_artifact_files` (650), called from delete_job (741) and clear-failed (683), plus upload-failure cleanup (routes 506, 529). So `vocals.wav`, `mix.wav`, `lyrics.json` and `aligned.*` persist for completed jobs.
+- R2 objects are never deleted (`r2_client.py` has no delete function).
+- One exception: jobs created before a given file existed (for example `aligned.diagnostics.json` from older images) will not have it.
+
+### 4. Frontend lyrics rendering (`web/spa/src`)
+- **`api.ts:300-303` `LyricsLine` is `{t, text}` only.** It has no `end` or `words` fields, and the SPA never uses `payload.lines`. Every consumer re-parses the raw `lyrics.lrc` client-side.
+- **`components/SyncedLyrics.tsx`:**
+  - Types `LyricWord` (16) and `LyricLine {t, text, words?, end?}` (30).
+  - `parseWordTags` (71), `parseLrc` (113), which pulls a word-timed line's start up to its first word within 2 s (137-156).
+  - `activeLineIndex` (165), a binary search.
+  - The `SyncedLyrics` component (259) renders the full list: `&lt;li class="synced-lyrics-line is-active|is-sung"&gt;` with a seek button (313-331). CSS is in `styles.css:445-473`.
+  - `sourceLabel` (354).
+- **`components/stage-core.tsx`:**
+  - `TimedLine {t, d, text, words?, end?}` (35).
+  - `resolveWords` (62) and `timeLines(lines, duration)` (90), which derives `d` using `MAX_LINE_S=10` and `BREAK_LINE_S=5`.
+  - `wordSungFraction` (134) is the character-weighted word wipe.
+  - `lyricState(lines, pos)` (159) returns `{idx, cur, sung%, next, prev, gap, inGap}`.
+- **`components/Stage.tsx`** (the item page):
+  - `getLyrics` (114).
+  - `lines = parseLrc(lyrics.lrc)` and `timed = timeLines(...)` (289-290).
+  - Passes `lines={timed}` to `KaraokePlayer` (376-388).
+  - `&lt;LyricsReview&gt;` (395), `&lt;SyncedLyrics lrc=…&gt;` (398-407).
+  - The failed-job text says "resubmit from the booth" (358).
+- **`player/KaraokePlayer.tsx`:**
+  - `SetlistModule` (246) renders prev/cur/next with `MWipe` at `ls.sung` (300-305).
+  - `LiveLyricWipe` (335) is the console-view inline wipe; it updates the DOM imperatively through `subscribeTime` (346-358).
+  - Renders `&lt;Perf lines={lines}&gt;` (601-609).
+- **Performance mode:**
+  - `components/Perf.tsx`: `PerfWipe` (~84-210) uses `lyricState` plus a split head/tail fill (154-166).
+  - The prev/cur/next ladder is at 300 and 374-395, with "get ready…" / "instrumental" placeholders.
+  - There is no separate Stage-mode lyric renderer beyond SetlistModule, LiveLyricWipe and Perf, and all three consume `TimedLine[]` from `stage-core`.
+- **Where a per-line `kind`/`speech` flag would thread:**
+  - Server: `routes.py` `LyricsLine` (223, with the `_omit_empty_word_timing` serializer at 243), `_parse_lrc_lines(lrc)` (1059, using `_LRC_TAG_RE` at 999 and `_LRC_WORD_TAG_RE` at 1003), `_parse_lrc_words` (1019), and `_lyrics_payload` (1179, `lines=_parse_lrc_lines(lrc)` at 1203).
+  - Client: `parseLrc` builds lines from raw LRC at SyncedLyrics.tsx:134, and `timeLines` copies fields at stage-core.tsx:106. **Because the client reads raw LRC, the flag must either be encoded in the LRC text or the SPA must switch to `payload.lines`.**
+  - A literal `[speech]` after the timestamp is not matched by either `LINE_TAG` regex, so today it stays in the display text.
+  - **`lyrics_review.validate_lrc` rejects any `[`, `]`, `&lt;` or `&gt;` in line text** (`lyrics_review.py:70`), so a `[speech]` marker would currently 422 on review save.
+  - `lrc_to_plain` (`worker/lyrics.py:313`) would keep it in `lyrics.txt`.
+- **SPA commands** (`web/spa/package.json`, all via bun): `dev` (vite), `build` (`vite build`), `typecheck` (`tsc --noEmit`), `test` (`bun test src`), `guards` (`bash scripts/check-design-guards.sh`). Existing tests: `SyncedLyrics.test.ts`, `stage-core.test.ts`, `LyricsQuality.test.tsx`, `api.test.ts`, `lineFit.test.ts`. Python per AGENTS.md:62-63: `uv run ruff check src tests`, `uv run pytest -q`.
+
+## Feature B
+
+### 5. Lyrics review
+- **Route:** `PUT /jobs/{job_id}/lyrics-review` (`routes.py:1210`), body `LyricsReviewRequest {lrc (max 262144), expected_revision (64-hex), confirm: bool}` (280). Response is `LyricsPayload` (254: `synced`, `lrc`, `lines`, `plain`, `source`, `quality`, `revision`, `review_job_id`) with `Cache-Control: private, no-store`.
+- **Auth and locking:**
+  - `require_owner`, then `select … with_for_update()` on the job row (1220).
+  - `_can_owner_view` (1296): the owner subject matches, or the caller is `trusted_lan`/`machine_bearer`. Otherwise 404.
+  - 409 unless `status == completed` (1223); 422 unless `confirm` is true (1225).
+  - `review_job_id` is exposed only when `can_review` (the owner) and the job is completed (1192). A share-token holder gets `None`.
+- **`lyrics_review.py`:**
+  - `_FILES = lyrics.lrc, lyrics.txt, metadata.json, lyrics.quality.json` (24). `snapshot(exports)` (29) reads them; `revision(files)` (39) is a sha256 over all four and serves as the CAS token.
+  - `validate_lrc(body, duration)` (52) enforces: 256 KB max; every line needs `[mm:ss.xx]`; text must be non-empty with no `&lt;&gt;[]`; word tags must lead their words; line starts strictly increasing and within `duration+2`; first word no earlier than line start minus 2 s; word times strictly increasing.
+  - `save_review(session, job, exports, body, expected_revision, reviewer)` (149):
+    - A CAS mismatch returns 409 (159).
+    - It sets metadata `lyrics_source="human_reviewed"`, `synced=True`, `instrumental=False`, and `lyrics_quality={schema_version 1, status "reviewed", issues [], reviewed_at, review_basis, automated_before_review}` (168-186).
+    - It backs up to `exports.parent/"work"/"lyrics-reviews"/&lt;uuid&gt;/` the originals plus `review.json` and `artifact-rows.json` (194-222).
+    - It writes atomically with `_replace` (tmp + `os.replace`, 102).
+    - It syncs Artifact size rows and clears `stage_note` (`_sync_artifact_sizes`, 111).
+    - It rolls files back on write failure (230-242).
+    - On commit failure it returns 503 and runs `_reconcile_unconfirmed_commit` (126).
+- **SPA:**
+  - `api.ts`: `getLyrics(token)` (332), `saveLyricsReview(jobId, lrc, revision)` (341).
+  - `components/LyricsQuality.tsx`: `LyricsReview` (19, the "Edit lyrics" toggle, hidden unless `review_job_id` and `revision` are set), `LyricsReviewEditor` (36, a textarea initialised from `lrc ?? plain`, a confirm checkbox, 409/412 reload handling), `reviewReducer`/`canSaveReview` (6-17).
+  - Mounted in `Stage.tsx:395`, with the reload callback at Stage.tsx:120.
+
+### 6. Job (re)start
+- **Statuses:** `JobStatus` (`db/models.py:25`) is `queued, downloading, separating, transcribing, completed, failed, cancelled`. `finalizing` is WS-only and has no DB value (pipeline 1233-1241).
+- **Dispatch:** `scheduler.schedule_job(session_factory, job_id, settings)` (`scheduler.py:51`) picks the mock (`api/worker_stub.schedule_mock_job`) or `pipeline.schedule_real_job` (1512), which wraps `asyncio.create_task(run_real_job(...))`. `_use_runpod` is at scheduler.py:38.
+- **`run_real_job`** (1011) always runs the full pipeline: download or ffprobe the upload, `_to_wav`, canonical resolve, LRCLIB fetch, Genius, GPU (separate, transcribe, align), mp3 encode, `_resolve_lyrics`, metadata, Artifact rows, completed. It exits early if the job is cancelled or failed. Any exception goes to `_mark_failed` (449).
+- **There is no retry endpoint.** Retry is purely client-side: `App.tsx:187-195` calls `createJob({url: job.source_url})`, which creates a new job and fully re-downloads. `jobStatus.ts:127-138` `canRetry`/`canRetryJob` limits this to failed/cancelled URL jobs and excludes `upload://`.
+- **There is no lyrics-only stage or re-run path.**
+- **Reusable seam:** `_resolve_lyrics(lyrics: LyricsResult, exports_dir, whisper_lyrics_txt, aligned_lrc_path=None, whisper_lyrics_json=None, *, second_text=None, lang=None)` (`pipeline.py:487`) is a pure function of files already in `work/`. It calls `_select_lyrics` (595) and writes `lyrics.lrc`, `lyrics.txt` and `lyrics.quality.json`, but not `metadata.json` (1272-1339 builds that).
+- `LyricsResult` is at `worker/lyrics.py:884` (`synced_lrc`, `plain`, `instrumental`, `source`, `rejected`, `rejected_text`, `match_variant`, `duration_gate`).
+- Language helpers: `_script_lang_hint` (878), `_align_lang` (905).
+- **Boot reconcile:** `worker/reconcile.py` (called from `app.py:54`) fails any `downloading`/`separating`/`transcribing` job on restart and re-dispatches `queued` ones. A background lyrics rebuild that reuses these statuses would be failed on redeploy.
+
+### 7. DB model and migrations
+- **`Job`** (`models.py:41`) has no metadata JSON column. Provenance lives only in `exports/metadata.json`.
+- Lyrics-related columns: none. The closest are `artist`, `track`, `album`, `duration` (60-63), plus `stage_note` and `error`.
+- GPU cost columns: `vast_instance_id` String(64) and `vast_cost_micros` BigInteger (74-75). The RunPod path writes these too (pipeline 1373-1374). The API exposes them as `gpu_instance_id` and `gpu_cost_micros` (`routes.py:137-138, 161-162`).
+- **Alembic:** `alembic/versions/` holds `0001_baseline.py`, `0002_job_source_metadata.py`, `0003_job_stage_note.py`. The latest revision id is **`"0003_job_stage_note"`** (down_revision `0002_job_source_metadata`). The style is plain `op.add_column("jobs", sa.Column(..., nullable=True))`, with `drop_column` in downgrade.
+
+### 8. Cost caps
+- **RunPod:**
+  - Daily: `RunpodClient._check_daily_cap` (`runpod_client.py:191`) uses `runpod_daily_cost_cap` (default 5.0) and raises `RunpodBudgetError` if `spent &gt;= cap` or `spent + runpod_max_job_cost &gt; cap`.
+  - Per job: enforced in the poll loop at 348-357 via `_project_cost` (203), against `runpod_max_job_cost` (0.50).
+  - `job_budget_s` passed to the handler is derived from these caps (270-272).
+- **Spend input:** `pipeline._prior_24h_cost_micros(session_factory)` (435) sums `Job.vast_cost_micros` where `completed_at &gt;= now-24h`.
+  - Cost is recorded only when a job completes (1374).
+  - A backfill that does not write `vast_cost_micros` (or bumps it without refreshing `completed_at`) would be invisible to the daily cap. Writing to an old job's row would not count unless `completed_at` falls in the window.
+- **Vast:** `VastClient._check_daily_cap` (`vast_client.py:594`) with `vast_daily_cost_cap` and `vast_max_job_cost` (config 137, 153).
+- **Settings:** `config.py:156-185` (runpod_* and r2_*), `artifact_root` (195), `word_vote_enabled` (201).
+
+### 9. API tests
+- **`tests/api/conftest.py`:**
+  - Autouse `_reset_module_state` (19) creates a per-test file SQLite DB and sets env `KARAOKE_SERVICE_TOKEN`, `REDACTED`, `AUTH_TEST_MODE=true` and `PUBLIC_BASE_URL`; it also resets the JWKS cache, WS hub and settings cache.
+  - Fixtures: `client` (a `TestClient(create_app())`, 56), `session_factory` (64), `settings` (77, `get_settings()`).
+- **Helpers in `tests/api/test_routes.py`:**
+  - `_clerk_jwt(sub)` (16) forges an unsigned JWT that is trusted in test mode (`auth.py:281`).
+  - `_seed_job(status, *, owner_subject)` (28) inserts a row through a parallel sqlite3 connection and returns `(id, token)`.
+  - `_seed_job_with_metadata` (145) also sets artist, track and gpu cost.
+  - With no auth header, the default is presumably trusted-LAN with owner `lan-default`, which `_can_owner_view` treats as admin.
+- **Typical new-route test** (`tests/api/test_lyrics_review.py:13-35, 46-66`):
+  1. `monkeypatch.setattr(settings, "artifact_root", tmp_path)`.
+  2. `_seed_job("completed", owner_subject="alice")`.
+  3. Write fixture files under `tmp_path/token/exports`.
+  4. `headers={"Authorization": f"Bearer {_clerk_jwt('alice')}"}`.
+  5. Call `client.put(...)`/`client.get(...)` and assert status and JSON.
+  6. Assert cross-owner access returns 404 using `_clerk_jwt('bob')` (68-79).
+- `AuthState` values (`auth.py:46`): `public`, `trusted_lan`, `machine_bearer`, `clerk_user`, `extension_token`.</result>
+<usage><subagent_tokens>192677</subagent_tokens><tool_uses>35</tool_uses><duration_ms>173219</duration_ms></usage>
+</task-notification>

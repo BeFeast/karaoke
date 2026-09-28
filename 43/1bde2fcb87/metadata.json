@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "431bde2fcb87",
+  "strategy": "manual-commit",
+  "branch": "fix/289-290-reference-matching",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/karaoke/titles.py",
+    "src/karaoke/worker/canonical.py",
+    "src/karaoke/worker/lyrics.py",
+    "src/karaoke/worker/pipeline.py",
+    "tests/test_titles.py",
+    "tests/worker/test_canonical.py",
+    "tests/worker/test_lyrics.py",
+    "tests/worker/test_pipeline_lyrics.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/43/1bde2fcb87/0/metadata.json",
+      "transcript": "/43/1bde2fcb87/0/full.jsonl",
+      "compact_transcript": "/43/1bde2fcb87/0/transcript.jsonl",
+      "content_hash": "/43/1bde2fcb87/0/content_hash.txt",
+      "prompt": "/43/1bde2fcb87/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 724,
+    "cache_creation_tokens": 2081384,
+    "cache_read_tokens": 82984926,
+    "output_tokens": 410661,
+    "api_call_count": 187
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "431bde2fcb87",
+  "session_id": "ee21a9c3-68d2-4800-abcf-373f973bbb63",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-28T22:19:41.350973295Z",
+  "branch": "fix/289-290-reference-matching",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/karaoke/titles.py",
+    "src/karaoke/worker/canonical.py",
+    "src/karaoke/worker/lyrics.py",
+    "src/karaoke/worker/pipeline.py",
+    "tests/test_titles.py",
+    "tests/worker/test_canonical.py",
+    "tests/worker/test_lyrics.py",
+    "tests/worker/test_pipeline_lyrics.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "90347cc2d6a2",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 724,
+    "cache_creation_tokens": 2081384,
+    "cache_read_tokens": 82984926,
+    "output_tokens": 410661,
+    "api_call_count": 187
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-28T22:19:41.007970987Z",
+    "agent_lines": 55,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 17,
+    "total_committed": 55,
+    "total_lines_changed": 72,
+    "agent_percentage": 76.38888888888889,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 452,
+      "user_lines_removed": 17,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 84,
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".cursor/hooks.json": 40,
+        "src/karaoke/titles.py": 11,
+        "src/karaoke/worker/canonical.py": 48,
+        "src/karaoke/worker/lyrics.py": 87,
+        "src/karaoke/worker/pipeline.py": 15,
+        "tests/test_titles.py": 5,
+        "tests/worker/test_canonical.py": 32,
+        "tests/worker/test_lyrics.py": 75
+      },
+      "user_removed_per_file": {
+        "src/karaoke/worker/canonical.py": 11,
+        "src/karaoke/worker/lyrics.py": 6
+      }
+    }
+  ]
+}
