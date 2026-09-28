@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "3397f75a139c",
+  "strategy": "manual-commit",
+  "branch": "fix/281-stretched-aligned-line",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "src/karaoke/worker/lyrics.py",
+    "tests/worker/test_lyrics.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/33/97f75a139c/0/metadata.json",
+      "transcript": "/33/97f75a139c/0/full.jsonl",
+      "compact_transcript": "/33/97f75a139c/0/transcript.jsonl",
+      "content_hash": "/33/97f75a139c/0/content_hash.txt",
+      "prompt": "/33/97f75a139c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 144,
+    "cache_creation_tokens": 75689,
+    "cache_read_tokens": 9658824,
+    "output_tokens": 41761,
+    "api_call_count": 25
+  }
+}
