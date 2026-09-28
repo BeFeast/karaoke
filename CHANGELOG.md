@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.43.3] - 2026-09-28
+
+_Bump: patch_
+
+- fix(lyrics): pasted reference lines the aligner tore away from their neighbours (onto dialogue or a later chorus repeat) are re-timed from the transcript; stretched line ends no longer swallow the transcript (#284)
+
 ## [v0.43.2] - 2026-09-28
 
 _Bump: patch_
