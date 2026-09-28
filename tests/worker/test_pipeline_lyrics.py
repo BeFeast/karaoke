@@ -591,6 +591,7 @@ async def test_run_real_job_writes_rejection_to_metadata(tmp_path, monkeypatch):
     from karaoke.config import Settings
     from karaoke.db.models import Base, Job, JobStatus
     from karaoke.db.session import create_engine_and_sessionmaker
+    from karaoke.worker.canonical import CanonicalResolver
     from karaoke.worker.lyrics import LyricsSource
     from karaoke.worker.runpod_client import RunpodClient
     from karaoke.worker.vast_client import GpuJobResult
@@ -648,6 +649,9 @@ async def test_run_real_job_writes_rejection_to_metadata(tmp_path, monkeypatch):
                 ],
             ),
         ]
+        monkeypatch.setattr(
+            pipeline, "_CANONICAL_RESOLVER", CanonicalResolver(search=lambda q: [])
+        )
         monkeypatch.setattr(
             pipeline,
             "_LYRICS_SOURCE",
@@ -711,6 +715,7 @@ async def test_run_real_job_force_aligns_rejected_text(tmp_path, monkeypatch):
     from karaoke.config import Settings
     from karaoke.db.models import Base, Job, JobStatus
     from karaoke.db.session import create_engine_and_sessionmaker
+    from karaoke.worker.canonical import CanonicalResolver
     from karaoke.worker.lyrics import LyricsSource
     from karaoke.worker.runpod_client import RunpodClient
     from karaoke.worker.vast_client import GpuJobResult
@@ -768,6 +773,9 @@ async def test_run_real_job_force_aligns_rejected_text(tmp_path, monkeypatch):
                 ],
             ),
         ]
+        monkeypatch.setattr(
+            pipeline, "_CANONICAL_RESOLVER", CanonicalResolver(search=lambda q: [])
+        )
         monkeypatch.setattr(
             pipeline,
             "_LYRICS_SOURCE",
@@ -1105,3 +1113,118 @@ def test_dropped_early_repeated_line_with_timing_drift_keeps_forced_alignment(tm
     assert "lyrics_lrclib_rejected" not in prov
     assert (exports / "lyrics.lrc").read_text() == aligned
     assert (exports / "lyrics.txt").read_text() == "\n".join(texts[1:])
+
+
+@pytest.mark.asyncio
+async def test_run_real_job_uses_canonical_metadata_for_lrclib(tmp_path, monkeypatch):
+    """End-to-end (#281): a Hebrew upload whose parsed metadata misses LRCLIB
+    lands via the canonical (Latin artist, audio duration) rung; metadata.json
+    records the provider, the canonical release and the duration gate."""
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.config import Settings
+    from karaoke.db.models import Base, Job, JobStatus
+    from karaoke.db.session import create_engine_and_sessionmaker
+    from karaoke.worker.canonical import CanonicalResolver
+    from karaoke.worker.lyrics import LyricsSource
+    from karaoke.worker.runpod_client import RunpodClient
+    from karaoke.worker.vast_client import GpuJobResult
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'canon.db'}"
+    engine, factory = create_engine_and_sessionmaker(url)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with factory() as session:
+            job = Job(
+                job_token="tok-canon",
+                owner_subject="owner",
+                source_url="https://example.com/video",
+                status=JobStatus.queued,
+                progress=0,
+            )
+            session.add(job)
+            await session.commit()
+            await session.refresh(job)
+            job_id = job.id
+
+        monkeypatch.setattr(
+            pipeline,
+            "_ytdlp_metadata",
+            lambda url, settings=None, **_: {
+                "title": "נועה קירל - לאב סונג (Prod. By Nuri)",
+                "duration": 227,
+            },
+        )
+
+        def fake_file(src, dest: Path, *a, **k):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"x")
+            return dest
+
+        monkeypatch.setattr(pipeline, "_download_audio", fake_file)
+        monkeypatch.setattr(pipeline, "_to_wav", fake_file)
+        monkeypatch.setattr(pipeline, "_wav_to_mp3", fake_file)
+
+        ytm = [{
+            "title": "לאב סונג", "videoId": "7EvxHCSv7eA", "duration_seconds": 179,
+            "artists": [{"name": "Noa Kirel"}],
+        }]
+        monkeypatch.setattr(pipeline, "_CANONICAL_RESOLVER", CanonicalResolver(search=lambda q: ytm))
+        record = {
+            "artistName": "Noa Kirel", "trackName": "לאב סונג", "duration": 179,
+            "syncedLyrics": "[00:10.38]line one\n[00:12.49]line two", "plainLyrics": "line one\nline two",
+        }
+        script = [
+            (404, {"code": 404}),          # /api/get parsed (Hebrew artist, 227 s)
+            (200, [record]),               # /api/search parsed: admitted via canonical 179 s
+        ]
+        lyrics_source = LyricsSource(http=lambda m, u, p: script.pop(0), retry_delays=(0,))
+        monkeypatch.setattr(pipeline, "_LYRICS_SOURCE", lyrics_source)
+
+        captured = {}
+
+        def fake_gpu_run(self, mix_wav, work_dir, *, align_text, align_lang, whisper_lang):
+            captured["align_text"] = align_text
+            captured["whisper_lang"] = whisper_lang
+            work_dir.mkdir(parents=True, exist_ok=True)
+            (work_dir / "vocals.wav").write_bytes(b"x")
+            (work_dir / "no_vocals.wav").write_bytes(b"x")
+            (work_dir / "lyrics.txt").write_text("asr one\nasr two")
+            (work_dir / "lyrics.json").write_text(
+                json.dumps({"language": "he", "language_probability": 0.9, "segments": []})
+            )
+            return GpuJobResult(
+                vast_instance_id="fake-1",
+                vast_cost=0.0,
+                gpu_model="fake",
+                vocals_path=work_dir / "vocals.wav",
+                instrumental_path=work_dir / "no_vocals.wav",
+                lyrics_txt_path=work_dir / "lyrics.txt",
+                lyrics_json_path=work_dir / "lyrics.json",
+            )
+
+        monkeypatch.setattr(RunpodClient, "run", fake_gpu_run)
+
+        settings = Settings(
+            database_url=url,
+            runpod_api_key="k",
+            runpod_endpoint_id="ep",
+            artifact_root=str(tmp_path),
+        )
+        await pipeline.run_real_job(factory, job_id, settings)
+
+        async with factory() as session:
+            job = await session.get(Job, job_id)
+            assert job.status == JobStatus.completed, job.error
+
+        assert captured["align_text"] == "line one\nline two"
+        assert captured["whisper_lang"] == "he"
+        metadata = json.loads((tmp_path / "tok-canon" / "exports" / "metadata.json").read_text())
+        assert metadata["track"] == "לאב סונג"  # producer credit stripped
+        assert metadata["lyrics_source"] == "lrclib_synced"
+        assert metadata["lyrics_provider"] == "lrclib"
+        assert metadata["lyrics_duration_gate"] == "canonical"
+        assert (metadata["canonical_artist"], metadata["canonical_duration"]) == ("Noa Kirel", 179)
+        assert "lyrics_match_variant" not in metadata
+    finally:
+        await engine.dispose()

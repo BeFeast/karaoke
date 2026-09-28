@@ -44,7 +44,9 @@ from karaoke.db.models import Artifact, Job, JobStatus
 from karaoke.titles import derive_metadata
 from karaoke.uploads import UPLOAD_PREFIX, upload_display_name
 from karaoke.worker import job_cookies
+from karaoke.worker.canonical import CanonicalResolver
 from karaoke.worker.lyrics import (
+    DURATION_GATE_CANONICAL,
     LRC_TIMESTAMP_RE,
     SOURCE_FORCED_ALIGNED,
     SOURCE_INSTRUMENTAL,
@@ -66,6 +68,13 @@ _log = logging.getLogger(__name__)
 
 # Module-level LRCLIB client so its in-process cache survives across jobs.
 _LYRICS_SOURCE = LyricsSource()
+# YouTube Music canonical-metadata resolver (#281), same lifetime/cache model.
+_CANONICAL_RESOLVER = CanonicalResolver()
+
+# Lyrics sources whose text came from the LRCLIB reference (provenance, #281).
+_LRCLIB_DERIVED_SOURCES = frozenset(
+    {SOURCE_LRCLIB_SYNCED, SOURCE_FORCED_ALIGNED, SOURCE_LRCLIB_PLAIN}
+)
 
 # Word-merge coverage gate (#237): when the force-aligner fit fewer than this
 # fraction of a curated record's lines (with at least this many candidate
@@ -1026,12 +1035,30 @@ async def run_real_job(
         # job (#55). Best-effort: any network error → empty result → no
         # align_text → unchanged behavior (Whisper floor). Runs on the
         # coordinator, never on the GPU.
+        # Canonical release metadata (#281): YouTube Music's song index gives
+        # the Latin artist name, release title and *audio* duration for an
+        # upload whose own metadata is native-script / a longer video cut.
+        # Best-effort — ``None`` keeps the parsed-metadata-only ladder.
+        canonical = await asyncio.to_thread(
+            _CANONICAL_RESOLVER.resolve,
+            source_meta.get("artist"),
+            source_meta.get("track"),
+            source_meta.get("duration"),
+        )
+        if canonical is not None:
+            _log.info(
+                "job %s: canonical release %r / %r / %ss (%s)",
+                job_id, canonical.artist, canonical.title, canonical.duration, canonical.video_id,
+            )
         lyrics = await asyncio.to_thread(
             _LYRICS_SOURCE.fetch,
             artist=source_meta.get("artist"),
             track=source_meta.get("track"),
             album=source_meta.get("album"),
             duration=source_meta.get("duration"),
+            canonical_artist=canonical.artist if canonical else None,
+            canonical_track=canonical.title if canonical else None,
+            canonical_duration=canonical.duration if canonical else None,
         )
         # Send text to force-align inside the same GPU window whenever LRCLIB
         # gave us words to time against OUR vocal stem:
@@ -1187,6 +1214,19 @@ async def run_real_job(
         # present when the parsed (artist, track) missed and a variant matched.
         if lyrics.match_variant:
             metadata["lyrics_match_variant"] = lyrics.match_variant
+        # Provenance of the reference text (#281): today only LRCLIB feeds the
+        # curated path; present whenever the shipped lyrics derive from it.
+        if lyrics_prov["lyrics_source"] in _LRCLIB_DERIVED_SOURCES:
+            metadata["lyrics_provider"] = "lrclib"
+        # Which known duration admitted the LRCLIB search hit (#281) — only
+        # when it was the canonical *audio release* length rather than the
+        # video's own, i.e. the video is a longer/shorter cut of the release.
+        if lyrics.duration_gate == DURATION_GATE_CANONICAL:
+            metadata["lyrics_duration_gate"] = lyrics.duration_gate
+        if canonical is not None:
+            metadata["canonical_artist"] = canonical.artist
+            metadata["canonical_track"] = canonical.title
+            metadata["canonical_duration"] = canonical.duration
         (exports_dir / "metadata.json").write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
         )
