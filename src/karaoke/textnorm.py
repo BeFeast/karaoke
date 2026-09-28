@@ -173,3 +173,21 @@ def align(reference: Sequence, hypothesis: Sequence) -> list[Op]:
         j -= 1
     ops.reverse()
     return ops
+
+
+def bigram_agreement(hypothesis: str, reference: str, lang: str | None = None) -> float | None:
+    """Share of the hypothesis's word bigrams that occur anywhere in the
+    reference (order- and repeat-insensitive), or ``None`` with fewer than
+    10 hypothesis bigrams.
+
+    Separates "same song, noisy ASR" from "different song" cleanly: on the
+    #280 bench an ASR transcript agrees with its own reference at >= 0.32
+    (vanilla Hebrew) and with any other song of the set at <= 0.052.
+    """
+    hyp = normalize(hypothesis, lang, strip_parenthetical=True).split()
+    ref = normalize(reference, lang, strip_parenthetical=True).split()
+    pairs = list(zip(hyp, hyp[1:], strict=False))
+    if len(pairs) < 10:
+        return None
+    ref_pairs = set(zip(ref, ref[1:], strict=False))
+    return sum(1 for pair in pairs if pair in ref_pairs) / len(pairs)

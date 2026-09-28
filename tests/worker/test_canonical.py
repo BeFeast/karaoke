@@ -108,3 +108,14 @@ def test_bilingual_artist_name_is_split_latin_first():
     hebrew_only = CanonicalResolver(search=_Search([_song("שירת הסטיקר", ["הדג נחש"], 261)]))
     assert hebrew_only.resolve("Hadag Nahash", "שירת הסטיקר", 253).artist == "הדג נחש"
     assert CanonicalResolver(search=_Search([_song("Song", ["Jay-Z"], 200)])).resolve("Jay-Z", "Song", 200).artist == "Jay-Z"
+
+
+def test_same_artist_other_song_is_not_accepted_on_artist_and_duration_alone():
+    search = _Search([
+        _song("ממעמקים", ["Idan Raichel"], 351),          # right song, far duration
+        _song("מילים יפות מאלה", ["Idan Raichel"], 287),  # other song, coincident length
+    ])
+    meta = CanonicalResolver(search=search).resolve(
+        "The Idan Raichel Project", "הפרויקט של עידן רייכל - ממעמקים", 288
+    )
+    assert meta is None

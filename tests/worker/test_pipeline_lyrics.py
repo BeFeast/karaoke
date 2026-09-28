@@ -1527,3 +1527,49 @@ async def test_run_real_job_drops_lrclib_record_in_the_wrong_script(tmp_path, mo
         assert metadata["lyrics_lrclib_rejected"] == "script_mismatch"
     finally:
         await engine.dispose()
+
+
+def test_resolve_lyrics_rejects_a_reference_the_asr_does_not_support(tmp_path):
+    """#281 wrong-song guard: a curated record sharing no word bigrams with a
+    same-language transcript is dropped to the ASR floor."""
+    from karaoke.worker.pipeline import _resolve_lyrics
+
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    sung = "ממעמקים קראתי אלייך בואי אליי בשובך יחזור שוב האור בעיניי לא גמור לא עוזב המגע בידייך שיבוא ויאיר"
+    whisper_txt = tmp_path / "whisper.txt"
+    whisper_txt.write_text(sung)
+    asr = tmp_path / "lyrics.json"
+    asr.write_text(json.dumps({"language": "he", "segments": [
+        {"start": 50.0, "end": 60.0, "text": sung,
+         "words": [{"word": w, "start": 50.0 + i * 0.5, "end": 50.4 + i * 0.5, "probability": 0.9}
+                   for i, w in enumerate(sung.split())]},
+    ]}, ensure_ascii=False))
+    wrong = "[00:10.00]מילים יפות מאלה לא אמרו לי\n[00:14.00]כמו שאת אומרת לי עכשיו בלילה\n[00:18.00]ואני שוב חוזר אלייך הביתה"
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=wrong, source="lrclib_get"), exports, whisper_txt, None, asr, lang="he"
+    )
+    assert prov["lyrics_source"].startswith("whisper_asr")
+    assert prov["lyrics_lrclib_rejected"].startswith("asr_disagreement")
+    right = "[00:50.00]ממעמקים קראתי אלייך בואי אליי\n[00:54.00]בשובך יחזור שוב האור בעיניי\n[00:58.00]לא גמור לא עוזב המגע בידייך שיבוא ויאיר"
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=right, source="lrclib_get"), exports, whisper_txt, None, asr, lang="he"
+    )
+    assert prov["lyrics_source"] == "lrclib_synced" and prov["lyrics_reference_agreement"] > 0.5
+
+
+def test_resolve_lyrics_skips_the_agreement_gate_for_a_wrong_language_transcript(tmp_path):
+    from karaoke.worker.pipeline import _resolve_lyrics
+
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    gibberish = "thank you no no no thank you so much for watching this video please subscribe now"
+    whisper_txt = tmp_path / "whisper.txt"
+    whisper_txt.write_text(gibberish)
+    asr = tmp_path / "lyrics.json"
+    asr.write_text(json.dumps({"language": "en", "segments": [{"start": 1.0, "end": 9.0, "text": gibberish}]}))
+    right = "[00:50.00]ממעמקים קראתי אלייך בואי אליי\n[00:54.00]בשובך יחזור שוב האור בעיניי"
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=right, source="lrclib_get"), exports, whisper_txt, None, asr, lang="he"
+    )
+    assert prov["lyrics_source"] == "lrclib_synced" and "lyrics_reference_agreement" not in prov

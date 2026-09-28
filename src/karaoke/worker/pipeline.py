@@ -41,6 +41,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from karaoke.api import ws as ws_events
 from karaoke.db.models import Artifact, Job, JobStatus
+from karaoke.textnorm import bigram_agreement
 from karaoke.titles import derive_metadata
 from karaoke.uploads import UPLOAD_PREFIX, upload_display_name
 from karaoke.worker import job_cookies
@@ -78,6 +79,11 @@ _LYRICS_SOURCE = LyricsSource()
 _CANONICAL_RESOLVER = CanonicalResolver()
 # Genius second-reference client (#281 word vote), same lifetime/cache model.
 _GENIUS_SOURCE = GeniusSource()
+
+# Minimum word-bigram agreement between the ASR transcript and a curated
+# reference (see textnorm.bigram_agreement): own song >= 0.32, other songs
+# <= 0.052 on the #280 bench.
+_REFERENCE_MIN_AGREEMENT = 0.12
 
 # Lyrics sources whose text came from the LRCLIB reference (provenance, #281).
 _LRCLIB_DERIVED_SOURCES = frozenset(
@@ -531,6 +537,27 @@ def _resolve_lyrics(
 
     curated = lyrics.synced_lrc or lyrics.plain or lyrics.rejected_text
     asr = _read_json_object(whisper_lyrics_json)
+    # Wrong-song guard (#281): the curated text must share word bigrams with
+    # what the vocal stem actually says. The aligner fits ANY text onto the
+    # audio, so neither the coverage gate nor the #253 fallback can tell a
+    # different song of the same artist from the right one. Only when the
+    # transcript is in the track's language (a wrong-language decode is an
+    # ASR failure, not evidence against the reference).
+    agreement = None
+    if curated and not lyrics.instrumental and asr:
+        asr_text = " ".join(
+            str(seg.get("text") or "") for seg in asr.get("segments") or [] if isinstance(seg, dict)
+        )
+        asr_lang = str(asr.get("language") or "") or None
+        if lang is None or asr_lang is None or asr_lang == lang:
+            agreement = bigram_agreement(asr_text, lrc_to_plain(curated), lang)
+        if agreement is not None and agreement < _REFERENCE_MIN_AGREEMENT:
+            _log.warning(
+                "reference rejected: ASR bigram agreement %.3f < %.2f", agreement, _REFERENCE_MIN_AGREEMENT
+            )
+            lyrics = LyricsResult(source="none", rejected=f"asr_disagreement ({agreement:.2f})")
+            curated = None
+            aligned_lrc_path = None
     raw = None
     scores = None
     diagnostics = None
@@ -607,6 +634,8 @@ def _resolve_lyrics(
         quality["retries"] = diagnostics.get("retries", [])
         quality["retry_budget"] = diagnostics.get("retry_budget", {})
     provenance["lyrics_quality"] = quality
+    if agreement is not None:
+        provenance["lyrics_reference_agreement"] = round(agreement, 3)
     (exports_dir / "lyrics.quality.json").write_text(
         json.dumps(quality, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -1347,6 +1376,8 @@ async def run_real_job(
             metadata["lyrics_word_timing"] = lyrics_prov["lyrics_word_timing"]
         # Curated timing shifted onto a longer video cut (#293) — only when the
         # constant-offset shift was applied; the value is the shift in seconds.
+        if lyrics_prov.get("lyrics_reference_agreement") is not None:
+            metadata["lyrics_reference_agreement"] = lyrics_prov["lyrics_reference_agreement"]
         if lyrics_prov.get("lyrics_lrclib_offset_s") is not None:
             metadata["lyrics_lrclib_offset_s"] = lyrics_prov["lyrics_lrclib_offset_s"]
         # Which cleaned track variant hit via the #230 fallback ladder — only

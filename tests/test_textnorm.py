@@ -90,3 +90,14 @@ def test_align_ops_are_deterministic_and_complete():
     assert [op for op, _, _ in ops] == ["sub", "match", "match", "match", "sub", "match", "ins"]
     assert align([], ["a"]) == [("ins", None, 0)]
     assert align(["a"], []) == [("del", 0, None)]
+
+
+def test_bigram_agreement_separates_same_song_from_another():
+    from karaoke.textnorm import bigram_agreement
+
+    song = "כל יום בתשע אתה רואה לי את הלב מפחיד להתאהב אוהב שזה כואב מאמי תיראה מה נהיה ממני"
+    noisy = "כל יום בתשע אתה ראה לי את הלב מפחיד להתאהב אוהב שזה כאב מאמי תראה מה נהיה ממני"
+    other = "ממעמקים קראתי אלייך בואי אליי בשובך יחזור שוב האור בעיניי לא גמור לא עוזב"
+    assert bigram_agreement(noisy, song, "he") > 0.4
+    assert bigram_agreement(noisy, other, "he") == 0.0
+    assert bigram_agreement("שתי מילים", song, "he") is None
