@@ -47,6 +47,7 @@ from typing import Any
 
 import httpx
 
+from karaoke.textnorm import tokens
 from karaoke.titles import track_cleanup_variants
 
 LRCLIB_BASE = "https://lrclib.net"
@@ -1000,6 +1001,14 @@ def _record_is_junk(record: dict[str, Any]) -> bool:
     return len(text.split()) <= _JUNK_MAX_WORDS
 
 
+def _artist_match(record: dict[str, Any], artists: tuple[str | None, ...]) -> int:
+    """1 when the record's artist shares a token (either script, >= 3 chars)
+    with one of ``artists``, else 0."""
+    want = {t for a in artists if a for t in tokens(a) if len(t) >= 3}
+    have = {t for t in tokens(str(record.get("artistName") or "")) if len(t) >= 3}
+    return 1 if want & have else 0
+
+
 def _latin_tokens(text: str | None) -> set[str]:
     return {t for t in re.findall(r"[a-z0-9]{3,}", (text or "").casefold()) if t != "the"}
 
@@ -1252,7 +1261,7 @@ class LyricsSource:
         # Requires a known audio duration (the gate is the only safety net here)
         # and is bounded to ≤ _MAX_LADDER_QUERIES extra HTTP calls.
         if any(d is not None for d in durations):
-            variants = track_cleanup_variants(track)
+            variants = track_cleanup_variants(track, (artist, canonical_artist))
             # Clean canonical release title, artist-free (#290): LRCLIB may
             # store the song under an artist spelling no rung above tried (a
             # Hebrew YouTube Music artist, a bilingual "Latin-Hebrew" name).
@@ -1378,7 +1387,7 @@ class LyricsSource:
         status, body = self._request("GET", f"{self._base}/api/search", {"q": query})
         if status != 200 or not isinstance(body, list) or not body:
             return None
-        picked = self._pick_gated(body, query, durations)
+        picked = self._pick_gated(body, query, durations, artists)
         if picked is not None:
             return picked
         # Editions expansion (#233): /api/search?q= returns LRCLIB's top-N by
@@ -1413,7 +1422,7 @@ class LyricsSource:
             )
             if status2 != 200 or not isinstance(body2, list) or not body2:
                 continue
-            picked = self._pick_gated(body2, query, durations)
+            picked = self._pick_gated(body2, query, durations, artists)
             if picked is not None:
                 return picked
         # Nothing in the gate, even across editions: salvage the certain song's
@@ -1456,13 +1465,16 @@ class LyricsSource:
         )
 
     def _pick_gated(
-        self, body: list[Any], query: str, durations: Durations
+        self, body: list[Any], query: str, durations: Durations, artists: tuple[str | None, ...] = ()
     ) -> LyricsResult | None:
         """Duration-gate ``body`` BEFORE ranking, then pick the best candidate.
 
         Gate-first matters: a highly ranked wrong-duration record must not
         shadow a valid lower-ranked one. Returns ``None`` when no candidate
-        survives the gate.
+        survives the gate. Among survivors a candidate whose artist matches
+        the parsed / canonical artist wins first (#283): two songs share the
+        title «אחותי» at 187 s and 189 s, and duration alone picked the other
+        artist's.
         """
         candidates = [
             c
@@ -1474,7 +1486,10 @@ class LyricsSource:
         ]
         if not candidates:
             return None
-        best = max(candidates, key=lambda c: _score_candidate(c, query, durations))
+        best = max(
+            candidates,
+            key=lambda c: (_artist_match(c, artists), *_score_candidate(c, query, durations)),
+        )
         return replace(
             _from_record(best, source="lrclib_search"),
             duration_gate=_duration_gate(best, durations),
