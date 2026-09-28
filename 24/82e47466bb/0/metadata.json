@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "2482e47466bb",
+  "session_id": "ee21a9c3-68d2-4800-abcf-373f973bbb63",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-28T22:27:31.961267541Z",
+  "branch": "feat/283-gpu-lyrics-mode",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docker/runpod/README.md",
+    "docker/runpod/handler.py",
+    "scripts/runpod_provision.py",
+    "tests/worker/test_runpod_handler.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "90347cc2d6a2",
+  "checkpoint_transcript_start": 1796,
+  "transcript_lines_at_start": 1796,
+  "compact_transcript_start": 319,
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 41744,
+    "cache_read_tokens": 6533863,
+    "output_tokens": 13700,
+    "api_call_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-28T22:27:31.662495606Z",
+    "agent_lines": 62,
+    "agent_removed": 7,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 62,
+    "total_lines_changed": 69,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

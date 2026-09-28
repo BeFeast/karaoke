@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "2482e47466bb",
+  "strategy": "manual-commit",
+  "branch": "feat/283-gpu-lyrics-mode",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docker/runpod/README.md",
+    "docker/runpod/handler.py",
+    "scripts/runpod_provision.py",
+    "tests/worker/test_runpod_handler.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/24/82e47466bb/0/metadata.json",
+      "transcript": "/24/82e47466bb/0/full.jsonl",
+      "compact_transcript": "/24/82e47466bb/0/transcript.jsonl",
+      "content_hash": "/24/82e47466bb/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 41744,
+    "cache_read_tokens": 6533863,
+    "output_tokens": 13700,
+    "api_call_count": 10
+  }
+}
