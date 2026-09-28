@@ -977,3 +977,11 @@ def test_clear_failed_is_owner_scoped(client):
 
     # alice's failed job is still present (LAN-admin can see it).
     assert any(j["job_token"] == alice_token for j in client.get("/jobs").json())
+
+
+def test_list_jobs_pages_with_before_id(client):
+    ids = [_seed_job("completed")[0] for _ in range(5)]
+    first = client.get("/jobs", params={"limit": 2}).json()
+    assert [j["id"] for j in first] == sorted(ids, reverse=True)[:2]
+    nxt = client.get("/jobs", params={"limit": 2, "before_id": first[-1]["id"]}).json()
+    assert [j["id"] for j in nxt] == sorted(ids, reverse=True)[2:4]
