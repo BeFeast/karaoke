@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.42.0] - 2026-09-28
+
+_Bump: minor_
+
+- feat(lyrics): web references when LRCLIB has no words — YouTube Music lyrics, Genius, tab4u via SearXNG; the transcript stays the base and the reference corrects its words line by line (no unheard lines added) (#283, #310)
+- feat(lyrics): post-ASR references — confident transcript lines query LRCLIB (hit force-aligned in a separation-free GPU pass) or the web (#262, #310)
+- feat(lyrics): non-sung speech around the song is kept as dimmed `[speech]` lines, never highlighted as singing (#283, #310)
+- feat(gpu): handler mode "lyrics" — ASR + forced alignment on an existing vocal stem (image cuda12.4-r14) (#283, #310)
+
 ## [v0.41.7] - 2026-09-28
 
 _Bump: patch_
