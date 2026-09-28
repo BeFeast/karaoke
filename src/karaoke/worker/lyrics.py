@@ -90,6 +90,14 @@ _LRC_WORD_TAG_CAP_RE = re.compile(r"<(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?>")
 _MAX_LINE_SPAN_S = 12.0
 _MIN_SPLIT_GAP_S = 1.0
 
+# Longest plausible pause between two sung words of ONE line (#281 follow-up).
+# When the vocal stem carries untranscribed voice before a line (a music-video
+# dialogue skit) the CTC aligner pins the line's leading words to that speech —
+# "תדע" at 0:05, "זה" at 0:42, "פשע" at 0:56 for a line sung at 0:56 — and the
+# player then lights words while actors talk. Such a line keeps only its
+# trailing dense cluster's start and loses its word tags.
+_MAX_INTRA_LINE_GAP_S = 4.0
+
 # Max drift (seconds) between an aligner line's start and the curated LRCLIB
 # line tag before we distrust the alignment and leave that line plain (#222).
 # A wider gap means the aligner squeezed the words somewhere they don't belong;
@@ -327,6 +335,13 @@ def repair_aligned_lrc(body: str) -> str:
             continue
         starts = [_tag_seconds(m) for m in word_tags[:-1]]
         end = _tag_seconds(word_tags[-1])
+        stretched = _stretched_line_start(starts)
+        if stretched is not None:
+            # Leading words were pinned to untranscribed voice (see
+            # _MAX_INTRA_LINE_GAP_S): keep the line at its sung start, plain.
+            text = " ".join(LRC_WORD_TAG_RE.sub(" ", rest).split())
+            out.append(f"{_fmt_lrc_timestamp(stretched)}{text}")
+            continue
         gaps = [b - a for a, b in zip(starts, starts[1:], strict=False) if b > a]
         if not gaps:
             out.append(raw)
@@ -364,6 +379,23 @@ def repair_aligned_lrc(body: str) -> str:
     if body.endswith("\n"):
         repaired += "\n"
     return repaired
+
+
+def _stretched_line_start(starts: list[float]) -> float | None:
+    """Sung start of a line whose LEADING words were pinned to earlier voice.
+
+    Fires only for the "sparse head, dense tail" shape — at least two leading
+    words each followed by a gap over ``_MAX_INTRA_LINE_GAP_S`` — and returns
+    the first word start after those gaps. A single strayed first word is the
+    absorbed-leading-silence case handled by the pull-in rule below, and a
+    dense head with a strayed tail is tail absorption, which
+    ``lyrics_quality._repair_timing`` fixes from ASR evidence; both keep their
+    tags. ``None`` when the shape does not match.
+    """
+    strayed = 0
+    while strayed + 1 < len(starts) and starts[strayed + 1] - starts[strayed] > _MAX_INTRA_LINE_GAP_S:
+        strayed += 1
+    return starts[strayed] if strayed >= 2 else None
 
 
 @dataclass(frozen=True, slots=True)

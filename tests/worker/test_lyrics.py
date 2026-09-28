@@ -1522,3 +1522,34 @@ def test_canonical_fields_are_part_of_the_cache_key():
     assert not src.fetch(artist="A", track="T", duration=100).found  # cached miss
     hit = src.fetch(artist="A", track="T", duration=100, canonical_artist="Latin", canonical_duration=100)
     assert hit.found and len(rec.calls) == 5
+
+
+# ---------------------------------------------------------------------------
+# #281 follow-up: a line whose leading words were pinned to untranscribed
+# speech (music-video skit) keeps only its sung start and loses word tags.
+# ---------------------------------------------------------------------------
+def test_repair_drops_word_tags_of_a_line_stretched_over_speech():
+    body = (
+        "[00:05.78]<00:05.78>תדע <00:42.42>זה <00:56.66>פשע <00:57.14>\n"
+        "[00:57.94]<00:57.94>מישהו <00:58.42>צריך <00:59.00>להתערב <00:59.98>\n"
+    )
+    repaired = repair_aligned_lrc(body)
+    assert repaired.splitlines()[0] == "[00:56.66]תדע זה פשע"
+    assert repaired.splitlines()[1] == "[00:57.94]<00:57.94>מישהו <00:58.42>צריך <00:59.00>להתערב <00:59.98>"
+    assert repaired.endswith("\n")
+
+
+def test_repair_keeps_the_dense_tail_when_two_leading_words_strayed():
+    body = "[00:05.00]<00:05.00>a <00:20.00>b <00:40.00>c <00:40.40>d <00:41.30>\n"
+    assert repair_aligned_lrc(body).splitlines()[0] == "[00:40.00]a b c d"
+
+
+def test_repair_single_strayed_first_word_still_uses_the_pull_in_rule():
+    body = "[00:05.00]<00:05.00>a <00:40.00>b <00:40.40>c <00:40.90>d <00:41.30>\n"
+    repaired = repair_aligned_lrc(body).splitlines()[0]
+    assert repaired.startswith("[00:39.") and "<00:40.00>b" in repaired
+
+
+def test_repair_leaves_dense_head_with_strayed_tail_to_the_asr_repair():
+    body = "[00:10.00]<00:10.00>silver <00:10.50>river <00:30.00>flows <00:45.00>away <00:45.50>\n"
+    assert "<00:30.00>flows" in repair_aligned_lrc(body)
