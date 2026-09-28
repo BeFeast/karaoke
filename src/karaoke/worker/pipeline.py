@@ -109,6 +109,14 @@ _BOT_CHECK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Media-download 403 (#279 follow-up): YouTube intermittently refuses a media
+# URL it just signed ("unable to download video data: HTTP Error 403") and the
+# same video downloads fine a moment later — 6 of ~100 downloads on
+# 2026-09-28, every manual resubmit succeeded. Retried a couple of times with
+# a short pause, independently of the bot-check backoff above.
+_MEDIA_403_RE = re.compile(r"unable to download video data: HTTP Error 403", re.IGNORECASE)
+_MEDIA_403_BACKOFF_S: tuple[float, ...] = (5.0, 20.0)
+
 # Backoff schedule (seconds) for bot-check retries. Exponential with a small,
 # bounded number of attempts so a flagged IP gets a brief cooldown without the
 # job hanging for many minutes. The download itself already has a 900s timeout
@@ -262,12 +270,25 @@ def _download_audio(source_url: str, dest: Path, settings=None, *, cookies_blob:
             "-o", str(dest),
             source_url,
         ]
-        for attempt in range(1, max_attempts + 1):
+        attempt = 0
+        media_retries = 0
+        while True:
+            attempt += 1
             try:
                 _run(cmd, timeout=900)
                 break
             except PipelineError as exc:
-                if not _is_bot_check(str(exc)) or attempt == max_attempts:
+                if _MEDIA_403_RE.search(str(exc)) and media_retries < len(_MEDIA_403_BACKOFF_S):
+                    delay = _MEDIA_403_BACKOFF_S[media_retries]
+                    media_retries += 1
+                    attempt -= 1  # not a bot-check attempt
+                    _log.warning(
+                        "yt-dlp media 403 for %s (retry %d/%d); retrying in %.0fs",
+                        source_url, media_retries, len(_MEDIA_403_BACKOFF_S), delay,
+                    )
+                    _sleep(delay)
+                    continue
+                if not _is_bot_check(str(exc)) or attempt >= max_attempts:
                     if _is_bot_check(str(exc)):
                         raise PipelineError(
                             "yt-dlp hit a YouTube bot-check and did not recover "
