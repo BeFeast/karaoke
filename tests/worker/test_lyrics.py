@@ -1593,6 +1593,8 @@ def test_offset_not_reliable_when_lines_disagree_or_too_few():
     scattered = _aligned(12, 45.0, drift={i: (i % 3) * 3.0 for i in range(12)})
     assert not lrclib_offset_is_reliable(estimate_lrclib_offset(synced, scattered), 12)
     assert not lrclib_offset_is_reliable(estimate_lrclib_offset(_synced(6), _aligned(6, 45.0)), 6)
+    # aligner kept only 18 of 34 lines (VAD veto, #253): not a skit-intro shape
+    assert not lrclib_offset_is_reliable(estimate_lrclib_offset(_synced(34), _aligned(18, 45.0)), 34)
     assert not lrclib_offset_is_reliable(estimate_lrclib_offset(synced, _aligned(12, 1.0)), 12)
     assert estimate_lrclib_offset(synced, None) is None
     assert estimate_lrclib_offset(synced, "[00:10.00]totally different\n") is None
