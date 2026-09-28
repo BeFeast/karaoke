@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "bb0b6898108c",
+  "strategy": "manual-commit",
+  "branch": "feat/281-word-vote",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/karaoke/config.py",
+    "src/karaoke/worker/pipeline.py",
+    "src/karaoke/worker/word_vote.py",
+    "tests/worker/test_pipeline_lyrics.py",
+    "tests/worker/test_word_vote.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bb/0b6898108c/0/metadata.json",
+      "transcript": "/bb/0b6898108c/0/full.jsonl",
+      "compact_transcript": "/bb/0b6898108c/0/transcript.jsonl",
+      "content_hash": "/bb/0b6898108c/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 41109,
+    "cache_read_tokens": 1592021,
+    "output_tokens": 26945,
+    "api_call_count": 5
+  }
+}
