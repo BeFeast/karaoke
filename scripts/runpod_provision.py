@@ -16,6 +16,21 @@ Reads ``RUNPOD_API_KEY`` from env (refuses if missing). On run:
 Locked params live in ``TEMPLATE_SPEC`` and ``ENDPOINT_SPEC`` below —
 DO NOT change without telling the lead (per issue #33).
 
+Live-endpoint mode (#299): when ``RUNPOD_ENDPOINT_ID`` is set, the script
+operates on THAT existing endpoint instead of steps 1–2 — the live endpoint
+(``karaoke-poc-2``) was created by hand, selects GPUs by *pool* with
+exclusions, and must not have its GPU list rewritten by a REST PATCH:
+
+1. Find or create a per-image Template ``karaoke-<tag>`` for
+   ``TEMPLATE_SPEC["imageName"]``.
+2. Make sure the endpoint's GPU pools exclude ``MIG_EXCLUSIONS`` (RunPod
+   places RTX PRO 6000 Blackwell MIG slices into the ADA_24/ADA_48_PRO pools
+   and the CUDA 12.4 image crashloops there) — GraphQL ``saveEndpoint``,
+   only when an exclusion is missing.
+3. PATCH only ``templateId``; flush workers when it changed.
+
+    RUNPOD_API_KEY=… RUNPOD_ENDPOINT_ID=… uv run python scripts/runpod_provision.py
+
 Exit codes:
     0 — endpoint created or updated; prints ``RUNPOD_ENDPOINT_ID=<id>``.
     2 — RUNPOD_API_KEY missing
@@ -50,7 +65,7 @@ TEMPLATE_NAME = "karaoke-poc-tmpl"
 # Locked per issue #33. Coordinate with the lead before changing.
 TEMPLATE_SPEC: dict[str, Any] = {
     "name": TEMPLATE_NAME,
-    "imageName": "ghcr.io/befeast/karaoke-runpod:cuda12.4-r11",
+    "imageName": "ghcr.io/befeast/karaoke-runpod:cuda12.4-r13",
     "isServerless": True,
     "containerDiskInGb": 30,
     # The handler doesn't write a workspace; tiny volume is fine, but RunPod
@@ -59,6 +74,14 @@ TEMPLATE_SPEC: dict[str, Any] = {
     "env": {},
     "ports": [],
 }
+
+GRAPHQL_URL = "https://api.runpod.io/graphql"
+# GPU types the image cannot run on (Blackwell, sm_120 — the image is CUDA
+# 12.4). RunPod files these slices under pools the live endpoint selects.
+MIG_EXCLUSIONS: tuple[str, ...] = (
+    "NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb",
+    "NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 2g.48gb",
+)
 
 # Endpoint guardrails (issue #33). templateId added at runtime.
 ENDPOINT_SPEC: dict[str, Any] = {
@@ -286,11 +309,97 @@ def _flush_workers(token: str, endpoint_id: str) -> None:
         print(f"# restored workersMax={target_max}", file=sys.stderr)
 
 
+def _graphql(token: str, query: str) -> dict[str, Any]:
+    req = urllib.request.Request(
+        f"{GRAPHQL_URL}?api_key={token}",
+        data=json.dumps({"query": query}).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            payload = json.loads(resp.read())
+    except (urllib.error.URLError, json.JSONDecodeError) as exc:
+        print(f"RunPod GraphQL error: {exc}", file=sys.stderr)
+        sys.exit(3)
+    if payload.get("errors"):
+        print(f"RunPod GraphQL errors: {payload['errors']}", file=sys.stderr)
+        sys.exit(3)
+    return payload.get("data") or {}
+
+
+_ENDPOINT_FIELDS = "id name templateId gpuIds workersMax workersMin idleTimeout scalerType scalerValue"
+
+
+def _ensure_gpu_exclusions(token: str, endpoint_id: str) -> bool:
+    """Add missing ``MIG_EXCLUSIONS`` to the endpoint's pool selection.
+    Returns True when the endpoint was changed."""
+    data = _graphql(token, f"{{ myself {{ endpoints {{ {_ENDPOINT_FIELDS} }} }} }}")
+    eps = [e for e in (data.get("myself") or {}).get("endpoints") or [] if e.get("id") == endpoint_id]
+    if not eps:
+        print(f"endpoint {endpoint_id} not found via GraphQL", file=sys.stderr)
+        sys.exit(3)
+    ep = eps[0]
+    parts = [p for p in str(ep.get("gpuIds") or "").split(",") if p]
+    missing = [g for g in MIG_EXCLUSIONS if f"-{g}" not in parts]
+    if not missing:
+        print("# GPU exclusions OK", file=sys.stderr)
+        return False
+    gpu_ids = ",".join([*parts, *(f"-{g}" for g in missing)])
+    fields = {
+        "id": ep["id"], "name": ep["name"], "templateId": ep["templateId"], "gpuIds": gpu_ids,
+        "workersMax": ep["workersMax"], "workersMin": ep["workersMin"],
+        "idleTimeout": ep["idleTimeout"], "scalerType": ep["scalerType"], "scalerValue": ep["scalerValue"],
+    }
+    body = ", ".join(f"{k}: {json.dumps(v)}" for k, v in fields.items())
+    _graphql(token, f"mutation {{ saveEndpoint(input: {{ {body} }}) {{ id gpuIds }} }}")
+    print(f"# GPU exclusions added: {missing}", file=sys.stderr)
+    return True
+
+
+def _ensure_live_template(token: str) -> str:
+    image = TEMPLATE_SPEC["imageName"]
+    name = "karaoke-" + image.rsplit(":", 1)[-1].replace("cuda12.4-", "")
+    existing = _find_by_name(token, "/templates", "templates", name)
+    if existing and existing.get("id"):
+        if str(existing.get("imageName") or "") != image:
+            _request("PATCH", f"/templates/{existing['id']}", token, {"imageName": image})
+        return str(existing["id"])
+    spec = dict(TEMPLATE_SPEC, name=name)
+    created = _request("POST", "/templates", token, spec)
+    if not isinstance(created, dict) or not created.get("id"):
+        print(f"RunPod template POST returned no id: {created!r}", file=sys.stderr)
+        sys.exit(3)
+    print(f"# template CREATED: {name} id={created['id']}", file=sys.stderr)
+    return str(created["id"])
+
+
+def main_live(token: str, endpoint_id: str) -> int:
+    template_id = _ensure_live_template(token)
+    _ensure_gpu_exclusions(token, endpoint_id)
+    current = _request("GET", f"/endpoints/{endpoint_id}", token)
+    if not isinstance(current, dict):
+        print(f"endpoint {endpoint_id} not found", file=sys.stderr)
+        return 3
+    if current.get("templateId") != template_id:
+        _request("PATCH", f"/endpoints/{endpoint_id}", token, {"templateId": template_id})
+        print(f"# endpoint repointed: {current.get('templateId')} -> {template_id}", file=sys.stderr)
+        ENDPOINT_SPEC["workersMax"] = int(current.get("workersMax") or ENDPOINT_SPEC["workersMax"])
+        _flush_workers(token, endpoint_id)
+    else:
+        print("# endpoint already on this image", file=sys.stderr)
+    print(f"RUNPOD_ENDPOINT_ID={endpoint_id}")
+    return 0
+
+
 def main() -> int:
     token = os.environ.get("RUNPOD_API_KEY", "").strip()
     if not token:
         print("RUNPOD_API_KEY env var is required", file=sys.stderr)
         return 2
+    endpoint_id = os.environ.get("RUNPOD_ENDPOINT_ID", "").strip()
+    if endpoint_id:
+        return main_live(token, endpoint_id)
 
     template_id, image_changed = _ensure_template(token)
     endpoint_id = _ensure_endpoint(token, template_id)
