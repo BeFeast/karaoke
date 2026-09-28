@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "42a112f4ab66",
+  "session_id": "ee21a9c3-68d2-4800-abcf-373f973bbb63",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-28T22:21:07.645485504Z",
+  "branch": "fix/ytdlp-403-retry",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/karaoke/worker/pipeline.py",
+    "tests/worker/test_pipeline_antibot.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "90347cc2d6a2",
+  "checkpoint_transcript_start": 1724,
+  "transcript_lines_at_start": 1724,
+  "compact_transcript_start": 303,
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 20125,
+    "cache_read_tokens": 3758268,
+    "output_tokens": 4637,
+    "api_call_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-28T22:21:07.357743587Z",
+    "agent_lines": 66,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 66,
+    "total_lines_changed": 68,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

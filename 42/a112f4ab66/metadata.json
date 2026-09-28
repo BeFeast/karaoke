@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "42a112f4ab66",
+  "strategy": "manual-commit",
+  "branch": "fix/ytdlp-403-retry",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/karaoke/worker/pipeline.py",
+    "tests/worker/test_pipeline_antibot.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/42/a112f4ab66/0/metadata.json",
+      "transcript": "/42/a112f4ab66/0/full.jsonl",
+      "compact_transcript": "/42/a112f4ab66/0/transcript.jsonl",
+      "content_hash": "/42/a112f4ab66/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 20125,
+    "cache_read_tokens": 3758268,
+    "output_tokens": 4637,
+    "api_call_count": 6
+  }
+}
