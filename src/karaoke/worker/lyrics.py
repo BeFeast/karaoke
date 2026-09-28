@@ -876,6 +876,17 @@ class LyricsSource:
             self._cache[key] = result
         return result
 
+    def get_by_id(self, record_id: int) -> LyricsResult:
+        """Fetch one LRCLIB record by its numeric id (``/api/get/<id>``).
+
+        Bench/tooling entry point (#280): bypasses the search ladder and the
+        cache so a known record can be pulled deterministically.
+        """
+        status, body = self._http("GET", f"{self._base}/api/get/{int(record_id)}", None)
+        if status != 200 or not isinstance(body, dict):
+            return LyricsResult(source="none")
+        return _from_record(body, "lrclib_get")
+
     # -- internals ----------------------------------------------------------
     def _lookup(
         self,

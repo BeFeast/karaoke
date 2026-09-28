@@ -1366,3 +1366,19 @@ def test_aligned_text_agreement_counts_only_single_tag_nonempty_curated_lines():
 @pytest.mark.parametrize("aligned", [None, "", "  \n"])
 def test_aligned_text_agreement_without_alignment(aligned):
     assert aligned_text_agreement("[00:01.00]words", aligned) == (0, 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# get_by_id (#280 bench tooling): direct record fetch, no ladder, no cache
+# ---------------------------------------------------------------------------
+def test_get_by_id_fetches_record_directly():
+    rec = _Recorder([
+        {"expect_in": "/api/get/38711481", "code": 200,
+         "body": {"syncedLyrics": SYNCED_BODY, "plainLyrics": PLAIN_BODY}},
+        {"expect_in": "/api/get/1", "code": 404, "body": {"message": "not found"}},
+    ])
+    src = LyricsSource(http=rec)
+    hit = src.get_by_id(38711481)
+    assert hit.found and hit.synced_lrc == SYNCED_BODY and hit.source == "lrclib_get"
+    assert not src.get_by_id(1).found
+    assert [c[2] for c in rec.calls] == [None, None]

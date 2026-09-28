@@ -59,3 +59,9 @@ jobs/
 *.webm
 # ...except committed test fixtures (tiny generated tone, #172)
 !tests/fixtures/*.mp3
+
+# Lyrics benchmark (#280): song *metadata* is committed in bench/songs.json;
+# reference texts, live job mappings and score outputs stay local.
+bench/refs/
+bench/out/
+bench/jobs.json
