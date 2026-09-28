@@ -254,7 +254,7 @@ def test_transcribe_passes_music_tuned_kwargs(monkeypatch, tmp_path):
     """#218: repetition-collapse fix + music-tuned VAD / hallucination guards
     are passed through to faster-whisper, and auto language detection is kept."""
     fake = _RecordingWhisper()
-    monkeypatch.setattr(handler, "_get_whisper", lambda: fake)
+    monkeypatch.setattr(handler, "_get_whisper", lambda *a, **k: fake)
     wav = tmp_path / "vocals.wav"
     wav.write_bytes(b"\x00")
 
@@ -278,11 +278,13 @@ def test_transcribe_passes_music_tuned_kwargs(monkeypatch, tmp_path):
     assert kwargs["no_speech_threshold"] == 0.6
     assert kwargs["hallucination_silence_threshold"] == 2.0
     # no hint → language=None keeps auto-detect, hardened over several
-    # windows so one anglophone adlib can't lock the whole file (#260) —
-    # and no detection probe runs.
+    # windows so one anglophone adlib can't lock the whole file (#260). The
+    # probe now always runs (#282: it decides the model), but its low
+    # confidence here (en @ 0.3) leaves the language open.
     assert kwargs["language"] is None
     assert kwargs["language_detection_segments"] == 4
-    assert fake.detect_calls == []
+    assert len(fake.detect_calls) == 1
+    assert lyrics_json["model"] == handler._WHISPER_MODEL_NAME
     # sane output shape passes through.
     assert lyrics_txt == "hello"
     assert lyrics_json["language"] == "ru"
@@ -294,7 +296,7 @@ def test_transcribe_hint_wins_on_low_confidence_detection(monkeypatch, tmp_path)
     ``en`` at p<0.6), the hint decides — the fix for a Hebrew stem decoded as
     transliterated-Latin gibberish."""
     fake = _RecordingWhisper(detect=("en", 0.456))
-    monkeypatch.setattr(handler, "_get_whisper", lambda: fake)
+    monkeypatch.setattr(handler, "_get_whisper", lambda *a, **k: fake)
     wav = tmp_path / "vocals.wav"
     wav.write_bytes(b"\x00")
 
@@ -313,7 +315,7 @@ def test_transcribe_confident_detection_overrides_hint(monkeypatch, tmp_path):
     upload (native-script title over foreign audio) must not be forced into
     the title's language when the audio clearly says otherwise."""
     fake = _RecordingWhisper(detect=("en", 0.92))
-    monkeypatch.setattr(handler, "_get_whisper", lambda: fake)
+    monkeypatch.setattr(handler, "_get_whisper", lambda *a, **k: fake)
     wav = tmp_path / "vocals.wav"
     wav.write_bytes(b"\x00")
 
@@ -326,7 +328,7 @@ def test_transcribe_confident_detection_overrides_hint(monkeypatch, tmp_path):
 def test_transcribe_probe_failure_keeps_hint(monkeypatch, tmp_path):
     """The detection probe is best-effort — an error keeps the hint."""
     fake = _RecordingWhisper(detect=RuntimeError("no cuda"))
-    monkeypatch.setattr(handler, "_get_whisper", lambda: fake)
+    monkeypatch.setattr(handler, "_get_whisper", lambda *a, **k: fake)
     wav = tmp_path / "vocals.wav"
     wav.write_bytes(b"\x00")
 
@@ -438,6 +440,13 @@ def _selfcheck_env(tmp_path, monkeypatch, *, sep_bytes=64, whisper_bytes=64, ali
     )
     whisper_bin.parent.mkdir(parents=True)
     whisper_bin.write_bytes(b"\x00" * whisper_bytes)
+    # The Hebrew fine-tune (#282) is baked next to it and checked separately.
+    hebrew_bin = (
+        hub / ("models--" + handler._HEBREW_WHISPER_MODEL_NAME.replace("/", "--"))
+        / "snapshots" / "heb" / "model.bin"
+    )
+    hebrew_bin.parent.mkdir(parents=True)
+    hebrew_bin.write_bytes(b"\x00" * whisper_bytes)
 
     align_repo = "models--" + handler._ALIGN_MODEL_ID.replace("/", "--")
     align_weights = hub / align_repo / "snapshots" / "def" / "model.safetensors"
@@ -541,7 +550,7 @@ def _crop_transcript(text="missing0 words", times=((2.75, 3.25), (3.75, 4.25)), 
 def test_retry_uses_independent_crop_words_with_absolute_offsets(monkeypatch):
     diagnostics, transcript = _retry_fixture()
     calls = []
-    def crop(path, start, end, language, deadline):
+    def crop(path, start, end, language, deadline, model_name=None):
         calls.append((start, end, language))
         return _crop_transcript()
     monkeypatch.setattr(handler, "_transcribe_crop", crop)
@@ -571,7 +580,7 @@ def test_retry_does_not_resurrect_uncorroborated_text(monkeypatch, variant):
         crop = _crop_transcript(times=((1.25, 1.25), (2.25, 2.75)))
     else:
         crop["segments"][0]["no_speech_prob"] = 0.9
-    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: crop)
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args, **kw: crop)
     monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
     result = handler._retry_problem_lines(
         Path("vocals.wav"), diagnostics, transcript, "original", [-0.2], deadline=60,
@@ -589,7 +598,7 @@ def test_retry_does_not_resurrect_uncorroborated_text(monkeypatch, variant):
 def test_retry_crop_audio_and_count_caps(monkeypatch, gaps, gap_seconds, expected_calls):
     diagnostics, transcript = _retry_fixture(gaps, gap_seconds)
     calls = []
-    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: calls.append(args) or {"segments": []})
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args, **kw: calls.append(args) or {"segments": []})
     monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
     handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
     assert len(calls) == expected_calls
@@ -602,7 +611,7 @@ def test_retry_one_anchor_requires_known_audio_duration(monkeypatch):
     diagnostics, transcript = _retry_fixture()
     transcript["segments"].pop()  # no corroboration for right anchor
     transcript.pop("duration")
-    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: pytest.fail("must not crop"))
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args, **kw: pytest.fail("must not crop"))
     result = handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
     assert result == ("original", [])
     assert diagnostics["retries"][0]["reason"] == "audio_duration_unavailable_for_edge"
@@ -610,7 +619,7 @@ def test_retry_one_anchor_requires_known_audio_duration(monkeypatch):
 
 def test_retry_failure_and_exhausted_deadline_preserve_baseline(monkeypatch):
     diagnostics, transcript = _retry_fixture()
-    def fail(*args):
+    def fail(*args, **kw):
         raise RuntimeError("test failure")
     monkeypatch.setattr(handler, "_transcribe_crop", fail)
     monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
@@ -618,7 +627,7 @@ def test_retry_failure_and_exhausted_deadline_preserve_baseline(monkeypatch):
     assert diagnostics["retries"][0]["outcome"] == "failed"
     assert diagnostics["retries"][0]["reason"] == "RuntimeError"
     diagnostics["retries"] = []
-    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: pytest.fail("expired"))
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args, **kw: pytest.fail("expired"))
     handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=5)
     assert diagnostics["retries"][0]["reason"] == "retry_time_budget_exhausted"
 
@@ -637,7 +646,7 @@ def test_suspicious_kept_timing_is_evidence_and_retry_candidate(monkeypatch):
 
 def test_transcribe_crop_disables_vad_without_lyric_prompt(monkeypatch, tmp_path):
     model = _RecordingWhisper()
-    monkeypatch.setattr(handler, "_get_whisper", lambda: model)
+    monkeypatch.setattr(handler, "_get_whisper", lambda *a, **k: model)
     handler._transcribe(tmp_path / "crop.wav", vad_filter=False)
     assert model.calls[0][1]["vad_filter"] is False
     assert "initial_prompt" not in model.calls[0][1]
@@ -681,7 +690,7 @@ def test_retry_does_not_splice_across_unsafe_asr_segment(monkeypatch):
     last["words"] = last["words"][1:]
     unsafe = {"avg_logprob": -5, "no_speech_prob": 0.9,
               "words": [{"word": "intervening", "start": 1.8, "end": 2, "probability": 0.9}]}
-    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: {"segments": [first, unsafe, last]})
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args, **kw: {"segments": [first, unsafe, last]})
     monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
     result = handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
     assert result == ("original", [])
@@ -693,7 +702,7 @@ def test_retry_cannot_reuse_one_decoded_repeat_for_two_source_lines(monkeypatch)
     duplicate = dict(diagnostics["lines"][1], line_index=2)
     diagnostics["lines"].insert(2, duplicate)
     diagnostics["lines"][-1]["line_index"] = 3
-    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: _crop_transcript())
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args, **kw: _crop_transcript())
     monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
     lrc, _ = handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
     assert lrc.count("missing0") == 1
@@ -711,7 +720,7 @@ def test_successful_retry_preserves_extra_crop_words_for_quality_audit(monkeypat
     segment["start"], segment["end"] = 2.0, 5.5
     segment["words"].insert(0, dict(word="unheard", start=2.0, end=2.4, probability=0.99))
     segment["words"].append(dict(word="adlib", start=5.0, end=5.5, probability=0.99))
-    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: crop)
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args, **kw: crop)
     monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
     lrc, _ = handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
     retry = diagnostics["retries"][0]
@@ -733,7 +742,7 @@ def test_rejected_retry_still_preserves_conflicting_crop_evidence(monkeypatch):
 
     diagnostics, transcript = _retry_fixture()
     crop = _crop_transcript("different words")
-    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: crop)
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args, **kw: crop)
     monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
     result = handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
     assert result == ("original", [])
@@ -759,7 +768,7 @@ def test_full_asr_recovery_keeps_exact_evidence_and_unsafe_barriers(monkeypatch,
     else:
         transcript["segments"].insert(1, segment)
     calls = []
-    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: calls.append(args) or {"segments": []})
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args, **kw: calls.append(args) or {"segments": []})
     monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
     lrc, _ = handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
     retry = diagnostics["retries"][0]
@@ -782,7 +791,7 @@ def test_context_windows_share_one_decode_for_adjacent_lines(monkeypatch):
     diagnostics["lines"].insert(2, second)
     diagnostics["lines"][-1]["line_index"] = 3
     calls = []
-    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: calls.append(args) or {"segments": []})
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args, **kw: calls.append(args) or {"segments": []})
     monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
     handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
     assert len(calls) == 1
@@ -801,7 +810,7 @@ def test_known_audio_boundary_allows_edge_retry(monkeypatch, edge):
         diagnostics["lines"].pop()
         transcript["segments"].pop()
     calls = []
-    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: calls.append(args) or {"segments": []})
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args, **kw: calls.append(args) or {"segments": []})
     monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
     handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
     assert len(calls) == 1
@@ -816,7 +825,7 @@ def test_missing_text_priority_and_resource_exhaustion_are_explicit(monkeypatch)
     # Earlier mildly suspicious kept text must not starve a missing later line.
     diagnostics["lines"][1].update(kept=True, timing_issues=["relative_score_outlier"], score=-.8)
     calls = []
-    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: calls.append(args) or {"segments": []})
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args, **kw: calls.append(args) or {"segments": []})
     monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
     handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
     assert calls[0][1] > diagnostics["lines"][1]["end"]
@@ -842,7 +851,7 @@ def test_context_window_does_not_absorb_remote_instrumental_gap():
 def test_confidence_backoff_runs_after_primary_and_preserves_attempt_evidence(monkeypatch):
     diagnostics, transcript = _retry_fixture(gaps=2)
     calls = []
-    def crop(path, start, end, language, deadline):
+    def crop(path, start, end, language, deadline, model_name=None):
         calls.append((start, end))
         if len(calls) == 2:
             return _crop_transcript("different words")  # never lexical fishing
@@ -868,7 +877,7 @@ def test_confidence_backoff_runs_after_primary_and_preserves_attempt_evidence(mo
 def test_backoff_never_splices_or_repeats_after_second_failure(monkeypatch, failure):
     diagnostics, transcript = _retry_fixture()
     calls = []
-    def crop(path, start, end, language, deadline):
+    def crop(path, start, end, language, deadline, model_name=None):
         calls.append((start, end))
         if len(calls) == 1 or failure == "confidence":
             return _crop_transcript(probability=.2)
@@ -893,7 +902,7 @@ def test_backoff_respects_remaining_shared_resources(monkeypatch, budget):
     diagnostics, transcript = _retry_fixture()
     calls = []
     now = [0]
-    def crop(*args):
+    def crop(*args, **kw):
         calls.append(args)
         if budget == "time":
             now[0] = 51
@@ -923,7 +932,7 @@ def test_backoff_is_not_lexical_or_timestamp_fishing(monkeypatch, kind):
     else:
         crop["segments"][0]["words"][0]["probability"] = -1
     calls = []
-    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args: calls.append(args) or crop)
+    monkeypatch.setattr(handler, "_transcribe_crop", lambda *args, **kw: calls.append(args) or crop)
     monkeypatch.setattr(handler.time, "monotonic", lambda: 0)
     handler._retry_problem_lines(Path("v.wav"), diagnostics, transcript, "original", [], deadline=60)
     assert len(calls) == 1
@@ -942,7 +951,7 @@ def test_shared_alternate_cannot_reuse_one_occurrence_for_repeated_rows(monkeypa
     diagnostics["lines"].insert(2, dict(diagnostics["lines"][1], line_index=2))
     diagnostics["lines"][-1]["line_index"] = 3
     calls = []
-    def crop(*args):
+    def crop(*args, **kw):
         calls.append(args)
         return _crop_transcript(probability=.2 if len(calls) == 1 else .95)
     monkeypatch.setattr(handler, "_transcribe_crop", crop)
@@ -954,3 +963,94 @@ def test_shared_alternate_cannot_reuse_one_occurrence_for_repeated_rows(monkeypa
     assert first["outcome"] == "accepted"
     assert second["reason"] == "retry_word_span_already_used"
     assert first["attempt_id"] == second["attempt_id"] == "crop-1"
+
+
+# ---------------------------------------------------------------------------
+# #282 (r11): Hebrew stems transcribe on the ivrit-ai fine-tune; the language
+# probe stays on vanilla; retry crops reuse the full pass's model.
+# ---------------------------------------------------------------------------
+class _Seg:
+    def __init__(self, start, end, text):
+        self.start, self.end, self.text = start, end, text
+        self.avg_logprob, self.no_speech_prob, self.words = -0.2, 0.1, []
+
+
+class _Info:
+    def __init__(self, language):
+        self.language, self.language_probability, self.duration = language, 0.9, 10.0
+
+
+class _FakeWhisper:
+    def __init__(self, name, detected, prob):
+        self.name, self.detected, self.prob = name, detected, prob
+        self.transcribe_calls = []
+
+    def detect_language(self, path, **kw):
+        return self.detected, self.prob, []
+
+    def transcribe(self, path, **kw):
+        self.transcribe_calls.append(kw)
+        return iter([_Seg(0.0, 1.0, f"from {self.name}")]), _Info(kw.get("language") or self.detected)
+
+
+def _fake_models(monkeypatch, handler, detected, prob):
+    models = {"vanilla": _FakeWhisper("vanilla", detected, prob), "ivrit": _FakeWhisper("ivrit", "en", 0.99)}
+    by_name = {handler._WHISPER_MODEL_NAME: models["vanilla"], handler._HEBREW_WHISPER_MODEL_NAME: models["ivrit"]}
+    monkeypatch.setattr(handler, "_get_whisper", lambda name=handler._WHISPER_MODEL_NAME: by_name[name])
+    return models
+
+
+def test_hebrew_detection_routes_transcription_to_ivrit(monkeypatch, tmp_path):
+    handler = _load_handler()
+    models = _fake_models(monkeypatch, handler, "he", 0.95)
+    txt, js = handler._transcribe(tmp_path / "v.wav", language=None)
+    assert txt == "from ivrit"
+    assert js["model"] == handler._HEBREW_WHISPER_MODEL_NAME
+    assert js["language_detected"] == "he" and js["language_detected_probability"] == 0.95
+    assert models["ivrit"].transcribe_calls[0]["language"] == "he"  # ivrit's own LID is never used
+    assert models["vanilla"].transcribe_calls == []
+
+
+def test_hebrew_hint_with_weak_detection_still_routes_to_ivrit(monkeypatch, tmp_path):
+    handler = _load_handler()
+    models = _fake_models(monkeypatch, handler, "en", 0.4)  # anglophone adlib, low confidence
+    _, js = handler._transcribe(tmp_path / "v.wav", language="he")
+    assert js["model"] == handler._HEBREW_WHISPER_MODEL_NAME
+    assert models["ivrit"].transcribe_calls[0]["language"] == "he"
+
+
+def test_confident_non_hebrew_detection_overrides_hebrew_hint(monkeypatch, tmp_path):
+    handler = _load_handler()
+    models = _fake_models(monkeypatch, handler, "en", 0.9)
+    txt, js = handler._transcribe(tmp_path / "v.wav", language="he")
+    assert txt == "from vanilla" and js["model"] == handler._WHISPER_MODEL_NAME
+    assert models["vanilla"].transcribe_calls[0]["language"] == "en"
+
+
+def test_forced_model_skips_the_probe(monkeypatch, tmp_path):
+    handler = _load_handler()
+    models = _fake_models(monkeypatch, handler, "en", 0.99)  # a crop that would misdetect
+    _, js = handler._transcribe(
+        tmp_path / "v.wav", language="he", model_name=handler._HEBREW_WHISPER_MODEL_NAME
+    )
+    assert js["model"] == handler._HEBREW_WHISPER_MODEL_NAME and js["language_detected"] is None
+    assert models["ivrit"].transcribe_calls[0]["language"] == "he"
+
+
+def test_selfcheck_whisper_dirs_end_with_the_hebrew_model(monkeypatch, tmp_path):
+    handler = _load_handler()
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    (tmp_path / "hub" / "models--Systran--faster-whisper-large-v3-turbo").mkdir(parents=True)
+    dirs = handler._selfcheck_whisper_dirs()
+    assert dirs[-1] == tmp_path / "hub" / "models--ivrit-ai--whisper-large-v3-turbo-ct2"
+    assert dirs[0].name == "models--Systran--faster-whisper-large-v3-turbo"
+
+
+def test_selfcheck_fails_on_missing_hebrew_whisper_model(tmp_path, monkeypatch, capsys):
+    _selfcheck_env(tmp_path, monkeypatch)
+    hebrew_dir = (tmp_path / "hf" / "hub"
+                  / ("models--" + handler._HEBREW_WHISPER_MODEL_NAME.replace("/", "--")))
+    import shutil
+    shutil.rmtree(hebrew_dir)
+    assert handler._selfcheck() == 1
+    assert "hebrew whisper model.bin: not found" in capsys.readouterr().out

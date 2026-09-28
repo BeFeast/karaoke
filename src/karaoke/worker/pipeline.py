@@ -1277,6 +1277,10 @@ async def run_real_job(
             metadata["whisper_language"] = whisper_language[0]
             if whisper_language[1] is not None:
                 metadata["whisper_language_probability"] = whisper_language[1]
+        # Which Whisper model transcribed (#282, r11+ images write it).
+        whisper_model = (_read_json_object(gpu.lyrics_json_path) or {}).get("model")
+        if isinstance(whisper_model, str) and whisper_model:
+            metadata["whisper_model"] = whisper_model
         # Why an LRCLIB record was dropped (duration hard-reject, #148) — only
         # present when it happened, so normal jobs keep a stable metadata shape.
         if lyrics_prov.get("lyrics_lrclib_rejected"):

@@ -124,6 +124,15 @@ from faster_whisper import WhisperModel
 WhisperModel("large-v3-turbo", device="cpu", compute_type="int8")
 PY
 
+# Pre-cache the Hebrew fine-tune (#282, r11): ivrit-ai's large-v3-turbo CT2
+# export (~1.6 GB). The handler routes Hebrew stems to it; the language probe
+# stays on the vanilla model. Same CPU+int8 download-only init.
+RUN /opt/karaoke-venv/bin/python - <<'PY'
+from faster_whisper import WhisperModel
+WhisperModel("ivrit-ai/whisper-large-v3-turbo-ct2", device="cpu", compute_type="int8")
+print("ivrit-ai/whisper-large-v3-turbo-ct2 cached")
+PY
+
 # Pre-cache the ctc-forced-aligner MMS-300m model + tokenizer (#55) so
 # cold-start does not pay a model-download cost. CPU load only downloads
 # weights; runtime uses GPU+float16 when available.

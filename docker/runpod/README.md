@@ -167,3 +167,15 @@ or pass smaller `mdxc`/`roformer` segment params to the `Separator` in
   large-v3-turbo pre-cache so cold-start does not re-download weights.
   (`docker/vast/` still runs Demucs htdemucs; the BS-Roformer swap is
   RunPod-only for now.)
+
+
+## r11 — Hebrew fine-tune (#282)
+
+`cuda12.4-r11` bakes a second faster-whisper model, `ivrit-ai/whisper-large-v3-turbo-ct2`
+(~1.6 GB, Apache-2.0), next to vanilla `large-v3-turbo`. The language probe
+(`detect_language`, 4 windows) always runs on vanilla; when the resolved language
+is Hebrew the transcription — and every retry crop of that job — runs on the
+fine-tune with `language="he"` pinned (its own language ID is unreliable).
+`lyrics.json` gains `model`, `language_detected`, `language_detected_probability`.
+The CPU selfcheck requires both `model.bin` files. Older images ignore nothing new:
+the handler contract is unchanged.

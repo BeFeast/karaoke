@@ -83,10 +83,19 @@ logging.basicConfig(
 # Single global lock — one job at a time on a single-GPU worker.
 _GPU_LOCK = threading.Lock()
 
-# Lazy-loaded faster-whisper model; mirrors server.py's _get_whisper pattern.
-_WHISPER_MODEL: Any = None
+# Lazy-loaded faster-whisper models; mirrors server.py's _get_whisper pattern.
+# One entry per model name — the vanilla large-v3-turbo always, plus the
+# Hebrew fine-tune (#282) once a Hebrew stem shows up on this worker.
+_WHISPER_MODELS: dict[str, Any] = {}
 _WHISPER_LOCK = threading.Lock()
 _WHISPER_MODEL_NAME = "large-v3-turbo"
+# ivrit-ai's fine-tune of the same architecture, CT2 export (Apache-2.0).
+# On the epic's Hebrew example (#279) it halved WER (.455 → .234) and CER
+# (.268 → .100) on the vocal stem and recovered a verse vanilla dropped
+# entirely. Its own language ID is unreliable, so vanilla decides the
+# language and ivrit is only ever asked to transcribe with ``language="he"``.
+_HEBREW_WHISPER_MODEL_NAME = "ivrit-ai/whisper-large-v3-turbo-ct2"
+_HEBREW_LANGS = frozenset({"he"})
 
 # Lazy-loaded audio-separator BS-Roformer model. Same lazy-load shape as the
 # Whisper model so the (large) separation weights only load when a job actually
@@ -144,27 +153,32 @@ def _gpu_model_name() -> str:
     return "cpu"
 
 
-def _get_whisper():
-    """Lazy-load the faster-whisper large-v3-turbo model on the GPU."""
-    global _WHISPER_MODEL
-    if _WHISPER_MODEL is not None:
-        return _WHISPER_MODEL
+def _get_whisper(model_name: str = _WHISPER_MODEL_NAME):
+    """Lazy-load a faster-whisper model on the GPU (once per model name)."""
+    model = _WHISPER_MODELS.get(model_name)
+    if model is not None:
+        return model
     with _WHISPER_LOCK:
-        if _WHISPER_MODEL is None:
+        model = _WHISPER_MODELS.get(model_name)
+        if model is None:
             from faster_whisper import WhisperModel  # type: ignore
 
             device = "cuda" if _gpu_available() else "cpu"
             compute_type = "float16" if device == "cuda" else "int8"
             LOG.info(
                 "loading faster-whisper %s on %s/%s",
-                _WHISPER_MODEL_NAME,
+                model_name,
                 device,
                 compute_type,
             )
-            _WHISPER_MODEL = WhisperModel(
-                _WHISPER_MODEL_NAME, device=device, compute_type=compute_type
-            )
-    return _WHISPER_MODEL
+            model = WhisperModel(model_name, device=device, compute_type=compute_type)
+            _WHISPER_MODELS[model_name] = model
+    return model
+
+
+def _whisper_model_for(language: str | None) -> str:
+    """Model name to transcribe ``language`` with (#282)."""
+    return _HEBREW_WHISPER_MODEL_NAME if language in _HEBREW_LANGS else _WHISPER_MODEL_NAME
 
 
 def _get_separator():
@@ -265,7 +279,7 @@ _LANG_DETECT_TRUST_P = 0.6
 
 def _transcribe(
     wav_path: Path, language: str | None = None, *, vad_filter: bool = True,
-    deadline: float | None = None,
+    deadline: float | None = None, model_name: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Run faster-whisper on `wav_path`. Returns (lyrics_txt, lyrics_json).
 
@@ -301,9 +315,16 @@ def _transcribe(
     ``language_detection_segments=4`` averages detection over several windows
     so one anglophone intro can no longer lock the file (the earlier ``ru``
     p=0.86 evidence job stays correct either way).
+
+    Model routing (#282, r11): the language probe always runs on the vanilla
+    model; when the resolved language is Hebrew the transcription itself runs
+    on the ivrit-ai fine-tune (``_HEBREW_WHISPER_MODEL_NAME``) with the
+    language pinned. ``model_name`` forces a model (retry crops reuse the
+    full pass's choice instead of re-probing a few seconds of audio).
     """
     model = _get_whisper()
-    if language:
+    detected, prob = None, 0.0
+    if model_name is None:
         try:
             detected, prob, _ = model.detect_language(
                 str(wav_path),
@@ -314,6 +335,10 @@ def _transcribe(
             detected, prob = None, 0.0
         if detected and prob >= _LANG_DETECT_TRUST_P:
             language = detected
+        model_name = _whisper_model_for(language)
+    if model_name != _WHISPER_MODEL_NAME:
+        model = _get_whisper(model_name)
+        language = language or "he"
     segments_iter, info = model.transcribe(
         str(wav_path),
         language=language,
@@ -361,6 +386,9 @@ def _transcribe(
         "language": info.language,
         "language_probability": info.language_probability,
         "duration": info.duration,
+        "model": model_name,
+        "language_detected": detected,
+        "language_detected_probability": prob,
         "segments": segments,
     }
     lyrics_txt = "\n".join(line for line in text_lines if line)
@@ -788,6 +816,7 @@ def _corroborated_anchor(row: dict[str, Any], words: list[dict[str, Any]]) -> tu
 
 def _transcribe_crop(
     vocals_wav: Path, start: float, end: float, language: str | None, deadline: float,
+    model_name: str | None = None,
 ) -> dict[str, Any]:
     """Decode one vocal crop without VAD or a supplied lyric prompt.
 
@@ -805,7 +834,9 @@ def _transcribe_crop(
         )
         if time.monotonic() >= deadline:
             raise TimeoutError("crop extraction exhausted retry deadline")
-        _, transcript = _transcribe(crop, language, vad_filter=False, deadline=deadline)
+        _, transcript = _transcribe(
+            crop, language, vad_filter=False, deadline=deadline, model_name=model_name,
+        )
         return transcript
 
 
@@ -1052,7 +1083,8 @@ def _retry_problem_lines(
         confidence_failures = []
         try:
             crop_asr = _transcribe_crop(vocals_wav, start, end,
-                                        transcript.get("language"), deadline)
+                                        transcript.get("language"), deadline,
+                                        model_name=transcript.get("model"))
             safe_segments = [seg if _trusted_asr_segment(seg)
                              else {"words": [{"word": "__untrusted_segment__"}]}
                              for seg in crop_asr.get("segments", [])]
@@ -1324,12 +1356,12 @@ def _hf_repo_dir(repo_id: str) -> Path:
 
 
 def _selfcheck_whisper_dirs() -> list[Path]:
-    """HF cache dirs that may hold the baked faster-whisper model.
+    """HF cache dirs that hold the baked faster-whisper models (#282: the
+    vanilla large-v3-turbo AND the Hebrew fine-tune).
 
     Prefer the exact repo faster-whisper resolves ``_WHISPER_MODEL_NAME`` to
     (private mapping — best-effort); fall back to globbing the hub for any
-    ``*whisper*`` model dir, which is unambiguous inside the image (exactly one
-    whisper model is baked).
+    ``*whisper*`` model dir other than the Hebrew one.
     """
     try:
         from faster_whisper.utils import _MODELS  # type: ignore
@@ -1337,9 +1369,11 @@ def _selfcheck_whisper_dirs() -> list[Path]:
         repo = _MODELS.get(_WHISPER_MODEL_NAME)
     except Exception:
         repo = None
+    hebrew = _hf_repo_dir(_HEBREW_WHISPER_MODEL_NAME)
     if repo:
-        return [_hf_repo_dir(repo)]
-    return sorted(_hf_hub_dir().glob("models--*whisper*"))
+        return [_hf_repo_dir(repo), hebrew]
+    vanilla = [d for d in sorted(_hf_hub_dir().glob("models--*whisper*")) if d != hebrew]
+    return [*vanilla, hebrew]
 
 
 def _size_or_zero(path: Path) -> int:
@@ -1392,18 +1426,27 @@ def _selfcheck() -> int:
         failures,
     )
 
-    # faster-whisper model weights in the HF hub cache.
+    # faster-whisper model weights in the HF hub cache — every baked model
+    # (vanilla + Hebrew, #282) must be present and plausibly sized.
     whisper_dirs = _selfcheck_whisper_dirs()
-    whisper_bins = [p for d in whisper_dirs for p in sorted(d.rglob("model.bin"))]
-    if not whisper_bins:
+    vanilla_bins = [p for d in whisper_dirs[:-1] for p in sorted(d.rglob("model.bin"))]
+    if not vanilla_bins:
         failures.append(
             "whisper model.bin: not found under "
-            f"{[str(d) for d in whisper_dirs] or [str(_hf_hub_dir())]}"
+            f"{[str(d) for d in whisper_dirs[:-1]] or [str(_hf_hub_dir())]}"
         )
     else:
-        best = max(whisper_bins, key=_size_or_zero)
+        best = max(vanilla_bins, key=_size_or_zero)
         _selfcheck_file(
             "whisper model.bin", best, _SELFCHECK_MIN_WHISPER_BYTES, failures
+        )
+    hebrew_bins = sorted(whisper_dirs[-1].rglob("model.bin"))
+    if not hebrew_bins:
+        failures.append(f"hebrew whisper model.bin: not found under {whisper_dirs[-1]}")
+    else:
+        _selfcheck_file(
+            "hebrew whisper model.bin", max(hebrew_bins, key=_size_or_zero),
+            _SELFCHECK_MIN_WHISPER_BYTES, failures,
         )
 
     # ctc-forced-aligner MMS-300m weights in the HF hub cache.
