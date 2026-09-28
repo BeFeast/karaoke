@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.42.2] - 2026-09-28
+
+_Bump: patch_
+
+- fix(lyrics): equal-title LRCLIB records rank the right artist first; the cleanup title segment skips noise and artist names; stricter tab4u title evidence (#283)
+
 ## [v0.42.1] - 2026-09-28
 
 _Bump: patch_
