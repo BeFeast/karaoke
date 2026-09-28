@@ -61,6 +61,7 @@ from karaoke.worker.lyrics import (
     aligned_text_agreement,
     drop_unreliable_aligned_lines,
     estimate_lrclib_offset,
+    is_degenerate_segment_text,
     lrc_to_plain,
     lrclib_offset_is_reliable,
     merge_lrclib_word_tags,
@@ -806,8 +807,22 @@ def _select_lyrics(
     # job's segment timestamps are usable, also emit an approximate LRC so the
     # floor still gets synced highlight (#145). Tolerant: a missing/unreadable
     # lyrics.json or one that yields no timed lines degrades to untimed ASR.
-    lyrics_txt.write_bytes(whisper_lyrics_txt.read_bytes())
-    asr_lrc = whisper_segments_to_lrc(_read_whisper_segments(whisper_lyrics_json))
+    asr_segments = _read_whisper_segments(whisper_lyrics_json)
+    kept = [
+        seg for seg in asr_segments or []
+        if isinstance(seg, dict) and not is_degenerate_segment_text(seg.get("text"))
+    ]
+    if asr_segments and len(kept) < len(asr_segments):
+        # Hallucinated repetition loops are dropped from the floor's plain text
+        # too (the GPU txt mirrors the raw segments); older images need this
+        # guard on the coordinator side.
+        lyrics_txt.write_text(
+            "\n".join(str(seg.get("text") or "").strip() for seg in kept if str(seg.get("text") or "").strip()),
+            encoding="utf-8",
+        )
+    else:
+        lyrics_txt.write_bytes(whisper_lyrics_txt.read_bytes())
+    asr_lrc = whisper_segments_to_lrc(asr_segments)
     if asr_lrc:
         lyrics_lrc.write_text(asr_lrc, encoding="utf-8")
         prov = {
@@ -1277,6 +1292,10 @@ async def run_real_job(
             metadata["whisper_language"] = whisper_language[0]
             if whisper_language[1] is not None:
                 metadata["whisper_language_probability"] = whisper_language[1]
+        # Which Whisper model transcribed (#282, r11+ images write it).
+        whisper_model = (_read_json_object(gpu.lyrics_json_path) or {}).get("model")
+        if isinstance(whisper_model, str) and whisper_model:
+            metadata["whisper_model"] = whisper_model
         # Why an LRCLIB record was dropped (duration hard-reject, #148) — only
         # present when it happened, so normal jobs keep a stable metadata shape.
         if lyrics_prov.get("lyrics_lrclib_rejected"):

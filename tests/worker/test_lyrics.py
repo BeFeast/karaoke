@@ -1604,3 +1604,26 @@ def test_shift_lrc_moves_all_tags_and_keeps_text():
     body = "[ar:x]\n[00:10.38]<00:10.38>a <00:10.90>b <00:11.20>\n[00:12.49]c\n"
     assert shift_lrc(body, 45.4) == "[ar:x]\n[00:55.78]<00:55.78>a <00:56.30>b <00:56.60>\n[00:57.89]c\n"
     assert shift_lrc("[00:01.00]x", -5.0) == "[00:00.00]x"
+
+
+# ---------------------------------------------------------------------------
+# ASR hallucination guard (#282 follow-up): repetition-loop segments are not lyrics
+# ---------------------------------------------------------------------------
+from karaoke.worker.lyrics import is_degenerate_segment_text  # noqa: E402
+
+
+def test_degenerate_segment_predicate():
+    assert is_degenerate_segment_text("נא " * 111)
+    assert is_degenerate_segment_text("na, na, na, na, na, na, na, na!")
+    assert not is_degenerate_segment_text("נא נא נא")
+    assert not is_degenerate_segment_text("ממעמקים קראתי אלייך בואי אליי בשובך יחזור שוב האור")
+    assert not is_degenerate_segment_text(None)
+
+
+def test_whisper_segments_to_lrc_skips_degenerate_segments():
+    segments = [
+        {"start": 10.0, "end": 40.0, "text": "נא " * 111},
+        {"start": 50.0, "end": 54.0, "text": "ממעמקים קראתי אלייך"},
+    ]
+    lrc = whisper_segments_to_lrc(segments)
+    assert "נא נא" not in lrc and "ממעמקים" in lrc

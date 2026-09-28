@@ -1436,3 +1436,21 @@ def test_select_lyrics_without_reliable_offset_keeps_previous_behaviour(tmp_path
     )
     assert "lyrics_lrclib_offset_s" not in prov
     assert prov["lyrics_source"] == "forced_aligned"  # #253 fallback as before
+
+
+def test_whisper_floor_drops_degenerate_segments_from_txt_and_lrc(tmp_path):
+    from karaoke.worker.pipeline import _select_lyrics
+
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper_txt = tmp_path / "whisper.txt"
+    whisper_txt.write_text(("נא " * 111).strip() + "\nממעמקים קראתי אלייך")
+    whisper_json = tmp_path / "lyrics.json"
+    whisper_json.write_text(json.dumps({"segments": [
+        {"start": 10.0, "end": 40.0, "text": ("נא " * 111).strip()},
+        {"start": 50.0, "end": 54.0, "text": "ממעמקים קראתי אלייך"},
+    ]}, ensure_ascii=False))
+    prov = _select_lyrics(LyricsResult(source="none"), exports, whisper_txt, None, whisper_json)
+    assert prov["lyrics_source"] == "whisper_asr_synced"
+    assert (exports / "lyrics.txt").read_text(encoding="utf-8") == "ממעמקים קראתי אלייך"
+    assert "נא נא" not in (exports / "lyrics.lrc").read_text(encoding="utf-8")
