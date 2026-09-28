@@ -1228,3 +1228,155 @@ async def test_run_real_job_uses_canonical_metadata_for_lrclib(tmp_path, monkeyp
         assert "lyrics_match_variant" not in metadata
     finally:
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# #281: multi-source word vote on the finished export
+# ---------------------------------------------------------------------------
+_VOTE_LRC = "[00:10.00]כל יום ב9 אתה רואה לי את הלב\n[00:14.00]מה יש כבר לחפש פה2 אספרסו"
+_VOTE_SECOND = "כל יום בתשע אתה רואה לי את הלב\nמה יש כבר לחפש פה? שתה אספרסו"
+
+
+def _vote_asr_json(tmp_path: Path) -> Path:
+    words = [
+        ("כל", 10.1), ("יום", 10.4), ("בתשע", 10.8), ("אתה", 11.2), ("רואה", 11.5), ("לי", 11.8),
+        ("את", 12.0), ("הלב", 12.3), ("מה", 14.1), ("יש", 14.3), ("כבר", 14.5), ("לחפש", 14.8),
+        ("פה", 15.1), ("שתה", 15.4), ("אספרסו", 15.8),
+    ]
+    segments = [
+        {"start": 10.0, "end": 12.6, "text": " ".join(w for w, t in words[:8]),
+         "words": [{"word": w, "start": t, "end": t + 0.25, "probability": 0.9} for w, t in words[:8]]},
+        {"start": 14.0, "end": 16.1, "text": " ".join(w for w, t in words[8:]),
+         "words": [{"word": w, "start": t, "end": t + 0.25, "probability": 0.9} for w, t in words[8:]]},
+    ]
+    path = tmp_path / "lyrics.json"
+    path.write_text(json.dumps({"language": "he", "segments": segments}, ensure_ascii=False))
+    return path
+
+
+def test_resolve_lyrics_word_vote_rewrites_exports_and_reports(tmp_path):
+    from karaoke.worker.pipeline import _resolve_lyrics
+
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper_txt = tmp_path / "whisper.txt"
+    whisper_txt.write_text("asr text")
+    lyrics = LyricsResult(synced_lrc=_VOTE_LRC, plain=lrc_to_plain(_VOTE_LRC), source="lrclib_get")
+    prov = _resolve_lyrics(
+        lyrics, exports, whisper_txt, None, _vote_asr_json(tmp_path),
+        second_text=_VOTE_SECOND, lang="he",
+    )
+    assert prov["lyrics_source"] == "lrclib_synced"
+    assert prov["lyrics_word_vote"] == {"secondary": "genius", "corrections": 2, "asr": 2, "dictionary": 0}
+    lrc = (exports / "lyrics.lrc").read_text(encoding="utf-8")
+    txt = (exports / "lyrics.txt").read_text(encoding="utf-8")
+    assert "ב9" not in lrc and "פה2" not in lrc and "בתשע" in lrc and "פה שתה" in lrc
+    assert "ב9" not in txt and "פה שתה" in txt
+    assert lrc.count("[00:") == 2
+    # The audit compares the corrected output against the corrected reference:
+    # no phantom missing/extra words from the vote itself.
+    quality = json.loads((exports / "lyrics.quality.json").read_text())
+    assert quality["counts"].get("reference_words_missing", 0) == 0
+
+
+def test_resolve_lyrics_without_second_text_is_unchanged(tmp_path):
+    from karaoke.worker.pipeline import _resolve_lyrics
+
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper_txt = tmp_path / "whisper.txt"
+    whisper_txt.write_text("asr text")
+    lyrics = LyricsResult(synced_lrc=_VOTE_LRC, plain=lrc_to_plain(_VOTE_LRC), source="lrclib_get")
+    prov = _resolve_lyrics(lyrics, exports, whisper_txt, None, _vote_asr_json(tmp_path), lang="he")
+    assert "lyrics_word_vote" not in prov
+    assert (exports / "lyrics.lrc").read_text(encoding="utf-8") == _VOTE_LRC
+
+
+def test_resolve_lyrics_vote_skips_whisper_floor(tmp_path):
+    from karaoke.worker.pipeline import _resolve_lyrics
+
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    whisper_txt = tmp_path / "whisper.txt"
+    whisper_txt.write_text("כל יום ב9")
+    prov = _resolve_lyrics(
+        LyricsResult(source="none"), exports, whisper_txt, None, _vote_asr_json(tmp_path),
+        second_text=_VOTE_SECOND, lang="he",
+    )
+    assert prov["lyrics_source"].startswith("whisper_asr")
+    assert "lyrics_word_vote" not in prov
+    assert (exports / "lyrics.txt").read_text(encoding="utf-8") == "כל יום ב9"
+
+
+@pytest.mark.asyncio
+async def test_run_real_job_word_vote_disabled_skips_genius(tmp_path, monkeypatch):
+    import karaoke.worker.pipeline as pipeline
+    from karaoke.config import Settings
+    from karaoke.db.models import Base, Job, JobStatus
+    from karaoke.db.session import create_engine_and_sessionmaker
+    from karaoke.worker.canonical import CanonicalResolver
+    from karaoke.worker.genius import GeniusSource
+    from karaoke.worker.lyrics import LyricsSource
+    from karaoke.worker.runpod_client import RunpodClient
+    from karaoke.worker.vast_client import GpuJobResult
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'vote.db'}"
+    engine, factory = create_engine_and_sessionmaker(url)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with factory() as session:
+            job = Job(job_token="tok-vote", owner_subject="owner",
+                      source_url="https://example.com/video", status=JobStatus.queued, progress=0)
+            session.add(job)
+            await session.commit()
+            await session.refresh(job)
+            job_id = job.id
+
+        monkeypatch.setattr(pipeline, "_ytdlp_metadata",
+                            lambda url, settings=None, **_: {"title": "Artist - Song", "duration": 100})
+
+        def fake_file(src, dest: Path, *a, **k):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"x")
+            return dest
+
+        monkeypatch.setattr(pipeline, "_download_audio", fake_file)
+        monkeypatch.setattr(pipeline, "_to_wav", fake_file)
+        monkeypatch.setattr(pipeline, "_wav_to_mp3", fake_file)
+        monkeypatch.setattr(pipeline, "_CANONICAL_RESOLVER", CanonicalResolver(search=lambda q: []))
+        script = [(200, {"syncedLyrics": "[00:01.00]line one", "plainLyrics": "line one"})]
+        monkeypatch.setattr(pipeline, "_LYRICS_SOURCE",
+                            LyricsSource(http=lambda m, u, p: script.pop(0), retry_delays=(0,)))
+        genius_calls = []
+
+        def genius_http(method, url, params):
+            genius_calls.append(url)
+            raise AssertionError("Genius must not be called when the vote is disabled")
+
+        monkeypatch.setattr(pipeline, "_GENIUS_SOURCE", GeniusSource(http=genius_http))
+
+        def fake_gpu_run(self, mix_wav, work_dir, *, align_text, align_lang, whisper_lang):
+            work_dir.mkdir(parents=True, exist_ok=True)
+            (work_dir / "vocals.wav").write_bytes(b"x")
+            (work_dir / "no_vocals.wav").write_bytes(b"x")
+            (work_dir / "lyrics.txt").write_text("line one")
+            (work_dir / "lyrics.json").write_text(json.dumps({"language": "en", "segments": []}))
+            return GpuJobResult(vast_instance_id="fake-1", vast_cost=0.0, gpu_model="fake",
+                                vocals_path=work_dir / "vocals.wav",
+                                instrumental_path=work_dir / "no_vocals.wav",
+                                lyrics_txt_path=work_dir / "lyrics.txt",
+                                lyrics_json_path=work_dir / "lyrics.json")
+
+        monkeypatch.setattr(RunpodClient, "run", fake_gpu_run)
+        settings = Settings(database_url=url, runpod_api_key="k", runpod_endpoint_id="ep",
+                            artifact_root=str(tmp_path), word_vote_enabled=False)
+        await pipeline.run_real_job(factory, job_id, settings)
+        async with factory() as session:
+            job = await session.get(Job, job_id)
+            assert job.status == JobStatus.completed, job.error
+        assert genius_calls == []
+        metadata = json.loads((tmp_path / "tok-vote" / "exports" / "metadata.json").read_text())
+        assert "lyrics_word_vote" not in metadata and metadata["lyrics_provider"] == "lrclib"
+    finally:
+        await engine.dispose()

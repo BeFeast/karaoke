@@ -45,6 +45,7 @@ from karaoke.titles import derive_metadata
 from karaoke.uploads import UPLOAD_PREFIX, upload_display_name
 from karaoke.worker import job_cookies
 from karaoke.worker.canonical import CanonicalResolver
+from karaoke.worker.genius import GeniusSource
 from karaoke.worker.lyrics import (
     DURATION_GATE_CANONICAL,
     LRC_TIMESTAMP_RE,
@@ -70,6 +71,8 @@ _log = logging.getLogger(__name__)
 _LYRICS_SOURCE = LyricsSource()
 # YouTube Music canonical-metadata resolver (#281), same lifetime/cache model.
 _CANONICAL_RESOLVER = CanonicalResolver()
+# Genius second-reference client (#281 word vote), same lifetime/cache model.
+_GENIUS_SOURCE = GeniusSource()
 
 # Lyrics sources whose text came from the LRCLIB reference (provenance, #281).
 _LRCLIB_DERIVED_SOURCES = frozenset(
@@ -482,13 +485,23 @@ def _resolve_lyrics(
     whisper_lyrics_txt: Path,
     aligned_lrc_path: Path | None = None,
     whisper_lyrics_json: Path | None = None,
+    *,
+    second_text: str | None = None,
+    lang: str | None = None,
 ) -> dict[str, object]:
     """Resolve exports, then audit the full text independently of selection.
 
     Audio completion is not lyric approval. Missing text or uncertain timing
     remains visible as needs_review, including with legacy GPU workers.
+
+    ``second_text`` (#281) is an independent plain reference (Genius). When
+    the shipped lyrics derive from LRCLIB, the words the two references
+    disagree on are settled by the ASR words (:mod:`karaoke.worker.word_vote`)
+    and the exports rewritten in place before the audit, so the audit sees
+    the corrected text against a correspondingly corrected reference.
     """
-    from karaoke.worker.lyrics_quality import assess_lyrics, reconcile_alignment
+    from karaoke.worker.lyrics_quality import _asr_words, assess_lyrics, reconcile_alignment
+    from karaoke.worker.word_vote import apply_corrections, vote_corrections
 
     curated = lyrics.synced_lrc or lyrics.plain or lyrics.rejected_text
     asr = _read_json_object(whisper_lyrics_json)
@@ -532,6 +545,28 @@ def _resolve_lyrics(
         # An earlier attempt must never leak a stale timed export into a new
         # untimed/instrumental result.
         (exports_dir / "lyrics.lrc").unlink(missing_ok=True)
+    if second_text and provenance["lyrics_source"] in _LRCLIB_DERIVED_SOURCES and curated:
+        asr_pairs = [(word.text, word.start) for word in _asr_words(asr)]
+        vote: dict[str, object] = {"secondary": "genius", "corrections": 0, "asr": 0, "dictionary": 0}
+
+        def _voted(text: str) -> str:
+            corrections = vote_corrections(text, second_text, asr_pairs, lang)
+            vote["corrections"] = max(int(vote["corrections"]), len(corrections))
+            for correction in corrections:
+                vote[correction.arbiter] = max(
+                    int(vote[correction.arbiter]),
+                    sum(1 for c in corrections if c.arbiter == correction.arbiter),
+                )
+            return apply_corrections(text, corrections, lang)
+
+        curated = _voted(curated)
+        lyrics_txt = exports_dir / "lyrics.txt"
+        if lyrics_txt.is_file():
+            lyrics_txt.write_text(_voted(lyrics_txt.read_text(encoding="utf-8")), encoding="utf-8")
+        if selected is not None:
+            selected = _voted(selected)
+            (exports_dir / "lyrics.lrc").write_text(selected, encoding="utf-8")
+        provenance["lyrics_word_vote"] = vote
     quality = assess_lyrics(
         curated, selected, asr,
         restored_lines=recovery.get("counts", {}).get("restored_lines", 0),
@@ -1096,6 +1131,23 @@ async def run_real_job(
             align_text = lyrics.rejected_text
             align_lang = _align_lang(source_meta, hint=lang_hint)
 
+        # Second reference (#281 word vote): Genius plain text, fetched only
+        # when LRCLIB gave us words to vote on. Best-effort; kept on disk
+        # next to the job's work files for post-mortems.
+        second_text: str | None = None
+        if align_text and settings.word_vote_enabled:
+            second = await asyncio.to_thread(
+                _GENIUS_SOURCE.fetch,
+                (canonical.artist if canonical else None) or source_meta.get("artist"),
+                source_meta.get("track"),
+                lang=lang_hint,
+            )
+            if second is not None:
+                second_text = second.text
+                _log.info("job %s: second reference %s", job_id, second.url)
+                with contextlib.suppress(OSError):
+                    (work_dir / "genius.txt").write_text(second.text, encoding="utf-8")
+
         # --- separating (provision + /demucs) -------------------------------
         if not await _set_stage(session_factory, job_id, JobStatus.separating, 45):
             return
@@ -1169,6 +1221,8 @@ async def run_real_job(
             gpu.lyrics_txt_path,
             gpu.aligned_lrc_path,
             gpu.lyrics_json_path,
+            second_text=second_text,
+            lang=lang_hint,
         )
 
         lyrics_txt = exports_dir / "lyrics.txt"
@@ -1223,6 +1277,10 @@ async def run_real_job(
         # video's own, i.e. the video is a longer/shorter cut of the release.
         if lyrics.duration_gate == DURATION_GATE_CANONICAL:
             metadata["lyrics_duration_gate"] = lyrics.duration_gate
+        # Multi-source word vote outcome (#281) — only when a second reference
+        # was found for an LRCLIB-derived result.
+        if lyrics_prov.get("lyrics_word_vote"):
+            metadata["lyrics_word_vote"] = lyrics_prov["lyrics_word_vote"]
         if canonical is not None:
             metadata["canonical_artist"] = canonical.artist
             metadata["canonical_track"] = canonical.title
