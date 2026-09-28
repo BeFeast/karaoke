@@ -268,3 +268,46 @@ def test_download_passes_pot_extractor_args_to_ytdlp(tmp_path, monkeypatch):
     assert "youtubepot-bgutilhttp:base_url=http://karaoke-pot:4416" in cmd
     # Default settings do not force a player-client chain (#258).
     assert not any("youtube:player_client=" in str(part) for part in cmd)
+
+
+# ---------------------------------------------------------------------------
+# media-download 403: a short bounded retry, independent of the bot-check ladder
+# ---------------------------------------------------------------------------
+def _media_403() -> PipelineError:
+    return PipelineError(
+        "command failed (1): yt-dlp ...\nstderr:\nERROR: unable to download video data: HTTP Error 403: Forbidden"
+    )
+
+
+def test_download_retries_media_403_then_succeeds(tmp_path, monkeypatch):
+    dest = tmp_path / "source.audio"
+    rec = _RunRecorder([_media_403(), "ok"], dest)
+    sleeps: list[float] = []
+    monkeypatch.setattr(pipeline, "_run", rec)
+    monkeypatch.setattr(pipeline, "_sleep", lambda s: sleeps.append(s))
+    assert pipeline._download_audio("https://yt/x", dest, _settings()) == dest
+    assert len(rec.calls) == 2
+    assert sleeps == [pipeline._MEDIA_403_BACKOFF_S[0]]
+
+
+def test_download_media_403_retries_are_bounded(tmp_path, monkeypatch):
+    dest = tmp_path / "source.audio"
+    n = len(pipeline._MEDIA_403_BACKOFF_S)
+    rec = _RunRecorder([_media_403()] * (n + 1), dest)
+    sleeps: list[float] = []
+    monkeypatch.setattr(pipeline, "_run", rec)
+    monkeypatch.setattr(pipeline, "_sleep", lambda s: sleeps.append(s))
+    with pytest.raises(PipelineError, match="HTTP Error 403"):
+        pipeline._download_audio("https://yt/x", dest, _settings())
+    assert len(rec.calls) == n + 1
+    assert sleeps == list(pipeline._MEDIA_403_BACKOFF_S)
+
+
+def test_media_403_does_not_consume_the_bot_check_budget(tmp_path, monkeypatch):
+    dest = tmp_path / "source.audio"
+    rec = _RunRecorder([_media_403(), _bot_err(), _bot_err(), _bot_err(), "ok"], dest)
+    sleeps: list[float] = []
+    monkeypatch.setattr(pipeline, "_run", rec)
+    monkeypatch.setattr(pipeline, "_sleep", lambda s: sleeps.append(s))
+    assert pipeline._download_audio("https://yt/x", dest, _settings()) == dest
+    assert sleeps == [pipeline._MEDIA_403_BACKOFF_S[0], *pipeline._BOT_CHECK_BACKOFF_S]
