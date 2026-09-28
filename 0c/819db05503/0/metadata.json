@@ -1,0 +1,71 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "0c819db05503",
+  "session_id": "ee21a9c3-68d2-4800-abcf-373f973bbb63",
+  "strategy": "manual-commit",
+  "created_at": "2026-09-28T20:19:34.654754613Z",
+  "branch": "feat/282-ivrit-whisper",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "docker/runpod/Dockerfile",
+    "docker/runpod/README.md",
+    "docker/runpod/handler.py",
+    "scripts/runpod_provision.py",
+    "src/karaoke/worker/pipeline.py",
+    "tests/worker/test_runpod_handler.py"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "03520b16f7da",
+  "checkpoint_transcript_start": 922,
+  "transcript_lines_at_start": 922,
+  "compact_transcript_start": 162,
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 41331,
+    "cache_read_tokens": 6131507,
+    "output_tokens": 22724,
+    "api_call_count": 12
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-09-28T20:19:34.429777386Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 55,
+    "total_committed": 1,
+    "total_lines_changed": 55,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 401,
+      "user_lines_removed": 55,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.json": 84,
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".cursor/hooks.json": 40,
+        "docker/runpod/Dockerfile": 9,
+        "docker/runpod/README.md": 12,
+        "docker/runpod/handler.py": 70,
+        "scripts/runpod_provision.py": 1,
+        "src/karaoke/worker/pipeline.py": 4,
+        "tests/worker/test_runpod_handler.py": 126
+      },
+      "user_removed_per_file": {
+        "docker/runpod/handler.py": 27,
+        "scripts/runpod_provision.py": 1,
+        "tests/worker/test_runpod_handler.py": 27
+      }
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "0c819db05503",
+  "strategy": "manual-commit",
+  "branch": "feat/282-ivrit-whisper",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "docker/runpod/Dockerfile",
+    "docker/runpod/README.md",
+    "docker/runpod/handler.py",
+    "scripts/runpod_provision.py",
+    "src/karaoke/worker/pipeline.py",
+    "tests/worker/test_runpod_handler.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0c/819db05503/0/metadata.json",
+      "transcript": "/0c/819db05503/0/full.jsonl",
+      "compact_transcript": "/0c/819db05503/0/transcript.jsonl",
+      "content_hash": "/0c/819db05503/0/content_hash.txt",
+      "prompt": "/0c/819db05503/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 41331,
+    "cache_read_tokens": 6131507,
+    "output_tokens": 22724,
+    "api_call_count": 12
+  }
+}
