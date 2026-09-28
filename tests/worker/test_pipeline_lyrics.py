@@ -1172,7 +1172,7 @@ async def test_run_real_job_uses_canonical_metadata_for_lrclib(tmp_path, monkeyp
         monkeypatch.setattr(pipeline, "_CANONICAL_RESOLVER", CanonicalResolver(search=lambda q: ytm))
         record = {
             "artistName": "Noa Kirel", "trackName": "לאב סונג", "duration": 179,
-            "syncedLyrics": "[00:10.38]line one\n[00:12.49]line two", "plainLyrics": "line one\nline two",
+            "syncedLyrics": "[00:10.38]שורה אחת\n[00:12.49]שורה שתיים", "plainLyrics": "שורה אחת\nשורה שתיים",
         }
         script = [
             (404, {"code": 404}),          # /api/get parsed (Hebrew artist, 227 s)
@@ -1217,7 +1217,7 @@ async def test_run_real_job_uses_canonical_metadata_for_lrclib(tmp_path, monkeyp
             job = await session.get(Job, job_id)
             assert job.status == JobStatus.completed, job.error
 
-        assert captured["align_text"] == "line one\nline two"
+        assert captured["align_text"] == "שורה אחת\nשורה שתיים"
         assert captured["whisper_lang"] == "he"
         metadata = json.loads((tmp_path / "tok-canon" / "exports" / "metadata.json").read_text())
         assert metadata["track"] == "לאב סונג"  # producer credit stripped
