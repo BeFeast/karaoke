@@ -4,11 +4,17 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
-## [v0.41.4] - 2026-09-29
+## [v0.41.5] - 2026-09-29
 
 _Bump: patch_
 
 - fix(lyrics): canonical resolver skips live/remix releases the upload does not mention; LRCLIB records in another script than the track language are dropped instead of aligned (#281, #300)
+
+## [v0.41.4] - 2026-09-29
+
+_Bump: patch_
+
+- version bump only — cut before #300 merged (behaviourally identical to 0.41.3)
 
 ## [v0.41.3] - 2026-09-28
 
