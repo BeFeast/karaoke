@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>be272a24g</task-id>
+<tool-use-id>toolu_01AduoppzjxSgB42JjdZc4NX</tool-use-id>
+<output-file>/tmp/claude-1000/-home-god-src-karaoke/ee21a9c3-68d2-4800-abcf-373f973bbb63/tasks/be272a24g.output</output-file>
+<status>completed</status>
+<summary>Background command "Final 15-song bench on coordinator 0.41.5 + GPU image r12, compared with the 0.40.1 baseline" completed (exit code 0)</summary>
+</task-notification>

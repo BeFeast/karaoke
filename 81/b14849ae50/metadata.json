@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "81b14849ae50",
+  "strategy": "manual-commit",
+  "branch": "fix/282-hint-override-threshold",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docker/runpod/handler.py",
+    "tests/worker/test_runpod_handler.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/81/b14849ae50/0/metadata.json",
+      "transcript": "/81/b14849ae50/0/full.jsonl",
+      "compact_transcript": "/81/b14849ae50/0/transcript.jsonl",
+      "content_hash": "/81/b14849ae50/0/content_hash.txt",
+      "prompt": "/81/b14849ae50/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 6110,
+    "cache_read_tokens": 1314963,
+    "output_tokens": 4568,
+    "api_call_count": 2
+  }
+}
