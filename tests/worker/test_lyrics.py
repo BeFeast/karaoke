@@ -1627,3 +1627,78 @@ def test_whisper_segments_to_lrc_skips_degenerate_segments():
     ]
     lrc = whisper_segments_to_lrc(segments)
     assert "נא נא" not in lrc and "ממעמקים" in lrc
+
+
+# ---------------------------------------------------------------------------
+# #289: junk records; #290: canonical-title rung, exact-title salvage
+# ---------------------------------------------------------------------------
+_GOOD_PLAIN = "\n".join(f"line number {i} of the song text" for i in range(8))
+
+
+def _rec(artist, track, duration, plain=_GOOD_PLAIN):
+    return {"artistName": artist, "trackName": track, "duration": duration,
+            "plainLyrics": plain, "syncedLyrics": None, "instrumental": False}
+
+
+def test_junk_get_record_falls_through_to_a_real_search_edition():
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 200, "body": _rec("Rick Astley", "Never Gonna Give You Up", 213, "probe")},
+        {"expect_in": "/api/search", "code": 200, "body": [
+            _rec("Rick Astley", "Never Gonna Give You Up", 213, "probe"),
+            _rec("Rick Astley", "Never Gonna Give You Up", 214),
+        ]},
+    ])
+    hit = LyricsSource(http=rec, retry_delays=(0,)).fetch(
+        artist="Rick Astley", track="Never Gonna Give You Up", duration=213
+    )
+    assert hit.found and hit.plain == _GOOD_PLAIN and hit.source == "lrclib_search"
+
+
+def test_canonical_title_artist_free_rung_lands_dashless_upload():
+    rec = _Recorder([
+        {"expect_in": "/api/search", "code": 200, "body": []},  # parsed, no artist
+        {"expect_in": "/api/get", "code": 404, "body": {}},     # canonical artist + parsed track
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/get", "code": 404, "body": {}},     # canonical artist + canonical title
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/search", "code": 200, "body": [_rec("Zohar Argov", "הפרח בגני", 222)]},
+    ])
+    hit = LyricsSource(http=rec, retry_delays=(0,)).fetch(
+        artist=None, track="זוהר ארגוב הפרח בגני", duration=221,
+        canonical_artist="Zohar Argov", canonical_track="הפרח בגני", canonical_duration=221,
+    )
+    assert hit.found and hit.match_variant == "הפרח בגני"
+    assert rec.calls[-1][2] == {"q": "הפרח בגני"}
+
+
+def test_exact_title_with_artist_overlap_is_salvaged_for_alignment():
+    """Video shorter than every release (288 s vs 307+): no edition gates in,
+    but the title is exact and the artist overlaps → text salvaged (#149 shape)."""
+    editions = [_rec("Idan Raichel", "ממעמקים", 307), _rec("Idan Raichel", "ממעמקים", 316)]
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/search", "code": 200, "body": editions},   # q=ממעמקים
+        {"expect_in": "/api/search", "code": 200, "body": editions},   # editions expansion
+        {"expect_in": "/api/search", "code": 200, "body": []},         # q=<full track> (#260)
+    ])
+    hit = LyricsSource(http=rec, retry_delays=(0,)).fetch(
+        artist="The Idan Raichel Project", track="הפרויקט של עידן רייכל - ממעמקים", duration=288,
+    )
+    assert not hit.found
+    assert hit.rejected == "duration_mismatch (19s)" and hit.rejected_text == _GOOD_PLAIN
+    assert hit.match_variant == "ממעמקים"
+
+
+def test_exact_title_without_artist_overlap_is_not_salvaged():
+    rec = _Recorder([
+        {"expect_in": "/api/get", "code": 404, "body": {}},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+        {"expect_in": "/api/search", "code": 200, "body": [_rec("Someone Else", "ממעמקים", 330)]},
+        {"expect_in": "/api/search", "code": 200, "body": [_rec("Someone Else", "ממעמקים", 330)]},
+        {"expect_in": "/api/search", "code": 200, "body": []},
+    ])
+    hit = LyricsSource(http=rec, retry_delays=(0,)).fetch(
+        artist="The Idan Raichel Project", track="הפרויקט של עידן רייכל - ממעמקים", duration=288,
+    )
+    assert not hit.found and hit.rejected is None

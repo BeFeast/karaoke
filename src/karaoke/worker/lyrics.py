@@ -975,6 +975,26 @@ def _from_record(record: dict[str, Any], source: str) -> LyricsResult:
 
 Durations = tuple[int | None, ...]
 
+# A curated record this small is not a song's lyrics (#289): LRCLIB holds a
+# one-word "probe" record for «Never Gonna Give You Up» at 213 s that /api/get
+# returned for the 213 s video and the pipeline shipped as lrclib_synced.
+_JUNK_MAX_WORDS = 1
+
+
+def _record_is_junk(record: dict[str, Any]) -> bool:
+    """True for a non-instrumental record whose text is a single word or less
+    ("probe", "test", "…") — placeholder uploads, never lyrics."""
+    if not isinstance(record, dict) or record.get("instrumental"):
+        return False
+    synced = _clean(record.get("syncedLyrics"))
+    plain = _clean(record.get("plainLyrics"))
+    text = plain or (lrc_to_plain(synced) if synced else "") or ""
+    return len(text.split()) <= _JUNK_MAX_WORDS
+
+
+def _latin_tokens(text: str | None) -> set[str]:
+    return {t for t in re.findall(r"[a-z0-9]{3,}", (text or "").casefold()) if t != "the"}
+
 
 def _duration_delta(record: dict[str, Any], durations: Durations) -> float | None:
     """Smallest absolute duration delta (seconds) between a candidate and any
@@ -1209,6 +1229,17 @@ class LyricsSource:
         # and is bounded to ≤ _MAX_LADDER_QUERIES extra HTTP calls.
         if any(d is not None for d in durations):
             variants = track_cleanup_variants(track)
+            # Clean canonical release title, artist-free (#290): LRCLIB may
+            # store the song under an artist spelling no rung above tried (a
+            # Hebrew YouTube Music artist, a bilingual "Latin-Hebrew" name).
+            # Non-Latin titles only, for the same reason as the #260 rung.
+            if (
+                canonical_track
+                and any(ch.isalpha() and ord(ch) > 0x024F for ch in canonical_track)
+                and canonical_track.casefold() not in {v.casefold() for v in variants}
+                and canonical_track.casefold() != track.casefold()
+            ):
+                variants.insert(0, canonical_track)
             # Artist-free retry with the track itself (#260): LRCLIB search is
             # conjunctive and stores many non-Latin artists under a LATIN
             # artistName with a native-script trackName (e.g. "Eden Ben Zaken"
@@ -1228,12 +1259,14 @@ class LyricsSource:
             ):
                 variants.append(track)
             for variant in variants[:_MAX_LADDER_QUERIES]:
-                laddered = self._try_search_q(variant, durations)
+                laddered = self._try_search_q(variant, durations, (artist, canonical_artist))
                 # An artist-free instrumental "match" is untrustworthy — the
                 # only evidence is duration, and marking a lyrical track
                 # instrumental drops its transcript entirely. Require lyrics.
                 if laddered is not None and laddered.found and not laddered.instrumental:
                     return replace(laddered, match_variant=variant)
+                if search_result is None and laddered is not None and laddered.rejected:
+                    search_result = replace(laddered, match_variant=variant)
 
         # No ladder hit: preserve the primary search result's #148 rejection /
         # #149 salvaged text for the pipeline's force-align + provenance.
@@ -1258,7 +1291,7 @@ class LyricsSource:
         if duration is not None:
             params["duration"] = duration
         status, body = self._request("GET", f"{self._base}/api/get", params)
-        if status == 200 and isinstance(body, dict):
+        if status == 200 and isinstance(body, dict) and not _record_is_junk(body):
             return _from_record(body, source="lrclib_get")
         return None
 
@@ -1272,7 +1305,7 @@ class LyricsSource:
         status, body = self._request("GET", f"{self._base}/api/search", params)
         if status != 200 or not isinstance(body, list) or not body:
             return None
-        candidates = [c for c in body if isinstance(c, dict)]
+        candidates = [c for c in body if isinstance(c, dict) and not _record_is_junk(c)]
         if not candidates:
             return None
         best = max(candidates, key=lambda c: _score_candidate(c, track, durations))
@@ -1299,7 +1332,9 @@ class LyricsSource:
             duration_gate=_duration_gate(best, durations),
         )
 
-    def _try_search_q(self, query: str, durations: Durations) -> LyricsResult | None:
+    def _try_search_q(
+        self, query: str, durations: Durations, artists: tuple[str | None, ...] = ()
+    ) -> LyricsResult | None:
         """Artist-free fuzzy search via ``GET /api/search?q=<query>`` (#230).
 
         Scores candidates with :func:`_score_candidate` against ``query`` and
@@ -1308,7 +1343,14 @@ class LyricsSource:
         means the duration gate is the sole safety net, so unlike the
         artist-scoped path this never salvages a wrong-duration record's text.
         Returns ``None`` on a transport miss, an empty result, or a
-        gate-failing best candidate (so the ladder keeps trying / falls back)."""
+        gate-failing best candidate (so the ladder keeps trying / falls back).
+
+        Exception (#290): when no candidate clears the gate but one has
+        EXACTLY the query as its title and shares an artist token with one of
+        ``artists`` (the parsed / canonical artist), the song is certain and
+        only the edit differs (a video cut shorter than every release) — its
+        text is salvaged as a #148/#149 rejection so the pipeline force-aligns
+        it against the vocal stem instead of falling to the ASR floor."""
         status, body = self._request("GET", f"{self._base}/api/search", {"q": query})
         if status != 200 or not isinstance(body, list) or not body:
             return None
@@ -1350,7 +1392,44 @@ class LyricsSource:
             picked = self._pick_gated(body2, query, durations)
             if picked is not None:
                 return picked
-        return None
+        # Nothing in the gate, even across editions: salvage the certain song's
+        # text (see docstring) rather than give up.
+        return self._salvage_exact(body, query, durations, artists)
+
+    def _salvage_exact(
+        self,
+        body: list[Any],
+        query: str,
+        durations: Durations,
+        artists: tuple[str | None, ...],
+    ) -> LyricsResult | None:
+        want = set().union(*(_latin_tokens(a) for a in artists)) if artists else set()
+        if not want:
+            return None
+        folded = query.casefold()
+        matches = [
+            c
+            for c in body
+            if isinstance(c, dict)
+            and not c.get("instrumental")
+            and not _record_is_junk(c)
+            and str(c.get("trackName") or "").strip().casefold() == folded
+            and _latin_tokens(str(c.get("artistName") or "")) & want
+        ]
+        if not matches:
+            return None
+        best = min(matches, key=lambda c: _duration_delta(c, durations) or float("inf"))
+        plain = _clean(best.get("plainLyrics"))
+        synced = _clean(best.get("syncedLyrics"))
+        text = plain or (lrc_to_plain(synced) if synced else "")
+        if not text:
+            return None
+        delta = _duration_delta(best, durations)
+        return LyricsResult(
+            source="none",
+            rejected=f"duration_mismatch ({round(delta, 1):g}s)" if delta is not None else "duration_unknown",
+            rejected_text=text,
+        )
 
     def _pick_gated(
         self, body: list[Any], query: str, durations: Durations
@@ -1365,6 +1444,7 @@ class LyricsSource:
             c
             for c in body
             if isinstance(c, dict)
+            and not _record_is_junk(c)
             and (delta := _duration_delta(c, durations)) is not None
             and delta <= _DURATION_REJECT_S
         ]

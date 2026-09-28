@@ -335,6 +335,17 @@ def track_cleanup_variants(track: str | None) -> list[str]:
             seen.add(head.lower())
         break
 
+    # 3. A parsed track that still carries an "artist - title" split (a title
+    #    with two separators, e.g. "Project - הפרויקט של … - ממעמקים", #290):
+    #    the segment after the LAST spaced dash is the likeliest title. Only
+    #    while the ladder has room (the caller issues <= 3 queries).
+    if len(variants) < 2:
+        parts = _ANY_DASH_SEP_RE.split(text)
+        tail = parts[-1].strip() if len(parts) > 1 else ""
+        if len(tail) >= 3 and tail.lower() not in seen:
+            variants.append(tail)
+            seen.add(tail.lower())
+
     return variants
 
 

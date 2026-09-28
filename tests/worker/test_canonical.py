@@ -76,3 +76,35 @@ def test_caches_hits_only():
     assert resolver.resolve("A", "B", 1) is not None
     assert resolver.resolve("a", "b", 1) is not None
     assert len(search.queries) == 3
+
+
+def test_live_and_remix_variants_are_skipped_unless_the_upload_says_so():
+    search = _Search([
+        _song("כשהלב בוכה (מנורה LIVE)", ["Sarit Hadad"], 328),
+        _song("כשהלב בוכה", ["Sarit Hadad"], 286),
+    ])
+    meta = CanonicalResolver(search=search).resolve("שרית חדד", "כשהלב בוכה", 285)
+    assert meta is not None and meta.duration == 286
+    live = CanonicalResolver(search=_Search([_song("ממעמקים - Live", ["Idan Raichel"], 312)]))
+    assert live.resolve("Idan Raichel", "ממעמקים", 288) is None
+    assert live.resolve("Idan Raichel", "ממעמקים (Live)", 300) is not None
+
+
+def test_equal_title_overlap_prefers_the_closest_duration():
+    search = _Search([
+        _song("לאב סונג", ["Noa Kirel"], 240),
+        _song("לאב סונג", ["Noa Kirel"], 179),
+    ])
+    meta = CanonicalResolver(search=search).resolve("נועה קירל", "לאב סונג", 227)
+    assert meta is not None and meta.duration == 240  # 13 s off beats 48 s off
+
+
+def test_bilingual_artist_name_is_split_latin_first():
+    search = _Search([_song("הפרח בגני", ["Zohar Argov-זוהר ארגוב"], 221)])
+    meta = CanonicalResolver(search=search).resolve(None, "זוהר ארגוב הפרח בגני", 222)
+    assert meta is not None
+    assert meta.artist == "Zohar Argov"
+    assert meta.artists == ("Zohar Argov", "זוהר ארגוב")
+    hebrew_only = CanonicalResolver(search=_Search([_song("שירת הסטיקר", ["הדג נחש"], 261)]))
+    assert hebrew_only.resolve("Hadag Nahash", "שירת הסטיקר", 253).artist == "הדג נחש"
+    assert CanonicalResolver(search=_Search([_song("Song", ["Jay-Z"], 200)])).resolve("Jay-Z", "Song", 200).artist == "Jay-Z"

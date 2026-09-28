@@ -15,6 +15,7 @@ injectable so tests never touch the network.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -28,6 +29,18 @@ log = logging.getLogger("karaoke.worker.canonical")
 # different recording (live, remix); the parsed metadata is safer.
 _MAX_DURATION_DELTA_S = 60
 _SEARCH_LIMIT = 5
+# Release-variant markers (Latin + Hebrew). A candidate whose title carries
+# one the upload's own title lacks is another recording of the song — a live
+# cut, remix, karaoke track — and LRCLIB would then be asked for THAT
+# version's record (a 328 s «(מנורה LIVE)» transliteration instead of the
+# 286 s studio take, observed 2026-09-28). Symmetric: an upload that says
+# "live" keeps live candidates.
+_VERSION_MARKER_RE = re.compile(
+    r"\b(live|remix|acoustic|unplugged|karaoke|instrumental|cover|demo|edit|"
+    r"version|remaster(?:ed)?|radio|mix|medley)\b"
+    r"|לייב|הופעה|חי\b|רמיקס|אקוסטי|קריוקי|גרסה|מחרוזת",
+    re.IGNORECASE,
+)
 
 SearchFn = Callable[[str], list[dict[str, Any]]]
 
@@ -72,17 +85,32 @@ def _lang(text: str) -> str | None:
     return "he" if has_hebrew(text) else None
 
 
+_BILINGUAL_SPLIT_RE = re.compile(r"\s*[-–—]\s*")
+
+
+def _split_bilingual(name: str) -> list[str]:
+    """``"Zohar Argov-זוהר ארגוב"`` → ``["Zohar Argov", "זוהר ארגוב"]`` (#290):
+    YouTube Music joins an artist's Latin and Hebrew names with a dash. Names
+    without such a script split pass through unchanged ("Jay-Z")."""
+    parts = [p for p in _BILINGUAL_SPLIT_RE.split(name) if p.strip()]
+    if len(parts) == 2 and has_hebrew(parts[0]) != has_hebrew(parts[1]):
+        latin, hebrew = (parts[1], parts[0]) if has_hebrew(parts[0]) else (parts[0], parts[1])
+        return [latin.strip(), hebrew.strip()]
+    return [name]
+
+
 def _candidate(item: dict[str, Any]) -> CanonicalMeta | None:
     if not isinstance(item, dict):
         return None
     title = str(item.get("title") or "").strip()
-    names = tuple(
+    raw_names = [
         str(a.get("name") or "").strip()
         for a in item.get("artists") or []
         if isinstance(a, dict) and str(a.get("name") or "").strip()
-    )
-    if not title or not names:
+    ]
+    if not title or not raw_names:
         return None
+    names = tuple(dict.fromkeys(part for name in raw_names for part in _split_bilingual(name)))
     duration: int | None = None
     raw = item.get("duration_seconds")
     if raw is not None:
@@ -90,8 +118,9 @@ def _candidate(item: dict[str, Any]) -> CanonicalMeta | None:
             duration = int(raw)
         except (TypeError, ValueError):
             duration = None
+    latin = [n for n in names if not has_hebrew(n)]
     return CanonicalMeta(
-        artist=names[0],
+        artist=latin[0] if latin else names[0],
         artists=names,
         title=title,
         duration=duration,
@@ -99,14 +128,20 @@ def _candidate(item: dict[str, Any]) -> CanonicalMeta | None:
     )
 
 
+def _markers(text: str) -> set[str]:
+    return {m.group(0).casefold() for m in _VERSION_MARKER_RE.finditer(text)}
+
+
 def _plausible(
     cand: CanonicalMeta, artist: str | None, track: str, duration: int | None
-) -> tuple[bool, float]:
+) -> tuple[bool, tuple[float, float]]:
     """``(accept, rank)`` — a candidate is plausible when its title, one of
-    its artists, or its duration corroborates the upload, and its duration
-    is not wildly off. Ranked by title overlap only; ties keep YouTube
-    Music's own relevance order (the artist's release outranks covers and
-    TV performances that carry the artist's name as a credit)."""
+    its artists, or its duration corroborates the upload, its duration is
+    not wildly off, and it carries no release-variant marker the upload
+    lacks. Ranked by title overlap, then duration proximity to the upload
+    (unknown durations rank last); remaining ties keep YouTube Music's own
+    relevance order (the artist's release outranks covers and TV
+    performances that carry the artist's name as a credit)."""
     track_tokens = set(tokens(track, _lang(track)))
     title_tokens = set(tokens(cand.title, _lang(cand.title)))
     title_overlap = len(track_tokens & title_tokens) / len(track_tokens) if track_tokens else 0.0
@@ -124,7 +159,9 @@ def _plausible(
     accept = title_overlap > 0 or artist_overlap > 0 or duration_ok
     if delta is not None and delta > _MAX_DURATION_DELTA_S:
         accept = False
-    return accept, title_overlap
+    if _markers(cand.title) - _markers(track):
+        accept = False
+    return accept, (title_overlap, -(delta if delta is not None else 1e9))
 
 
 class CanonicalResolver:
@@ -149,7 +186,7 @@ class CanonicalResolver:
             return cached
         query = f"{artist} {track}" if artist else track
         results = self._search(query)
-        best: tuple[float, int, CanonicalMeta] | None = None
+        best: tuple[tuple[float, float], int, CanonicalMeta] | None = None
         for index, item in enumerate(results[:_SEARCH_LIMIT]):
             cand = _candidate(item)
             if cand is None:
