@@ -4,6 +4,14 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.41.0] - 2026-09-28
+
+_Bump: minor_
+
+- feat(bench): Hebrew lyrics benchmark harness — shared text normaliser, Genius source, `scripts/lyrics_bench.py`, 13 Hebrew + 2 control songs (#280, #285)
+- feat(lyrics): LRCLIB matching for non-Latin uploads via canonical release metadata — producer-credit strip, YouTube Music canonical artist/duration, dual duration gate, 503 retry, transient misses not cached (#281, #286)
+- feat(lyrics): multi-source word vote — Genius corrects LRCLIB words, ASR arbitrates, dictionary-over-digit fallback, `KARAOKE_WORD_VOTE_ENABLED` (#281, #287)
+
 ## [v0.40.1] - 2026-09-25
 
 _Bump: patch_
