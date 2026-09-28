@@ -1130,3 +1130,44 @@ def test_hint_survives_a_moderately_confident_contradicting_probe(monkeypatch, t
     _, js = handler._transcribe(tmp_path / "v.wav", language=None)
     assert js["model"] == handler._WHISPER_MODEL_NAME
     assert models["vanilla"].transcribe_calls[0]["language"] == "en"
+
+
+def test_handler_lyrics_mode_skips_separation_and_aligns_the_input_stem(monkeypatch):
+    """r14 (#283/#284): mode "lyrics" treats the input as the vocal stem —
+    no separation, ASR + forced alignment on it, no stems returned."""
+    import base64
+    order = []
+    seen = {}
+
+    def separate(path, out):
+        order.append("separate")
+        return path, path
+
+    def transcribe(path, language=None):
+        order.append("asr")
+        seen["asr_path"] = path
+        return "hello", {"segments": []}
+
+    def align(path, text, language, diagnostics=None):
+        order.append("align")
+        seen["align_path"] = path
+        diagnostics.update(raw_lrc="[00:01.00]hello", lines=[], retries=[])
+        return "[00:01.00]hello", [None]
+
+    monkeypatch.setattr(handler, "_run_separation", separate)
+    monkeypatch.setattr(handler, "_transcribe", transcribe)
+    monkeypatch.setattr(handler, "_force_align_to_lrc", align)
+    monkeypatch.setattr(handler, "_gpu_model_name", lambda: "test")
+    event = {"input": {"audio_base64": base64.b64encode(b"vocals").decode(),
+                       "align_text": "hello", "align_lang": "heb", "mode": "lyrics"}}
+    result = handler.handler(event)
+    assert order == ["asr", "align"]
+    assert seen["asr_path"] == seen["align_path"] and seen["asr_path"].name == "input.wav"
+    assert result["aligned_lrc"] == "[00:01.00]hello" and result["lyrics_txt"] == "hello"
+    assert "vocals_b64" not in result and "vocals_uploaded" not in result
+
+
+def test_handler_rejects_unknown_mode():
+    import base64
+    with pytest.raises(ValueError, match="unknown mode"):
+        handler.handler({"input": {"audio_base64": base64.b64encode(b"x").decode(), "mode": "karaoke"}})

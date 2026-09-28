@@ -13,7 +13,7 @@ Input (``event["input"]``)::
 
     {
       "audio_base64": "<base64-encoded WAV bytes>",
-      "mode": "demucs" | "whisper" | "both",  # default "both"
+      "mode": "demucs" | "whisper" | "both" | "lyrics",  # default "both"; "lyrics" = input is a vocal stem (r14)
       "align_text": "<plain lyrics to force-align>",  # optional (#55)
       "align_lang": "eng"                              # optional ISO-639-3
     }
@@ -1258,7 +1258,11 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("audio_base64 must be a string")
 
     mode = job_input.get("mode", "both")
-    if mode not in ("demucs", "whisper", "both"):
+    # "lyrics" (#283/#284, r14): the input IS an already-separated vocal stem
+    # (a finished job's work/vocals.wav) — transcribe and force-align it
+    # without re-running separation. Used for post-ASR references, pasted
+    # reference lyrics and "Rebuild lyrics".
+    if mode not in ("demucs", "whisper", "both", "lyrics"):
         raise ValueError("unknown mode")
 
     # Optional force-alignment of supplied plain lyrics against the vocal stem
@@ -1278,7 +1282,7 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(whisper_lang, str):
             raise ValueError("whisper_lang must be a string")
         whisper_lang = whisper_lang.strip().lower() or None
-    want_align = bool(align_text and align_text.strip()) and mode in ("demucs", "both")
+    want_align = bool(align_text and align_text.strip()) and mode in ("demucs", "both", "lyrics")
 
     if audio_url:
         import urllib.request
@@ -1314,6 +1318,8 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         vocals_path: Path | None = None
         instrumental_path: Path | None = None
 
+        if mode == "lyrics":
+            vocals_path = in_wav
         if mode in ("demucs", "both"):
             out_dir = tmp_path / "out"
             vocals_path, instrumental_path = _run_separation(in_wav, out_dir)
@@ -1326,8 +1332,8 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
                 result["vocals_b64"] = _b64_file(vocals_path)
                 result["instrumental_b64"] = _b64_file(instrumental_path)
 
-        if mode in ("whisper", "both"):
-            target = vocals_path if mode == "both" else in_wav
+        if mode in ("whisper", "both", "lyrics"):
+            target = vocals_path if mode in ("both", "lyrics") else in_wav
             assert target is not None
             lyrics_txt, lyrics_json = _transcribe(target, language=whisper_lang)
             result["lyrics_txt"] = lyrics_txt
@@ -1339,7 +1345,7 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
                 lrc, line_scores = _force_align_to_lrc(
                     vocals_path, align_text, align_lang, diagnostics=diagnostics
                 )
-                if mode == "both" and diagnostics.get("lines"):
+                if mode in ("both", "lyrics") and diagnostics.get("lines"):
                     # Reserve time for returning outputs; never extend the
                     # coordinator's existing wall/cost ceiling for retries.
                     budget = max(0.0, min(float(job_input.get("job_budget_s", 1200)), 1200))
