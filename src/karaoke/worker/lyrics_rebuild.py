@@ -287,9 +287,11 @@ async def rebuild_lyrics(
                         if web_reference is not None:
                             post_asr = f"web:{web_reference.provider}"
                             break
-            prov = p._resolve_lyrics(
+            prov = await asyncio.to_thread(
+                p._resolve_lyrics,
                 lyrics, out, gpu.lyrics_txt_path, aligned_path, asr_path,
                 second_text=second_text, lang=lang_hint, web_reference=web_reference,
+                llm=p._llm_corrector(settings, lang_hint), song=p._song_label(source_meta, title),
             )
             if post_asr:
                 prov["lyrics_post_asr_reference"] = post_asr

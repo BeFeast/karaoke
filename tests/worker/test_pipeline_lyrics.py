@@ -1751,3 +1751,87 @@ async def test_run_real_job_post_asr_lrclib_hit_is_realigned_without_separation(
         assert metadata["lyrics_post_asr_reference"].startswith("lrclib")
     finally:
         await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# #279 decision 10: LLM correction of the ASR floor
+# ---------------------------------------------------------------------------
+class _FakeLlm:
+    model = "fake-llm"
+
+    def __init__(self, edits=None, error=None):
+        self.edits, self.error, self.calls = edits or [], error, []
+
+    def propose(self, lines, song):
+        self.calls.append((lines, song))
+        if self.error:
+            raise self.error
+        return self.edits
+
+
+def test_llm_corrects_the_asr_floor_before_the_audit(tmp_path):
+    from karaoke.worker.pipeline import _resolve_lyrics
+
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    heard = [(a, b, t.replace("בתשע", "בתשה")) for a, b, t in _HE_SUNG]
+    asr = _asr_doc(tmp_path, heard)
+    llm = _FakeLlm([{"line": 3, "from": "בתשה", "to": "בתשע"}])
+    prov = _resolve_lyrics(
+        LyricsResult(source="none"), exports, _whisper(tmp_path, "asr"), None, asr, lang="he",
+        llm=llm, song="Artist — Song",
+    )
+    assert prov["lyrics_source"] == "whisper_asr_synced"
+    assert llm.calls[0][1] == "Artist — Song" and len(llm.calls[0][0]) == len(_HE_SUNG)
+    assert prov["lyrics_llm_correction"] == {
+        "model": "fake-llm", "proposed": 1, "applied": 1,
+        "edits": [{"line": 3, "from": "בתשה", "to": "בתשע"}],
+    }
+    lrc = (exports / "lyrics.lrc").read_text(encoding="utf-8")
+    assert "בתשע" in lrc and "בתשה" not in lrc
+    assert len([ln for ln in lrc.splitlines() if ln.strip()]) == len(_HE_SUNG)
+    assert "בתשע" in (exports / "lyrics.txt").read_text(encoding="utf-8")
+
+
+def test_llm_failure_keeps_the_raw_transcript(tmp_path):
+    from karaoke.worker.pipeline import _resolve_lyrics
+
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    asr = _asr_doc(tmp_path, _HE_SUNG)
+    prov = _resolve_lyrics(
+        LyricsResult(source="none"), exports, _whisper(tmp_path, "asr"), None, asr, lang="he",
+        llm=_FakeLlm(error=TimeoutError("gateway slow")),
+    )
+    assert prov["lyrics_source"] == "whisper_asr_synced"
+    assert prov["lyrics_llm_correction"] == {"model": "fake-llm", "error": "TimeoutError: gateway slow"}
+    assert "בתשע" in (exports / "lyrics.lrc").read_text(encoding="utf-8")
+
+
+def test_llm_never_touches_referenced_lyrics(tmp_path):
+    from karaoke.worker.pipeline import _resolve_lyrics
+
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    lrc = "\n".join(f"[{int(a) // 60:02d}:{a % 60:05.2f}]{t}" for a, _, t in _HE_SUNG)
+    llm = _FakeLlm([{"line": 1, "from": "תדע", "to": "תדעי"}])
+    prov = _resolve_lyrics(
+        LyricsResult(synced_lrc=lrc, source="lrclib_get"), exports, _whisper(tmp_path),
+        None, _asr_doc(tmp_path, _HE_SUNG), lang="he", llm=llm,
+    )
+    assert prov["lyrics_source"] == "lrclib_synced"
+    assert llm.calls == [] and "lyrics_llm_correction" not in prov
+
+
+def test_llm_corrector_is_configured_per_language():
+    from types import SimpleNamespace
+
+    from karaoke.worker.pipeline import _llm_corrector
+
+    settings = SimpleNamespace(
+        llm_url="http://gw/v1", llm_api_key="k", llm_corrector_model="gpt-6.1-sol",
+        llm_corrector_languages="he", llm_timeout_s=10,
+    )
+    assert _llm_corrector(settings, "he").model == "gpt-6.1-sol"
+    assert _llm_corrector(settings, "en") is None and _llm_corrector(settings, None) is None
+    assert _llm_corrector(SimpleNamespace(**{**vars(settings), "llm_api_key": ""}), "he") is None

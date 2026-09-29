@@ -9,6 +9,10 @@ before → after, cost.
 
     uv run python scripts/lyrics_backfill.py --budget 1.00            # run
     uv run python scripts/lyrics_backfill.py --dry-run                # list only
+    uv run python scripts/lyrics_backfill.py --llm --budget 0.20      # LLM pass (#279)
+
+``--llm`` also takes jobs already rebuilt once: every ASR-floor job the LLM
+corrector has not processed yet (or that failed at the gateway).
 
 Talks to the coordinator API (trusted LAN, or ``--token`` for a machine
 bearer). Jobs already rebuilt are skipped; the server refuses a second
@@ -66,7 +70,16 @@ class Api:
         return self.get(f"/share/{token}/metadata.json")
 
 
-def candidates(api: Api) -> list[tuple[dict, dict]]:
+def _wanted(meta: dict, llm: bool) -> bool:
+    if not str(meta.get("lyrics_source") or "").startswith("whisper_asr"):
+        return False
+    if llm:
+        record = meta.get("lyrics_llm_correction") or {}
+        return not record or bool(record.get("error"))
+    return not meta.get("lyrics_rebuild")
+
+
+def candidates(api: Api, llm: bool = False) -> list[tuple[dict, dict]]:
     found = []
     for job in sorted(api.jobs(), key=lambda j: j["id"], reverse=True):
         if job.get("status") != "completed":
@@ -77,7 +90,7 @@ def candidates(api: Api) -> list[tuple[dict, dict]]:
             meta = api.metadata(job["job_token"])
         except httpx.HTTPError:
             continue
-        if str(meta.get("lyrics_source") or "").startswith("whisper_asr") and not meta.get("lyrics_rebuild"):
+        if _wanted(meta, llm):
             found.append((job, meta))
     return found
 
@@ -95,8 +108,10 @@ def rebuild_one(api: Api, job: dict, *, sleep=time.sleep, clock=time.monotonic) 
             continue
         meta = api.metadata(token)
         if meta.get("lyrics_rebuild"):
+            llm = meta.get("lyrics_llm_correction") or {}
             return {"source_after": meta.get("lyrics_source"), "cost": float(meta["lyrics_rebuild"].get("cost") or 0),
-                    "reference": meta.get("lyrics_reference_provider") or meta.get("lyrics_match_variant")}
+                    "reference": meta.get("lyrics_reference_provider") or meta.get("lyrics_match_variant"),
+                    "llm": llm.get("error") or (f"{llm['applied']} edits" if "applied" in llm else "")}
         if payload.get("rebuild_note"):
             return {"error": payload["rebuild_note"]}
     return {"error": "timed out waiting for the rebuild"}
@@ -108,13 +123,13 @@ def report(rows: list[dict], budget: float, spent: float) -> str:
         "",
         f"Budget ${budget:.2f}, spent ${spent:.4f}, jobs {len(rows)}.",
         "",
-        "| job | title | source before → after | reference | cost | note |",
-        "|---|---|---|---|---|---|",
+        "| job | title | source before → after | reference | llm | cost | note |",
+        "|---|---|---|---|---|---|---|",
     ]
     for row in rows:
         lines.append(
             f"| {row['id']} | {row['title'][:48]} | `{row['before']}` → `{row.get('source_after', '-')}` | "
-            f"{row.get('reference') or '-'} | {row.get('cost', 0):.4f} | {row.get('error', '')} |"
+            f"{row.get('reference') or '-'} | {row.get('llm') or '-'} | {row.get('cost', 0):.4f} | {row.get('error', '')} |"
         )
     moved = sum(1 for r in rows if r.get("source_after") and not str(r["source_after"]).startswith("whisper_asr"))
     lines += ["", f"Off the ASR floor: {moved}/{len(rows)}."]
@@ -128,10 +143,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--budget", type=float, default=1.0, help="stop once this much GPU spend (USD) is used")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--llm", action="store_true", help="rebuild ASR-floor jobs the LLM corrector has not processed")
     args = ap.parse_args(argv)
 
     api = Api(args.base, args.token)
-    todo = candidates(api)
+    todo = candidates(api, llm=args.llm)
     if args.limit:
         todo = todo[: args.limit]
     print(f"{len(todo)} candidate job(s)", file=sys.stderr)
