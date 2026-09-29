@@ -54,6 +54,7 @@ from karaoke.uploads import (
 from karaoke.worker import job_cookies
 from karaoke.worker.lyrics import SPEECH_MARKER
 from karaoke.worker.lyrics_rebuild import (
+    INTERRUPTED_NOTE,
     RebuildUnavailable,
     check_rebuildable,
     rebuild_running,
@@ -1223,12 +1224,15 @@ def _lyrics_payload(job: Job, settings: Settings, *, can_review: bool = False) -
         meta = {}
     quality = meta.get("lyrics_quality")
     note = job.stage_note if job.status == JobStatus.completed else None
+    running = job.status == JobStatus.completed and rebuild_running(settings, job)
+    if note and note.startswith("Rebuilding lyrics") and not running:
+        note = INTERRUPTED_NOTE  # the process that ran it is gone
     common = {
         "quality": quality if isinstance(quality, dict) else None,
         "revision": revision(files),
         "review_job_id": job.id if can_review and job.status == JobStatus.completed else None,
-        "rebuilding": job.status == JobStatus.completed and rebuild_running(settings, job),
-        "rebuild_note": note if note and note.startswith(("Rebuilding lyrics", "Lyrics rebuild")) else None,
+        "rebuilding": running,
+        "rebuild_note": note if note and note.startswith(("Lyrics rebuild", INTERRUPTED_NOTE)) else None,
     }
     source = meta.get("lyrics_source")
     if meta.get("instrumental"):
