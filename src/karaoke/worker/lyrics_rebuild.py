@@ -23,6 +23,7 @@ import logging
 import os
 import shutil
 import time
+import uuid
 from pathlib import Path
 
 from sqlalchemy import select
@@ -38,6 +39,10 @@ log = logging.getLogger("karaoke.worker.lyrics_rebuild")
 
 _LOCK_NAME = ".lyrics-rebuild.lock"
 _LOCK_STALE_S = 45 * 60
+# A rebuild runs as a task inside this process; a lock written by another
+# process (the coordinator was redeployed / restarted mid-run) is dead.
+_PROCESS_TOKEN = uuid.uuid4().hex
+INTERRUPTED_NOTE = "Lyrics rebuild was interrupted by a service restart; run it again."
 _CAPACITY_TRIES = 3
 _CAPACITY_WAIT_S = 60.0
 REASON_REBUILD = "rebuild"
@@ -74,23 +79,32 @@ def _paths(settings, job: Job) -> tuple[Path, Path, Path]:
     return root, root / "work", root / "exports"
 
 
+def _lock_alive(lock: Path) -> bool:
+    try:
+        owner = lock.read_text(encoding="utf-8").split()[0]
+        age = time.time() - lock.stat().st_mtime
+    except (OSError, IndexError):
+        return False
+    return owner == _PROCESS_TOKEN and age <= _LOCK_STALE_S
+
+
 def acquire_lock(work: Path) -> Path:
-    """Exclusive per-job rebuild lock; a lock older than 45 min is stale."""
+    """Exclusive per-job rebuild lock. A lock older than 45 min, or written
+    by another coordinator process (restart mid-run), is dead."""
     lock = work / _LOCK_NAME
     try:
-        if lock.exists() and time.time() - lock.stat().st_mtime > _LOCK_STALE_S:
+        if lock.exists() and not _lock_alive(lock):
             lock.unlink()
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except FileExistsError as exc:
         raise RebuildBusy("a lyrics rebuild is already running for this job") from exc
     with os.fdopen(fd, "w") as fh:
-        fh.write(dt.datetime.now(dt.UTC).isoformat())
+        fh.write(f"{_PROCESS_TOKEN} {dt.datetime.now(dt.UTC).isoformat()}")
     return lock
 
 
 def rebuild_running(settings, job: Job) -> bool:
-    lock = _paths(settings, job)[1] / _LOCK_NAME
-    return lock.exists() and time.time() - lock.stat().st_mtime <= _LOCK_STALE_S
+    return _lock_alive(_paths(settings, job)[1] / _LOCK_NAME)
 
 
 def check_rebuildable(settings, job: Job) -> None:

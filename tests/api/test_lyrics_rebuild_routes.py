@@ -42,7 +42,9 @@ def test_rebuild_refused_without_stem_or_when_running(client, settings, tmp_path
     job, token, auth, calls = _seed(settings, tmp_path, monkeypatch, with_stem=False)
     assert client.post(f"/jobs/{job}/lyrics-rebuild", headers=auth).status_code == 409
     (tmp_path / token / "work" / "vocals.wav").write_bytes(b"RIFF")
-    (tmp_path / token / "work" / ".lyrics-rebuild.lock").write_text("now")
+    from karaoke.worker import lyrics_rebuild
+
+    (tmp_path / token / "work" / ".lyrics-rebuild.lock").write_text(f"{lyrics_rebuild._PROCESS_TOKEN} now")
     r = client.post(f"/jobs/{job}/lyrics-rebuild", headers=auth)
     assert r.status_code == 409 and "already running" in r.json()["detail"]
     payload = client.get(f"/share/{token}/lyrics", headers=auth).json()
@@ -65,3 +67,18 @@ def test_paste_reference_requires_confirmation_and_plain_lines(client, settings,
     r = client.post(url, json={"text": " שורה ראשונה \n\n שורה שנייה ", "confirm": True}, headers=auth)
     assert r.status_code == 202
     assert calls == [(job, {"reference_text": "שורה ראשונה\nשורה שנייה", "requested_by": "alice"})]
+
+
+def test_a_lock_from_a_previous_process_is_dead_and_the_run_shows_interrupted(client, settings, tmp_path, monkeypatch):
+    job, token, auth, calls = _seed(settings, tmp_path, monkeypatch)
+    (tmp_path / token / "work" / ".lyrics-rebuild.lock").write_text("otherprocess 2026-09-28T23:00:00")
+    import os
+    import sqlite3
+    con = sqlite3.connect(os.environ["KARAOKE_DATABASE_URL"].split("///", 1)[1])
+    con.execute("UPDATE jobs SET stage_note=? WHERE id=?", ("Rebuilding lyrics…", job))
+    con.commit()
+    con.close()
+    payload = client.get(f"/share/{token}/lyrics", headers=auth).json()
+    assert "rebuilding" not in payload and payload["rebuild_note"].startswith("Lyrics rebuild was interrupted")
+    assert client.post(f"/jobs/{job}/lyrics-rebuild", headers=auth).status_code == 202
+    assert len(calls) == 1
