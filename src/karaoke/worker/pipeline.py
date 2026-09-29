@@ -54,6 +54,7 @@ from karaoke.worker.asr_reference import (
 )
 from karaoke.worker.canonical import CanonicalResolver
 from karaoke.worker.genius import GeniusSource
+from karaoke.worker.llm_corrector import LlmCorrector, correct_transcript
 from karaoke.worker.lyrics import (
     DURATION_GATE_CANONICAL,
     LRC_TIMESTAMP_RE,
@@ -99,6 +100,24 @@ def _web_references(settings) -> WebReferenceFinder:
             genius=_GENIUS_SOURCE, searxng_url=getattr(settings, "searxng_url", "") or None
         )
     return _WEB_REFERENCES
+
+
+def _llm_corrector(settings, lang: str | None) -> LlmCorrector | None:
+    """The ASR-floor LLM corrector for ``lang``, or None when it is not
+    configured or the language was never benchmarked."""
+    url = getattr(settings, "llm_url", "") or ""
+    key = getattr(settings, "llm_api_key", "") or ""
+    languages = {x.strip() for x in str(getattr(settings, "llm_corrector_languages", "") or "").split(",") if x.strip()}
+    if not (url and key and lang and lang in languages):
+        return None
+    return LlmCorrector(url, key, settings.llm_corrector_model, timeout=float(settings.llm_timeout_s))
+
+
+def _song_label(source_meta: dict, title: str | None) -> str | None:
+    artist, track = source_meta.get("artist"), source_meta.get("track")
+    if artist and track:
+        return f"{artist} — {track}"
+    return track or title
 
 # Minimum word-bigram agreement between the ASR transcript and a curated
 # reference (see textnorm.bigram_agreement): own song >= 0.32, other songs
@@ -598,8 +617,16 @@ def _resolve_lyrics(
     second_text: str | None = None,
     lang: str | None = None,
     web_reference: WebReference | None = None,
+    llm: LlmCorrector | None = None,
+    song: str | None = None,
 ) -> dict[str, object]:
     """Resolve exports, then audit the full text independently of selection.
+
+    ``llm`` (#279, decision 10) corrects a transcript-only result (the
+    ``whisper_asr*`` floor, no reference anywhere) by meaning: word-level
+    edits, never new lines (:mod:`karaoke.worker.llm_corrector`). It runs
+    before the audit; any failure keeps the raw transcript. Blocks on the
+    gateway — call this function off the event loop.
 
     ``web_reference`` (#283) is a non-LRCLIB reference. It never replaces the
     transcript: on the ASR floor it corrects the transcript's words line by
@@ -708,6 +735,8 @@ def _resolve_lyrics(
     selected, curated = _apply_reference_policy(
         provenance, exports_dir, selected, curated, asr, web_reference, lang
     )
+    if llm is not None and provenance["lyrics_source"] in (SOURCE_WHISPER_ASR_SYNCED, SOURCE_WHISPER_ASR):
+        selected = _apply_llm_correction(provenance, exports_dir, selected, llm, song, lang)
     quality = assess_lyrics(
         curated, strip_speech_lines(selected) if selected else selected, asr,
         restored_lines=recovery.get("counts", {}).get("restored_lines", 0),
@@ -728,6 +757,40 @@ def _resolve_lyrics(
         json.dumps(quality, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return provenance
+
+
+def _apply_llm_correction(
+    provenance: dict[str, object],
+    exports_dir: Path,
+    selected: str | None,
+    llm: LlmCorrector,
+    song: str | None,
+    lang: str | None,
+) -> str | None:
+    """Rewrite ``lyrics.lrc`` (then ``lyrics.txt`` from it) or, untimed,
+    ``lyrics.txt`` with the LLM's word edits; returns the new ``selected``."""
+    lrc_path, txt_path = exports_dir / "lyrics.lrc", exports_dir / "lyrics.txt"
+    text = selected if selected is not None else (txt_path.read_text(encoding="utf-8") if txt_path.is_file() else "")
+    if not text.strip():
+        return selected
+    record: dict[str, object] = {"model": llm.model}
+    try:
+        result = correct_transcript(text, song, lang, llm.propose)
+    except Exception as exc:  # noqa: BLE001 — the raw transcript ships instead
+        _log.warning("LLM correction skipped: %s: %s", type(exc).__name__, exc)
+        record["error"] = f"{type(exc).__name__}: {exc}"[:200]
+        provenance["lyrics_llm_correction"] = record
+        return selected
+    record.update(proposed=result.proposed, applied=len(result.applied), edits=result.applied)
+    provenance["lyrics_llm_correction"] = record
+    if not result.applied:
+        return selected
+    if selected is not None:
+        lrc_path.write_text(result.text, encoding="utf-8")
+        txt_path.write_text(lrc_to_plain(result.text), encoding="utf-8")
+        return result.text
+    txt_path.write_text(result.text, encoding="utf-8")
+    return selected
 
 
 def _apply_reference_policy(
@@ -1512,7 +1575,8 @@ async def run_real_job(
                     if web_reference is not None:
                         post_asr = f"web:{web_reference.provider}"
                         break
-        lyrics_prov = _resolve_lyrics(
+        lyrics_prov = await asyncio.to_thread(
+            _resolve_lyrics,
             lyrics,
             exports_dir,
             gpu.lyrics_txt_path,
@@ -1521,6 +1585,8 @@ async def run_real_job(
             second_text=second_text,
             lang=lang_hint,
             web_reference=web_reference,
+            llm=_llm_corrector(settings, lang_hint),
+            song=_song_label(source_meta, title),
         )
         if post_asr:
             lyrics_prov["lyrics_post_asr_reference"] = post_asr
@@ -1574,6 +1640,7 @@ async def run_real_job(
             "lyrics_reference_provider", "lyrics_reference_url", "lyrics_policy",
             "lyrics_reference_corrections", "lyrics_reference_matched_lines",
             "lyrics_web_reference_rejected", "lyrics_speech_lines", "lyrics_post_asr_reference",
+            "lyrics_llm_correction",
         ):
             if lyrics_prov.get(key) is not None:
                 metadata[key] = lyrics_prov[key]

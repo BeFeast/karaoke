@@ -211,6 +211,17 @@ class Settings(BaseSettings):
     # the tab4u / quoted-line rungs.
     searxng_url: str = ""  # KARAOKE_SEARXNG_URL
 
+    # ---- Lyrics: LLM correction of the ASR floor (#279, decision 10) ----
+    # Transcript-only lyrics (no reference anywhere) get meaning-based word
+    # edits from an LLM behind an OpenAI-compatible gateway (the LAN
+    # CLIProxyAPI). Empty URL or key disables; any gateway failure keeps the
+    # raw transcript. Only for the languages benchmarked (comma-separated).
+    llm_url: str = ""  # KARAOKE_LLM_URL, e.g. http://<gateway>:23020/v1
+    llm_api_key: str = ""  # KARAOKE_LLM_API_KEY
+    llm_corrector_model: str = "gpt-6.1-sol"  # KARAOKE_LLM_CORRECTOR_MODEL
+    llm_corrector_languages: str = "he"  # KARAOKE_LLM_CORRECTOR_LANGUAGES
+    llm_timeout_s: float = 240.0  # KARAOKE_LLM_TIMEOUT_S
+
 
 _settings: Settings | None = None
 

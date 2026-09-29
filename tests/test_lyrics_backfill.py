@@ -57,13 +57,28 @@ def test_only_non_latin_asr_floor_jobs_are_candidates():
     assert [j["id"] for j, _ in bf.candidates(api)] == [1]
 
 
+def test_llm_mode_takes_rebuilt_floor_jobs_the_corrector_has_not_processed():
+    http = _Http()
+    http.jobs.append({"id": 4, "job_token": "d", "status": "completed", "title": "אגם חזן - שיר"})
+    http.jobs.append({"id": 5, "job_token": "e", "status": "completed", "title": "עדן חסון - שיר"})
+    http.jobs.append({"id": 6, "job_token": "f", "status": "completed", "title": "אושרי כהן - שיר"})
+    http.meta.update(
+        d={"lyrics_source": "whisper_asr_synced", "lyrics_rebuild": {"cost": 0.004}},
+        e={"lyrics_source": "whisper_asr_synced", "lyrics_rebuild": {"cost": 0.004}, "lyrics_llm_correction": {"model": "m", "applied": 3}},
+        f={"lyrics_source": "whisper_asr_synced", "lyrics_rebuild": {"cost": 0.004}, "lyrics_llm_correction": {"model": "m", "error": "HTTPStatusError"}},
+    )
+    api = bf.Api("http://x", None, http=http)
+    assert [j["id"] for j, _ in bf.candidates(api)] == [1]
+    assert [j["id"] for j, _ in bf.candidates(api, llm=True)] == [6, 4, 1]
+
+
 def test_rebuild_one_polls_until_the_rebuild_lands():
     http = _Http()
     api = bf.Api("http://x", None, http=http)
     job = http.jobs[2]
     row = bf.rebuild_one(api, job, sleep=lambda s: None)
     assert http.posts == [1]
-    assert row == {"source_after": "lrclib_synced", "cost": 0.004, "reference": "canonical:Noa Kirel"}
+    assert row == {"source_after": "lrclib_synced", "cost": 0.004, "reference": "canonical:Noa Kirel", "llm": ""}
 
 
 def test_report_counts_jobs_off_the_floor():
