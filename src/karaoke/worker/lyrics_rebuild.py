@@ -29,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from karaoke.db.models import Artifact, Job, JobStatus
+from karaoke.titles import _is_noise_tail, derive_metadata, strip_credits
 from karaoke.worker.asr_reference import strip_speech_lines
 from karaoke.worker.lyrics import LyricsResult, lrc_to_plain
 from karaoke.worker.manual_reference import merge_reference_with_asr
@@ -53,6 +54,19 @@ class RebuildBusy(RuntimeError):
 
 class RebuildUnavailable(RuntimeError):
     pass
+
+
+def _current_source_meta(metadata: dict, title: str | None) -> dict:
+    """artist/track/album/duration as the CURRENT title parser would derive
+    them. Old jobs stored metadata parsed before later fixes — a producer
+    credit left in the track, a noise tail ("עם מילים HD") taken as the
+    track — and a rebuild must not inherit those mistakes."""
+    stored = {k: metadata.get(k) for k in ("artist", "track", "album", "duration")}
+    track = strip_credits(stored.get("track"))
+    if title and (not track or _is_noise_tail(track) or "|" in track):
+        fresh = derive_metadata({"title": title, "duration": stored.get("duration")})
+        return {**stored, "artist": fresh["artist"], "track": fresh["track"]}
+    return {**stored, "track": track}
 
 
 def _paths(settings, job: Job) -> tuple[Path, Path, Path]:
@@ -153,7 +167,7 @@ async def rebuild_lyrics(
         await _set_note(session_factory, job_id, "Rebuilding lyrics…")
         metadata = json.loads((exports / "metadata.json").read_text(encoding="utf-8"))
         summary["source_before"] = metadata.get("lyrics_source")
-        source_meta = {k: metadata.get(k) for k in ("artist", "track", "album", "duration")}
+        source_meta = _current_source_meta(metadata, title)
         stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
         run_dir = work / f"rebuild-{stamp}"
         out = run_dir / "exports"

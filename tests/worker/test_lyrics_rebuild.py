@@ -172,3 +172,14 @@ async def test_failed_rebuild_keeps_exports_and_records_the_note(seeded, monkeyp
     async with factory() as session:
         job = await session.get(Job, job_id)
         assert job.stage_note.startswith("Lyrics rebuild failed") and job.status == "completed"
+
+
+def test_rebuild_rederives_metadata_parsed_by_an_older_title_parser():
+    from karaoke.worker.lyrics_rebuild import _current_source_meta
+
+    old = {"artist": "עדן בן זקן כולם באילת", "track": "עם מילים HD", "duration": 199}
+    assert _current_source_meta(old, "עדן בן זקן כולם באילת - עם מילים HD")["track"] == "עדן בן זקן כולם באילת"
+    credit = {"artist": "נועה קירל", "track": "לאב סונג (Prod. By Nuri)", "duration": 227}
+    assert _current_source_meta(credit, "נועה קירל - לאב סונג (Prod. By Nuri)")["track"] == "לאב סונג"
+    fine = {"artist": "Radiohead", "track": "Creep", "duration": 237}
+    assert _current_source_meta(fine, "Radiohead - Creep") == {**fine, "album": None}
