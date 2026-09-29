@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.43.5] - 2026-09-29
+
+_Bump: patch_
+
+- fix(lyrics): a lyrics rebuild interrupted by a service restart is reported as interrupted and can be re-run at once (#284)
+
 ## [v0.43.4] - 2026-09-29
 
 _Bump: patch_
