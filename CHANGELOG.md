@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.43.4] - 2026-09-29
+
+_Bump: patch_
+
+- fix(lyrics): Rebuild lyrics re-derives artist/track with the current title parser instead of trusting metadata parsed by an older one (#284)
+
 ## [v0.43.3] - 2026-09-28
 
 _Bump: patch_
