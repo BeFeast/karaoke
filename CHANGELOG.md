@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.44.0] - 2026-09-29
+
+_Bump: minor_
+
+- LLM correction of the Hebrew ASR floor by meaning (#279, decision 10): word-level edits from gpt-6.1-sol via the LAN OpenAI-compatible gateway, no new lines, raw transcript on any failure; metadata `lyrics_llm_correction`; backfill `--llm` (#328).
+
 ## [v0.43.5] - 2026-09-29
 
 _Bump: patch_
