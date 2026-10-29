@@ -7,14 +7,20 @@ images must not install `yt-dlp`, `yt-dlp-ejs`, Deno, Node, or cookie material.
 
 ## Pinned stack
 
-- `yt-dlp==2026.3.17`
-- `yt-dlp-ejs==0.8.0`
-- `bgutil-ytdlp-pot-provider>=1.3.1`
-- coordinator Dockerfile: Node/npm from apt, pinned Deno, `yt-dlp-ejs` from the
-  Python dependency layer
-- runtime yt-dlp args: `--remote-components ejs:github`, YouTube player-client
-  chain, optional bgutil PO-token sidecar, optional per-job client-supplied
-  cookies (see `docs/per-job-cookies.md`)
+- `yt-dlp==2026.10.26`
+- `yt-dlp-ejs==0.8.0` (must equal the EJS version yt-dlp vendors, otherwise
+  yt-dlp ignores the package and fetches `ejs:github`)
+- `bgutil-ytdlp-pot-provider>=1.3.1,<2`: the plugin rejects a PO-token server of
+  another major version, and the `karaoke-pot` sidecar runs `1.3.1`. Move the
+  plugin and the sidecar image to 2.x together.
+- coordinator Dockerfile: Node/npm from apt, pinned Deno (`v2.8.1`; yt-dlp
+  needs deno >= 2.3.0 at runtime), `yt-dlp-ejs` from the Python dependency layer
+- runtime yt-dlp args: `--remote-components ejs:github`, optional bgutil
+  PO-token sidecar, optional per-job client-supplied cookies (see
+  `docs/per-job-cookies.md`). No player-client chain is forced: yt-dlp's own
+  defaults apply (2026.10.26: `tv_samsung,visionos,web`, with cookies
+  `web_embedded,tv_samsung,web`) unless the emergency pin
+  `KARAOKE_YTDLP_PLAYER_CLIENTS` is set (#258)
 
 Bumps of `yt-dlp`, `yt-dlp-ejs`, and `bgutil-ytdlp-pot-provider` go through a
 Forgejo PR, the three together. Dependabot ran only on the GitHub copy and is

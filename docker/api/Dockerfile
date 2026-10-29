@@ -46,6 +46,9 @@ RUN node --version && npm --version
 # JS signature / n-challenge solver; the base image only ships node, which
 # degrades signature solving and trips the YouTube bot-check (issue #68).
 # Pinned to a known release binary for reproducibility (bump deliberately).
+# yt-dlp's runtime minimum is deno 2.3.0. The deno>=2.9.8 floor of the
+# yt-dlp[deno] extra applies to the pip-installed deno, which this image does
+# not use (#330).
 ARG DENO_VERSION=v2.8.1
 RUN arch="$(uname -m)" \
     && case "$arch" in \
