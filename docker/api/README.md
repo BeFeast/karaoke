@@ -84,8 +84,8 @@ bgutil extractor-arg and yt-dlp simply runs without a PO token.
 
 Minimum yt-dlp for the plugin is `2025.05.22`; the coordinator pins the
 known-good stack exactly: `yt-dlp==2026.3.17` and `yt-dlp-ejs==0.8.0`.
-Dependabot groups `yt-dlp`, `yt-dlp-ejs`, and `bgutil-ytdlp-pot-provider` into
-weekly bump PRs. Merge those only after CI and the deployed canary both pass.
+Bump `yt-dlp`, `yt-dlp-ejs`, and `bgutil-ytdlp-pot-provider` together in one
+Forgejo PR. Merge it only after CI and the deployed canary both pass.
 
 ## Nightly yt-dlp canary
 

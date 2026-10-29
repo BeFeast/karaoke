@@ -16,9 +16,10 @@ images must not install `yt-dlp`, `yt-dlp-ejs`, Deno, Node, or cookie material.
   chain, optional bgutil PO-token sidecar, optional per-job client-supplied
   cookies (see `docs/per-job-cookies.md`)
 
-Dependabot checks the Python dependency graph weekly and groups
-`yt-dlp`, `yt-dlp-ejs`, and `bgutil-ytdlp-pot-provider` into one PR. Treat those
-PRs as extraction-risk changes: merge only after CI and a deployed canary pass.
+Bumps of `yt-dlp`, `yt-dlp-ejs`, and `bgutil-ytdlp-pot-provider` go through a
+Forgejo PR, the three together. Dependabot ran only on the GitHub copy and is
+retired (#332). Treat those bumps as extraction-risk changes: merge only after
+CI and a deployed canary pass.
 
 ## Nightly canary
 
@@ -26,7 +27,11 @@ Workflow: `.github/workflows/yt-dlp-canary.yml`
 
 Schedule: daily at `08:23 UTC`, plus manual `workflow_dispatch`.
 
-Required repository secrets:
+The canaries run on Forgejo Actions, in the canonical repo. The GitHub copy
+carries the same workflow files but skips their jobs (`if: github.server_url !=
+'https://github.com'`), so each check runs once.
+
+Required Forgejo repository secrets:
 
 - `KARAOKE_CANARY_BASE_URL`
 - `KARAOKE_CANARY_SERVICE_TOKEN`
@@ -48,8 +53,11 @@ Once a check passes, the script deletes its job (`DELETE /jobs/{id}`, also
 removing the artifacts) so canary rows don't pile up in the Booth. Failed
 canary jobs are kept, so their error stays visible.
 
-On failure, the workflow opens or comments on an issue titled
-`yt-dlp canary failure`, then fails the workflow run.
+On failure, the workflow opens or comments on a Forgejo issue titled
+`yt-dlp canary failure`, then fails the workflow run. The issue step is
+`scripts/canary-failure-issue.sh`: curl against the Forgejo issues API with the
+workflow's automatic token. It replaced `actions/github-script`, which the
+Forgejo runner cannot resolve.
 
 ## GPU keepalive canary
 
