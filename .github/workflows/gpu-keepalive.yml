@@ -1,0 +1,61 @@
+name: GPU keepalive canary
+
+# RunPod scales a serverless endpoint that gets no requests for ~7 days down to
+# workersMax=0; every job then fails with 409 ENDPOINT_PAUSED. The nightly
+# yt-dlp canary passes once the download is done and never looks at the GPU
+# result, so it does not detect that. This runs one short job end-to-end every
+# 3 days.
+on:
+  schedule:
+    - cron: "41 9 */3 * *"
+  workflow_dispatch:
+
+concurrency:
+  group: gpu-keepalive
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  keepalive:
+    name: end-to-end GPU job
+    # Canaries run on Forgejo, the canonical repo (#332). The GitHub copy only
+    # mirrors main, so its scheduled runs are skipped instead of probing twice.
+    if: github.server_url != 'https://github.com'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Run full canary job
+        id: canary
+        continue-on-error: true
+        env:
+          KARAOKE_CANARY_MODE: full
+          KARAOKE_CANARY_BASE_URL: ${{ secrets.KARAOKE_CANARY_BASE_URL }}
+          KARAOKE_CANARY_SERVICE_TOKEN: ${{ secrets.KARAOKE_CANARY_SERVICE_TOKEN }}
+          # One short video only: each URL is a paid GPU job.
+          KARAOKE_CANARY_URLS: ${{ vars.KARAOKE_KEEPALIVE_URL || 'https://www.youtube.com/watch?v=jNQXAC9IVRw' }}
+          KARAOKE_CANARY_TIMEOUT_SECONDS: ${{ vars.KARAOKE_KEEPALIVE_TIMEOUT_SECONDS || '1800' }}
+          KARAOKE_CANARY_POLL_SECONDS: "15"
+        run: uv run --frozen --no-dev scripts/ytdlp_canary.py
+      - name: Open or update failure issue
+        if: steps.canary.outcome == 'failure'
+        env:
+          CANARY_ISSUE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_number }}
+        run: |
+          body="$(printf '%s\n' \
+            "End-to-end GPU keepalive job failed." \
+            "" \
+            "Run: $RUN_URL" \
+            "" \
+            "If the job error is \`409 ENDPOINT_PAUSED\`, the RunPod endpoint was scaled to workersMax=0: restore workersMax (see docs/yt-dlp-runbook.md).")"
+          scripts/canary-failure-issue.sh "GPU keepalive canary failure" "$body"
+      - name: Fail workflow after surfacing canary failure
+        if: steps.canary.outcome == 'failure'
+        run: exit 1

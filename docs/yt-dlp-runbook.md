@@ -16,9 +16,10 @@ images must not install `yt-dlp`, `yt-dlp-ejs`, Deno, Node, or cookie material.
   chain, optional bgutil PO-token sidecar, optional per-job client-supplied
   cookies (see `docs/per-job-cookies.md`)
 
-Dependabot checks the Python dependency graph weekly and groups
-`yt-dlp`, `yt-dlp-ejs`, and `bgutil-ytdlp-pot-provider` into one PR. Treat those
-PRs as extraction-risk changes: merge only after CI and a deployed canary pass.
+Bumps of `yt-dlp`, `yt-dlp-ejs`, and `bgutil-ytdlp-pot-provider` go through a
+Forgejo PR, the three together. Dependabot ran only on the GitHub copy and is
+retired (#332). Treat those bumps as extraction-risk changes: merge only after
+CI and a deployed canary pass.
 
 ## Nightly canary
 
@@ -26,7 +27,11 @@ Workflow: `.github/workflows/yt-dlp-canary.yml`
 
 Schedule: daily at `08:23 UTC`, plus manual `workflow_dispatch`.
 
-Required repository secrets:
+The canaries run on Forgejo Actions, in the canonical repo. The GitHub copy
+carries the same workflow files but skips their jobs (`if: github.server_url !=
+'https://github.com'`), so each check runs once.
+
+Required Forgejo repository secrets:
 
 - `KARAOKE_CANARY_BASE_URL`
 - `KARAOKE_CANARY_SERVICE_TOKEN`
@@ -44,8 +49,35 @@ coordinator-side download has succeeded. If the check passes before terminal
 completion, the script calls `/jobs/{id}/cancel` to avoid waiting on the whole
 GPU pipeline.
 
-On failure, the workflow opens or comments on an issue titled
-`yt-dlp canary failure`, then fails the workflow run.
+Once a check passes, the script deletes its job (`DELETE /jobs/{id}`, also
+removing the artifacts written so far) so canary rows don't pile up in the
+Booth. GPU output that lands after the delete stays on the artifacts share
+(#337). Failed canary jobs are kept, so their error stays visible.
+
+On failure, the workflow opens or comments on a Forgejo issue titled
+`yt-dlp canary failure`, then fails the workflow run. The issue step is
+`scripts/canary-failure-issue.sh`: curl against the Forgejo issues API with the
+workflow's automatic token. It replaced `actions/github-script`, which the
+Forgejo runner cannot resolve.
+
+## GPU keepalive canary
+
+The download canary above passes once the coordinator download is done and
+never looks at the GPU result, so it says nothing about the RunPod endpoint
+(its cancel does not stop the RunPod request either, see #337). RunPod scales an endpoint that gets no
+requests for about 7 days down to `workersMax=0`. After that, every job fails
+with `409 ENDPOINT_PAUSED`. This happened silently from 2026-09-08 to 2026-09-24.
+
+`.github/workflows/gpu-keepalive.yml` therefore runs the same script with
+`KARAOKE_CANARY_MODE=full` every 3 days. It sends one short video (repo var
+`KARAOKE_KEEPALIVE_URL`, default "Me at the zoo") and waits for `completed`.
+That is one real, successful GPU request (about $0.01), which keeps the
+endpoint active and checks the whole pipeline. On failure it opens or comments
+on `GPU keepalive canary failure`.
+
+If the failure is `ENDPOINT_PAUSED`, restore the endpoint with a RunPod REST
+`PATCH /v1/endpoints/{id}` setting `workersMax` > 0 (the live endpoint id is
+`KARAOKE_RUNPOD_ENDPOINT_ID` in Infisical), then re-run the workflow.
 
 ## Rollback
 

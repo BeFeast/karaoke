@@ -84,8 +84,8 @@ bgutil extractor-arg and yt-dlp simply runs without a PO token.
 
 Minimum yt-dlp for the plugin is `2025.05.22`; the coordinator pins the
 known-good stack exactly: `yt-dlp==2026.3.17` and `yt-dlp-ejs==0.8.0`.
-Dependabot groups `yt-dlp`, `yt-dlp-ejs`, and `bgutil-ytdlp-pot-provider` into
-weekly bump PRs. Merge those only after CI and the deployed canary both pass.
+Bump `yt-dlp`, `yt-dlp-ejs`, and `bgutil-ytdlp-pot-provider` together in one
+Forgejo PR. Merge it only after CI and the deployed canary both pass.
 
 ## Nightly yt-dlp canary
 
@@ -95,15 +95,16 @@ polls `/jobs/{id}/status` until the job reaches `separating`, `transcribing`, or
 `completed`. That proves the coordinator-side `yt-dlp` download succeeded on
 the residential-IP devbox without requiring the canary to wait for the full GPU
 pipeline. After the check passes it cancels the job if it is still non-terminal.
+The canary runs on Forgejo Actions; the GitHub copy skips the job.
 
-Required GitHub secret:
+Required Forgejo repository secrets:
 
 | Name | Purpose |
 |---|---|
 | `KARAOKE_CANARY_BASE_URL` | Public coordinator base URL, for example `https://karaoke.example.com` |
 | `KARAOKE_CANARY_SERVICE_TOKEN` | Machine bearer matching `KARAOKE_SERVICE_TOKEN` |
 
-Optional GitHub vars:
+Optional Forgejo repository vars:
 
 | Name | Default |
 |---|---|
@@ -111,7 +112,7 @@ Optional GitHub vars:
 | `KARAOKE_CANARY_TIMEOUT_SECONDS` | `900` |
 | `KARAOKE_CANARY_POLL_SECONDS` | `10` |
 
-On failure the workflow opens or comments on an open issue titled
+On failure the workflow opens or comments on an open Forgejo issue titled
 `yt-dlp canary failure`, then fails the workflow run.
 
 ## Rollback when upstream yt-dlp breaks YouTube

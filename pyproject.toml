@@ -28,7 +28,7 @@ dependencies = [
     "uvicorn[standard]>=0.52.3",
     "websockets>=17.0.1",
     # Known-good YouTube extractor stack. Keep exact pins: the nightly canary
-    # catches breakage, and Dependabot opens deliberate bump PRs.
+    # catches breakage, and bumps land as deliberate Forgejo PRs.
     "yt-dlp==2026.8.19",
     "yt-dlp-ejs==0.8.0",
     "ytmusicapi>=1.12",
