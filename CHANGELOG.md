@@ -4,6 +4,13 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.44.1] - 2026-10-29
+
+_Bump: patch_
+
+- deps(yt-dlp): yt-dlp 2026.10.26 (exact pin); the bgutil PO-token plugin stays on 1.x (`<2`) to match the 1.3.1 sidecar; Deno stays v2.8.1 (#330, #338).
+- ci(canary): canaries run on Forgejo and report failures to Forgejo issues; GitHub main merged in (GPU keepalive canary, canary job cleanup); the GitHub copy skips the canaries; Dependabot retired; CI pinned to Python 3.12 (#332, #334).
+
 ## [v0.44.0] - 2026-09-29
 
 _Bump: minor_
