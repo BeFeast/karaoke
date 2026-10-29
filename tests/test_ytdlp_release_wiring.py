@@ -1,17 +1,33 @@
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_ytdlp_stack_is_exactly_pinned():
+def _deps() -> set[str]:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    deps = set(pyproject["project"]["dependencies"])
-    assert "yt-dlp==2026.8.19" in deps
+    return set(pyproject["project"]["dependencies"])
+
+
+def test_ytdlp_stack_is_exactly_pinned():
+    deps = _deps()
+    assert "yt-dlp==2026.10.26" in deps
     assert "yt-dlp-ejs==0.8.0" in deps
     assert not any(dep.startswith("yt-dlp>=") for dep in deps)
+
+
+def test_pot_plugin_major_matches_documented_sidecar():
+    # The bgutil plugin rejects a provider server of another major version, so
+    # the plugin's upper bound has to track the sidecar image tag (#330).
+    readme = (ROOT / "docker/api/README.md").read_text()
+    tags = set(re.findall(r"brainicism/bgutil-ytdlp-pot-provider:(\d+)\.\d+\.\d+", readme))
+    assert len(tags) == 1, tags
+    sidecar_major = int(tags.pop())
+    (plugin,) = [dep for dep in _deps() if dep.startswith("bgutil-ytdlp-pot-provider")]
+    assert f"<{sidecar_major + 1}" in plugin.split(","), plugin
 
 
 def test_coordinator_image_caches_js_runtime_before_python_dependencies():

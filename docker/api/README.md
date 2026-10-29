@@ -83,7 +83,11 @@ set `KARAOKE_POT_PROVIDER_BASE_URL=` (empty) — the pipeline then omits the
 bgutil extractor-arg and yt-dlp simply runs without a PO token.
 
 Minimum yt-dlp for the plugin is `2025.05.22`; the coordinator pins the
-known-good stack exactly: `yt-dlp==2026.3.17` and `yt-dlp-ejs==0.8.0`.
+known-good stack exactly: `yt-dlp==2026.10.26` and `yt-dlp-ejs==0.8.0`.
+The plugin checks the sidecar's version on every `/ping` and rejects a server
+of another major version, so `bgutil-ytdlp-pot-provider` stays `<2` while the
+sidecar runs `1.3.1`. Moving to 2.x means bumping the plugin and the sidecar
+image together.
 Bump `yt-dlp`, `yt-dlp-ejs`, and `bgutil-ytdlp-pot-provider` together in one
 Forgejo PR. Merge it only after CI and the deployed canary both pass.
 
