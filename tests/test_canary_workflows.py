@@ -100,7 +100,7 @@ class FakeForgejo:
                     i
                     for i in fake.issues
                     if i["state"] == query.get("state")
-                    and query.get("q", "").lower() in i["title"].lower()
+                    and query.get("q", "").strip('"').lower() in i["title"].lower()
                 ]
                 self._reply(200, hits)
 
@@ -157,7 +157,7 @@ def test_opens_issue_when_none_is_open(run_script):
     method, path, query = fake.requests[0]
     assert (method, path) == ("GET", "/api/v1/repos/o/r/issues")
     assert query["type"] == "issues"
-    assert query["q"] == "yt-dlp canary failure"
+    assert query["q"] == '"yt-dlp canary failure"'
     assert fake.requests[1] == (
         "POST",
         "/api/v1/repos/o/r/issues",

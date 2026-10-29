@@ -50,8 +50,9 @@ completion, the script calls `/jobs/{id}/cancel` to avoid waiting on the whole
 GPU pipeline.
 
 Once a check passes, the script deletes its job (`DELETE /jobs/{id}`, also
-removing the artifacts) so canary rows don't pile up in the Booth. Failed
-canary jobs are kept, so their error stays visible.
+removing the artifacts written so far) so canary rows don't pile up in the
+Booth. GPU output that lands after the delete stays on the artifacts share
+(#337). Failed canary jobs are kept, so their error stays visible.
 
 On failure, the workflow opens or comments on a Forgejo issue titled
 `yt-dlp canary failure`, then fails the workflow run. The issue step is
@@ -61,8 +62,9 @@ Forgejo runner cannot resolve.
 
 ## GPU keepalive canary
 
-The download canary above cancels its job before GPU dispatch, so it says
-nothing about the RunPod endpoint. RunPod scales an endpoint that gets no
+The download canary above passes once the coordinator download is done and
+never looks at the GPU result, so it says nothing about the RunPod endpoint
+(its cancel does not stop the RunPod request either, see #337). RunPod scales an endpoint that gets no
 requests for about 7 days down to `workersMax=0`. After that, every job fails
 with `409 ENDPOINT_PAUSED`. This happened silently from 2026-09-08 to 2026-09-24.
 

@@ -2,8 +2,9 @@ name: GPU keepalive canary
 
 # RunPod scales a serverless endpoint that gets no requests for ~7 days down to
 # workersMax=0; every job then fails with 409 ENDPOINT_PAUSED. The nightly
-# yt-dlp canary cancels its job before GPU dispatch, so it neither prevents nor
-# reliably detects that. This runs one short job end-to-end every 3 days.
+# yt-dlp canary passes once the download is done and never looks at the GPU
+# result, so it does not detect that. This runs one short job end-to-end every
+# 3 days.
 on:
   schedule:
     - cron: "41 9 */3 * *"

@@ -17,13 +17,14 @@ body="${2:?usage: canary-failure-issue.sh <title> <body>}"
 api="${GITHUB_API_URL:?GITHUB_API_URL is required}/repos/${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 auth="Authorization: token ${CANARY_ISSUE_TOKEN:?CANARY_ISSUE_TOKEN is required}"
 
-# `q` is a keyword search, so keep only the exact-title match.
+# A quoted `q` is a phrase search (bare words match any word in any issue);
+# jq then keeps only the exact-title match.
 number="$(
   curl -fsS -G -H "$auth" "$api/issues" \
     --data-urlencode state=open \
     --data-urlencode type=issues \
     --data-urlencode limit=50 \
-    --data-urlencode "q=$title" \
+    --data-urlencode "q=\"$title\"" \
     | jq -r --arg title "$title" 'map(select(.title == $title)) | first | .number // empty'
 )"
 
