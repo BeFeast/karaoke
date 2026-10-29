@@ -10,6 +10,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Same Python as the coordinator image (python:3.12-slim). Without a pin, uv
+# picks the newest CPython it can download where the runner has none (the
+# node:24-bookworm migrations container), and CPython 3.15 has no
+# psycopg-binary wheel yet.
+env:
+  UV_PYTHON: "3.12"
+
 jobs:
   lint-test:
     name: lint-test
