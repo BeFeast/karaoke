@@ -27,6 +27,9 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+          # Exact version: "latest" asks api.github.com anonymously (the Forgejo token is not a GitHub token),
+          # and the shared LAN address runs out of the 60 requests/hour limit.
+          version: "0.13.9"
       - name: Sync deps
         run: uv sync --frozen --all-extras --all-groups
       - name: Ruff
@@ -59,6 +62,9 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+          # Exact version: "latest" asks api.github.com anonymously (the Forgejo token is not a GitHub token),
+          # and the shared LAN address runs out of the 60 requests/hour limit.
+          version: "0.13.9"
       - name: Sync deps
         run: uv sync --frozen --all-extras --all-groups
       - name: Alembic upgrade head (clean Postgres)
@@ -105,6 +111,9 @@ jobs:
       - uses: actions/checkout@v7
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
+        with:
+          # Exact version: without it the action lists tags through api.github.com anonymously (rate limited).
+          bun-version: 1.4.5
       - name: Install deps
         run: bun install --frozen-lockfile
       - name: Test
@@ -120,6 +129,9 @@ jobs:
       - uses: actions/checkout@v7
       - name: Setup bun
         uses: oven-sh/setup-bun@v2
+        with:
+          # Exact version: without it the action lists tags through api.github.com anonymously (rate limited).
+          bun-version: 1.4.5
       - name: Install deps
         run: bun install --frozen-lockfile
       - name: Typecheck
