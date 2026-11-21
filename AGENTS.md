@@ -1,130 +1,53 @@
-# AGENTS.md — `BeFeast/karaoke` (repo)
+# AGENTS.md — BeFeast/karaoke
 
-Repo-side instructions for Codex CLI / Claude Code / Cline / Gemini CLI working on the
-**karaoke** codebase. The full project-manager operating contract lives in the operator's
-Obsidian vault at `Dev/Areas/karaoke/AGENTS.md`; this file is the runtime contract for an
-agent working **inside this repo**.
+Code facts for agents working inside this repo. Process, roles, hosts, release approval and runtime operations live in the private vault area `Dev/Areas/karaoke/AGENTS.md`; it wins on process. Development happens on Forgejo; the GitHub copy exists for the `gpu-image` workflow.
 
-## What this product is
+## Purpose and layout
 
-Karaoke takes a YouTube (or any `yt-dlp`-supported) URL and splits it into isolated
-**vocals** and an instrumental **playback** track, transcribes the **lyrics**, and serves
-in-browser playback and share links. Coordinator on `devbox` (residential IP); GPU stages
-on **ephemeral vast.ai** with hard cost caps + guaranteed teardown; multi-layer auth
-(Clerk JWT, machine bearer, trusted-LAN, `ktx_` extension tokens) — scribe parity; live
-progress over WebSocket; a Chrome MV3 extension submits the current tab.
+Karaoke takes a YouTube (or any `yt-dlp`-supported) URL or an uploaded audio file, splits it into **vocals** and an instrumental **playback** track, produces synced **lyrics**, and serves in-browser playback and share links. A coordinator (FastAPI, queue, Postgres) downloads and normalizes audio; GPU stages (separation, transcription, alignment) run on RunPod Serverless, with vast.ai as a fallback only. Progress is pushed over WebSocket.
 
-## Where to work
-
-- **Real dev checkout:** `workshop:/mnt/storage/src/karaoke`. Edit/build/test/commit there.
-- **Mac checkout:** reference-only. Read, `rg`, `git show`, diffs — never `uv sync` or
-  build locally unless explicitly asked.
-- **Runtime:** Dockhand stack `devbox:/opt/stacks/karaoke/` (`:13140`) once provisioned.
-  GitHub `origin/main` and CI green is **not** proof a job actually ran. See the PRD's
-  verification gate before claiming "done".
-- **Artifacts:** TrueNAS Odin NFS share, mounted into the devbox stack via docker's NFS
-  volume driver. No artifact data ever lives in this repo.
-
-If `workshop:/mnt/storage/src/karaoke` and the Mac checkout disagree, **workshop is
-authoritative**.
-
-## Collaboration defaults
-
-- Communicate with the operator (Oleg) in Russian, with English for technical terms verbatim.
-- Code, comments, commit messages, PR titles/bodies stay in English.
-- Use `uv` for Python (`uv run`, `uv sync`, `uvx`) and `bun` for Node/extension work
-  (`bun install`, `bunx`). Don't switch to `pip`/`python`/`npm`/`node`/`npx`.
-- Be direct; don't ask "should we stop?" — the operator will say.
-
-## Hard rules (preserve as you implement)
-
-1. **`yt-dlp` lives on devbox** (residential IP), with a Node JS runtime + EJS remote-component
-   solver. Datacenter IPs (vast.ai hosts) cannot reliably download from YouTube.
-2. **GPU stages live on vast.ai only.** Demucs separation **and** faster-whisper lyrics run
-   inside a single ephemeral vast.ai instance per job. No fixed GPU host.
-3. **Always destroy the vast instance in `finally`.** Record `vast_instance_id` + `vast_cost`
-   on the job. Honor per-job + rolling daily cost caps; refuse the job rather than overrun.
-4. **Multi-layer auth.** Don't regress to a single bearer token. Keep `public` /
-   `trusted_lan` / `machine_bearer` / `clerk_user` + extension tokens (`ktx_…`). Jobs are
-   owner-scoped; share links are both owner-aware and unlisted-token-aware.
-5. **WebSocket is the canonical progress channel.** `/status` polling stays supported but
-   the worker MUST push WS events on every stage transition.
-6. **No secrets in the repo or images.** Read from Infisical (`services/prod/karaoke`) at
-   runtime — service token, Clerk publishable + secret + JWKS issuer, Postgres URL,
-   vast.ai API key, public base URL.
-
-## Verification gate (before a PR)
-
-```bash
-git fetch origin
-git rebase origin/main
-uv sync --frozen --all-extras --all-groups
-uv run ruff check src tests
-uv run pytest -q
-# (Alembic check + extension build commands to be added as those parts land.)
+```
+src/karaoke/api/      FastAPI app, routes, auth layers, WebSocket, SPA static serving
+src/karaoke/worker/   pipeline, scheduler, RunPod/vast clients, R2 transfer, lyrics sources and alignment
+src/karaoke/db/       models; migrations live in alembic/
+web/spa/              submitter and player SPA (Vite, React, bun)
+extension/chrome/     MV3 submitter extension (bun)
+mobile/android/       Android share-target submitter (Gradle)
+docker/               api, runpod and vast images
+scripts/              release-deploy.sh, runpod_provision.py, canaries, lyrics tools
+docs/                 runbooks (release and rollback, yt-dlp, per-job cookies), mobile notes
 ```
 
-PR bodies use non-auto-closing references (`Refs #N` / `Implements #N`) unless the issue is
-purely code/docs and every acceptance criterion — including runtime/deploy verification —
-is proven. Health-only / empty-queue / 404 screenshots do not satisfy a runtime acceptance
-criterion.
+## Commands
 
-## Releases & deploy
+Durations are from Forgejo CI (2026-09-29 to 2026-10-29); local runs not measured.
 
-Versioned-image release pipeline (#99), ported from scribe-service and adapted
-for the Dockhand-managed stack.
+| What | Command | Where | Time |
+|---|---|---|---|
+| Setup | `uv sync --frozen --all-extras --all-groups` (Python 3.12) | anywhere | not measured |
+| Lint and tests | `uv run ruff check src tests && uv run pytest -q` | local or CI job `lint-test` | 54–191 s |
+| Migrations | `uv run alembic upgrade head` against a throwaway Postgres | CI job `migrations` | 56–62 s |
+| SPA | `cd web/spa && bun install --frozen-lockfile && bun run typecheck && bun run test && bun run guards && bun run build` | local or CI job `spa` | ~12 s |
+| Extension | `cd extension/chrome && bun install --frozen-lockfile && bun test` | local or CI jobs `extension`, `extension-version-guard` | 7–14 s |
+| Android | `cd mobile/android && ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug` | CI job `android` (skips itself when Android files are untouched) | 8–149 s |
+| GPU image | `gpu-image` workflow (`.github/workflows/gpu-image.yml`) | CI only | not measured |
 
-- **Version surface:** `GET /health` returns `{"status":"ok","version":"X.Y.Z"}`,
-  read from the installed package metadata (`importlib.metadata.version("karaoke")`,
-  driven by `pyproject.toml`). The release-deploy verify step polls it.
-- **`scripts/release-deploy.sh <X.Y.Z>`** (runs on devbox): check out `vX.Y.Z`,
-  `docker build` -> `karaoke:X.Y.Z`, re-tag the served alias `karaoke:current`,
-  prune to keep-last-5, recreate via Dockhand, then verify `/health` version +
-  an optional authed `GET /jobs` canary; auto-rollback to the prior tag on
-  failure. `--rollback X.Y.Z` re-points without a rebuild. Idempotent + flock.
-- **HARD RULE:** the script (and any deploy) MUST recreate through Dockhand
-  (`KARAOKE_RECREATE_CMD`, default `/opt/stacks/karaoke/deploy.sh start`), never
-  `docker compose up/down/restart`. `docker build` / `docker tag` are allowed.
-- **Compose repoint (deploy-time, on devbox -- not in this repo):** the stack
-  `compose.yaml` must serve `image: karaoke:current` instead of building
-  `karaoke:local`, so deploy/rollback are re-tag + recreate. See
-  [`docs/runbooks/release-rollback.md`](docs/runbooks/release-rollback.md).
-- **CHANGELOG.md** carries one `vX.Y.Z` section per release, generated from the
-  merged PR titles in the tag range.
-- **Maestro auto-release (staged):** the operator's
-  `~/.maestro/maestro.d/karaoke.yaml` carries a staged (disabled) `versioning:`
-  + `deploy_cmd` block mirroring scribe's. When enabled, every merge auto-bumps
-  `pyproject.toml`, tags, releases, and deploys via the script. Until then,
-  releases are cut manually with `scripts/release-deploy.sh`.
+Use `uv` for Python and `bun` for Node; do not switch to `pip`, `npm` or `npx`.
 
-## Provisioning Status
+## Merge gate
 
-- **TrueNAS artifacts path:** live at `/mnt/Odin/lxc-shared/karaoke` on Odin,
-  exported under `/mnt/Odin/lxc-shared` to `10.10.0.0/24`; `devbox`
-  (`10.10.0.13`) reaches it through Docker's local NFS volume driver.
-- **Docker volume:** `karaoke_artifacts` on `devbox`, mounted at
-  `/var/lib/docker/volumes/karaoke_artifacts/_data` with:
+Workflow `ci` (`.github/workflows/ci.yml`, run by Forgejo Actions) on the PR head: `lint-test`, `migrations`, `extension-version-guard`, `extension`, `spa`, `android`. No branch protection is configured on Forgejo. Releases are separate from merges: a version bump PR (`pyproject.toml`, `uv lock`, `CHANGELOG.md`), then a tag and release `vX.Y.Z`, then a deploy approved in the vault area. Auth, owner scoping, per-job cookies, the release script and migrations get one async review by another model family.
 
-  ```yaml
-  driver: local
-  driver_opts:
-    type: nfs
-    o: addr=10.10.0.15,nfsvers=4
-    device: :/mnt/Odin/lxc-shared/karaoke
-  ```
+## Hard rules
 
-- **Permissions:** the mounted artifacts directory reports `1000:1000` and
-  `0775` from a throwaway container. The current `karaoke:current` app
-  container runs as `uid=0,gid=0`; a throwaway `busybox` probe wrote
-  `/artifacts/.probe` as `0:0` with `0644`, read it back, and removed it.
-  Keep future worker UID/GID changes aligned with this NFS mapping.
+1. **yt-dlp runs on the coordinator** (residential IP) with a JS runtime, the EJS remote-component solver and per-job cookies. Datacenter GPU hosts cannot download from YouTube reliably; the GPU images carry no yt-dlp.
+2. **GPU stages run only on ephemeral serverless or on-demand GPU workers**, never on a fixed GPU host. A vast.ai instance is always destroyed in `finally`, with its cost recorded and per-job and daily caps honored.
+3. **Multi-layer auth stays**: public, trusted LAN, machine bearer, Clerk user and `ktx_` extension tokens. Jobs are owner-scoped; share links are owner-aware and unlisted per-job tokens. Never regress to a single bearer.
+4. **WebSocket is the canonical progress channel**; `/status` polling stays supported, and the worker pushes an event on every stage transition.
+5. **Deploys recreate the stack through Dockhand** (`scripts/release-deploy.sh`), never `docker compose up/down/restart`. `docker build` and `docker tag` are allowed.
+6. **A green CI or `/health` is not a shipped job.** Runtime acceptance needs a real job with stems and lyrics stored and a share page that plays.
+7. PR bodies use `Refs #N` or `Implements #N` unless every acceptance criterion, runtime ones included, is proven.
 
-## More context
+## Public-repo hygiene
 
-- Full PRD, architecture diagram, surfaces table, and provisioning status:
-  the operator's Obsidian vault, `Dev/Areas/karaoke/`. That is the canonical project-manager
-  control room — this `AGENTS.md` is the slim repo-side version.
-- Read-only history: the original `KaraokeService` prototype on TrueNAS Odin
-  (`/mnt/Odin/Applications/KaraokeService`). Not running, not a rollback. Mine it for
-  working pipeline patterns (yt-dlp flags, Demucs wrapper, share-page HTML, timeouts) when
-  porting equivalent logic into this repo.
+The repo is public. Never commit secrets, cookies, tokens, `.env` files, artifacts, internal hostnames, IP addresses or absolute personal paths. Runtime secrets come from Infisical at runtime and are never baked into images.
