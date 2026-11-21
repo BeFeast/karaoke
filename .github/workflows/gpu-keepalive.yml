@@ -31,6 +31,9 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+          # Exact version: "latest" asks api.github.com anonymously (the Forgejo token is not a GitHub token),
+          # and the shared LAN address runs out of the 60 requests/hour limit.
+          version: "0.13.9"
       - name: Run full canary job
         id: canary
         continue-on-error: true
