@@ -16,7 +16,7 @@ import { artifactHref, artifactView, statusMeta } from "../jobStatus";
 import { fmtDuration, formatRelativeTime } from "../lib/jobListUtils";
 import { useCoarsePointer, usePhoneLayout } from "../lib/layout";
 import { compactUrlLabel, sourceDisplay } from "../lib/source";
-import { goDashboard, itemUrl } from "../router";
+import { goDashboard, publicShareUrl } from "../router";
 import { type StageTheme, useStageTheme } from "../theme";
 import { MBulbs, SonereliMark } from "./marks";
 import { timeLines } from "./stage-core";
@@ -43,7 +43,11 @@ function initialView(): StageView {
   return "console";
 }
 
-export function Stage({ token, publicBaseUrl }: { token: string; publicBaseUrl: string }) {
+export function Stage({ token, publicBaseUrl, shared = false }: {
+  token: string;
+  publicBaseUrl: string;
+  shared?: boolean;
+}) {
   const [payload, setPayload] = useState<SharePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -124,7 +128,7 @@ export function Stage({ token, publicBaseUrl }: { token: string; publicBaseUrl: 
   }, [token]);
 
   const onCopyLink = useCallback(async () => {
-    const url = itemUrl(publicBaseUrl, token);
+    const url = publicShareUrl(publicBaseUrl, token);
     try {
       await navigator.clipboard.writeText(url);
       setToast("Link copied");
@@ -181,6 +185,7 @@ export function Stage({ token, publicBaseUrl }: { token: string; publicBaseUrl: 
       <StageBody
         payload={payload}
         token={token}
+        shared={shared}
         lyrics={lyrics}
         onLyricsSaved={setLyrics}
         onReloadLyrics={reloadLyrics}
@@ -201,14 +206,14 @@ export function Stage({ token, publicBaseUrl }: { token: string; publicBaseUrl: 
   // .m-stage (night) — the FINAL token sets are baked into those classes, so
   // the ◐ toggle is a class swap scoped to THIS room only.
   return (
-    <div style={{ height: "100%", width: "100%", overflow: "auto", overflowX: "hidden" }}>
-      <div className={theme === "day" ? "m-booth" : "m-stage"} style={{ minHeight: "100%", width: "100%", minWidth: 0, display: "flex", flexDirection: "column" }}>
+    <div className="stage-scroll">
+      <div className={`${theme === "day" ? "m-booth" : "m-stage"}${shared ? " shared-stage" : ""}`} style={{ minHeight: "100%", width: "100%", minWidth: 0, display: "flex", flexDirection: "column" }}>
         {/* phone (#184): the row wraps instead of overflowing — same elements,
             same order; the desktop branch is the untouched port. */}
         <div style={phone
           ? { display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", minHeight: 54, borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap", minWidth: 0 }
           : { display: "flex", alignItems: "center", gap: 12, padding: "0 22px", height: 54, borderBottom: "1px solid var(--border)", flexShrink: 0, minWidth: 0 }}>
-          <button className="m-btn sm ghost" type="button" onClick={goDashboard}>← Booth</button>
+          {!shared && <button className="m-btn sm ghost" type="button" onClick={goDashboard}>← Booth</button>}
           <SonereliMark size={20} />
           <span style={{ flex: 1, minWidth: 0 }}></span>
           <span className="m-chip info">Unlisted</span>
@@ -216,9 +221,9 @@ export function Stage({ token, publicBaseUrl }: { token: string; publicBaseUrl: 
           <button className="m-btn sm ghost" type="button" onClick={toggleTheme}>{theme === "day" ? "Night" : "Day"}</button>
         </div>
 
-        <div style={{ flex: 1, maxWidth: 760, width: "100%", margin: "0 auto", padding: phone ? "18px 14px 18px" : "22px 24px 20px", display: "flex", flexDirection: "column", gap: 16, minHeight: 0, minWidth: 0 }}>
+        <main className={shared ? "shared-stage-body" : undefined} style={shared ? undefined : { flex: 1, maxWidth: 760, width: "100%", margin: "0 auto", padding: phone ? "18px 14px 18px" : "22px 24px 20px", display: "flex", flexDirection: "column", gap: 16, minHeight: 0, minWidth: 0 }}>
           {content}
-        </div>
+        </main>
         <Toast message={toast} onDone={() => setToast(null)} />
       </div>
     </div>
@@ -228,6 +233,7 @@ export function Stage({ token, publicBaseUrl }: { token: string; publicBaseUrl: 
 function StageBody({
   payload,
   token,
+  shared,
   lyrics,
   onLyricsSaved,
   onReloadLyrics,
@@ -243,6 +249,7 @@ function StageBody({
 }: {
   payload: SharePayload;
   token: string;
+  shared: boolean;
   lyrics: LyricsPayload | null;
   onLyricsSaved: (lyrics: LyricsPayload) => void;
   onReloadLyrics: () => Promise<void>;
@@ -265,7 +272,9 @@ function StageBody({
   // desktop Marquee structure is the design; these only resize/rewrap it.
   const phone = usePhoneLayout();
   const coarse = useCoarsePointer();
-  const title = payload.title?.trim() || `Job ${payload.job_token.slice(0, 8)}`;
+  const titleFallback = source.kind === "upload" ? source.label
+    : shared ? "Shared song" : `Job ${token.slice(0, 8)}`;
+  const title = payload.title?.trim() || titleFallback;
   const pct = Math.max(0, Math.min(100, Math.round(payload.progress)));
 
   // Resolve the two stems for the real player. `karaoke` = instrumental (the
@@ -297,19 +306,43 @@ function StageBody({
   const metaBits = [fmtDuration(payload.duration), completedRel ? `split ${completedRel}` : null]
     .filter(Boolean)
     .join(" · ");
+  const lyricsPanel = isComplete && (
+    <SyncedLyrics
+      lrc={lyrics?.lrc ?? null}
+      source={lyrics?.source ?? null}
+      plainLyrics={lyrics?.plain ?? null}
+      currentTime={currentTime}
+      onSeek={onSeek}
+      reducedMotion={reducedMotion}
+    />
+  );
+  const downloads = (
+    <>
+      {vocals && <a className="m-btn sm" href={vocals.href} download><span className="m-stem vox"></span>vocals.mp3</a>}
+      {instrumental && <a className="m-btn sm" href={instrumental.href} download><span className="m-stem inst"></span>karaoke.mp3</a>}
+      {lyrics?.synced ? (
+        <a className="m-btn sm" href={artifactHref(token, "lyrics.lrc")} download>≡ lyrics.lrc</a>
+      ) : lyricsFile ? (
+        <a className="m-btn sm" href={lyricsFile.href} download>≡ {lyricsFile.name}</a>
+      ) : null}
+    </>
+  );
+  const original = source.kind === "url" && (
+    <a className="m-btn sm ghost" href={payload.source_url} target="_blank" rel="noopener">▶ original ↗</a>
+  );
 
   return (
     <>
       {/* header block: meta row + title + view toggle (stage.jsx:105-124) */}
-      <div style={{ display: "flex", alignItems: "flex-end", gap: 14, flexWrap: "wrap", minWidth: 0 }}>
+      <div className={shared ? "shared-stage-song" : undefined} style={{ display: "flex", alignItems: "flex-end", gap: 14, flexWrap: "wrap", minWidth: 0 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="m-mono" style={{ fontSize: 11, color: "var(--muted)", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+          <div className="m-mono stage-song-meta" style={{ fontSize: 11, color: "var(--muted)", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
             {metaBits && <span>{metaBits}</span>}
             {payload.owner_display_name && <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>shared by {payload.owner_display_name}</span>}
             {/* uploads (#173) have no external source — show the filename, no link.
                 Single-line ellipsis on both widths (#184): the raw URL used to
                 wrap across ~4 lines; the full URL stays in the href. */}
-            {source.kind === "url" ? (
+            {shared ? null : source.kind === "url" ? (
               <a href={payload.source_url} target="_blank" rel="noopener" className="m-mono" style={{ color: "var(--info)", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
                 source: {compactUrlLabel(source.label)} ↗
               </a>
@@ -317,15 +350,15 @@ function StageBody({
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>source: {source.label}</span>
             )}
           </div>
-          <h1 style={{ margin: "6px 0 0", fontFamily: "var(--font-display)", fontWeight: 650, fontSize: phone ? 22 : 28, letterSpacing: "-0.02em", lineHeight: 1.1, overflowWrap: "anywhere" }}>{title}</h1>
+          <h1 dir="auto" style={{ margin: "6px 0 0", fontFamily: "var(--font-display)", fontWeight: 650, fontSize: phone ? 20 : 28, letterSpacing: "-0.02em", lineHeight: 1.1, overflowWrap: "anywhere" }}>{title}</h1>
           {(payload.artist || payload.album) && (
-            <div style={{ marginTop: 2, fontSize: 13, color: "var(--muted)", overflowWrap: "anywhere" }}>
+            <div className="stage-song-artist" style={{ marginTop: 2, fontSize: 13, color: "var(--muted)", overflowWrap: "anywhere" }}>
               {[payload.artist, payload.album].filter(Boolean).join(" — ")}
             </div>
           )}
         </div>
         {/* view toggle */}
-        {isComplete && (
+        {isComplete && !shared && (
           <div style={{ display: "flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
             {(["console", "setlist"] as const).map((v) => (
               <button key={v} type="button" onClick={() => setView(v)} className="m-mono" style={{
@@ -365,6 +398,8 @@ function StageBody({
       )}
 
 
+      {shared && lyricsPanel}
+
       {/* player: waveform card + console/setlist modules (KaraokePlayer.tsx) */}
       {isComplete && instrumental && (
         <Suspense
@@ -379,7 +414,7 @@ function StageBody({
             vocalsUrl={vocals?.href ?? null}
             onTime={onTime}
             seekRef={seekRef}
-            view={view}
+            view={shared ? "compact" : view}
             lines={timed}
             theme={theme}
             title={title}
@@ -393,37 +428,24 @@ function StageBody({
         <StageEmpty title="No audio tracks" sub="No audio tracks were produced for this job." />
       )}
 
-      {isComplete && lyrics && <LyricsReview lyrics={lyrics} onSaved={onLyricsSaved} onSeek={onSeek} onReload={onReloadLyrics} />}
+      {!shared && isComplete && lyrics && <LyricsReview lyrics={lyrics} onSaved={onLyricsSaved} onSeek={onSeek} onReload={onReloadLyrics} />}
 
-      {/* full synced-lyrics panel (LRC highlight + click-to-seek, #59/#145) */}
-      {isComplete && (
-        <SyncedLyrics
-          lrc={lyrics?.lrc ?? null}
-          source={lyrics?.source ?? null}
-          plainLyrics={lyrics?.plain ?? null}
-          currentTime={currentTime}
-          onSeek={onSeek}
-          reducedMotion={reducedMotion}
-        />
-      )}
+      {!shared && lyricsPanel}
 
       {/* take home (stage.jsx:150-157) — real downloads via artifactHref */}
-      {isComplete && (
+      {isComplete && (shared ? (
+        <details className="shared-stage-downloads">
+          <summary>Downloads</summary>
+          <div>{downloads}{original}</div>
+        </details>
+      ) : (
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: "auto", borderTop: "1px dashed var(--border)", paddingTop: 13, flexWrap: "wrap", minWidth: 0 }}>
           <span className="m-mono" style={{ fontSize: 10.5, letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--muted)", marginRight: 6 }}>take home</span>
-          {vocals && <a className="m-btn sm" href={vocals.href} download><span className="m-stem vox"></span>vocals.mp3</a>}
-          {instrumental && <a className="m-btn sm" href={instrumental.href} download><span className="m-stem inst"></span>karaoke.mp3</a>}
-          {lyrics?.synced ? (
-            <a className="m-btn sm" href={artifactHref(token, "lyrics.lrc")} download>≡ lyrics.lrc</a>
-          ) : lyricsFile ? (
-            <a className="m-btn sm" href={lyricsFile.href} download>≡ {lyricsFile.name}</a>
-          ) : null}
+          {downloads}
           <span style={{ flex: 1, minWidth: 0 }}></span>
-          {source.kind === "url" && (
-            <a className="m-btn sm ghost" href={payload.source_url} target="_blank" rel="noopener">▶ original ↗</a>
-          )}
+          {original}
         </div>
-      )}
+      ))}
     </>
   );
 }

@@ -7,7 +7,7 @@ action:
       playback_advances: 0.75
       stem_mix_changes: 0.2
       lyric_highlight_sync: 0.5
-      lyric_font_size: 18
+      lyric_font_size: {inactive_px: 16, active_px: 20}
       no_horizontal_scroll: true
       controls_reachable: true
   - open: stage

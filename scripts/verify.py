@@ -171,8 +171,9 @@ def check_player(evidence, scope, checks, samples):
         "viewport_px": before["pageWidth"], "page_px": before["contentWidth"],
         "lyrics_viewport_px": before["lyricsWidth"], "lyrics_scroll_px": before["lyricsScrollWidth"],
     }
-    font = {"min_px": before["minFontPx"],
-            "active_px": times[-1]["active_font_px"] if times else after["activeFontPx"]}
+    active_sizes = [sample["active_font_px"] for sample in times] or [after["activeFontPx"]]
+    font = {"inactive_px": before["minFontPx"],
+            "active_px": None if None in active_sizes else min(active_sizes)}
     direction = {
         "container": before["lyricsDirection"], "hebrew_lines": before["hebrewLines"],
         "rtl_hebrew_lines": before["rtlLines"], "plain_hebrew": before["plainHebrew"],
@@ -203,7 +204,10 @@ def check_player(evidence, scope, checks, samples):
                           and observed[1] > observed[0])
             case "lyric_font_size":
                 observed = font
-                passed = font["min_px"] is not None and font["min_px"] >= expected
+                passed = all(font[key] is not None and font[key] >= expected[key] for key in font)
+            case "active_lyric_in_view":
+                observed = [sample["active_in_view"] for sample in times]
+                passed = bool(observed) and all(value == expected for value in observed)
             case "no_horizontal_scroll":
                 observed = overflow
                 passed = before["contentWidth"] <= before["pageWidth"] + 1 and (
@@ -279,7 +283,8 @@ async def timing_samples(tab, lyrics, duration):
         samples.append({"time_s": round(now, 3), "sample_at_s": round(threshold, 3),
                         "highlight_index": active_index,
                         "expected_index": expected_index, "distance_s": distance,
-                        "active_font_px": sample["activeFontPx"]})
+                        "active_font_px": sample["activeFontPx"],
+                        "active_in_view": sample["activeInView"]})
     return samples
 
 
@@ -294,7 +299,8 @@ async def inspect_player(tab, evidence, scope, checks, lyrics):
     await tab.js("document.fonts.ready.then(() => true)")
     before = await tab.js("karaokeVerify.snapshot()")
     await evidence.capture(tab, scope, "before-play")
-    point = await tab.js('karaokeVerify.point("play", true)')
+    scroll_controls = "active_lyric_in_view" not in checks
+    point = await tab.js(f'karaokeVerify.point("play", {json.dumps(scroll_controls)})')
     if point and point["reachable"]:
         await tab.tap(point)
     await asyncio.sleep(1.6)
@@ -303,7 +309,7 @@ async def inspect_player(tab, evidence, scope, checks, lyrics):
     if before["time"] is None and after["player"] == "web_audio":
         before["time"] = 0
     await evidence.capture(tab, scope, "after-play")
-    mix = await tab.js('karaokeVerify.point("mix", true, 0.82)')
+    mix = await tab.js(f'karaokeVerify.point("mix", {json.dumps(scroll_controls)}, 0.82)')
     gains = []
     if mix and mix["reachable"]:
         gains.append([round(track["gain"], 3) for track in after["tracks"]])

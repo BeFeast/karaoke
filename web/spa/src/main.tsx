@@ -143,6 +143,16 @@ function LanShell({ config }: { config: RuntimeConfig }) {
 
 async function bootstrap() {
   const root = createRoot(document.getElementById("root") as HTMLElement);
+  const share = /^\/share\/([^/]+)\/?$/.exec(window.location.pathname);
+  if (share) {
+    root.render(
+      <StrictMode>
+        <Stage token={decodeURIComponent(share[1])} publicBaseUrl={window.location.origin} shared />
+      </StrictMode>,
+    );
+    return;
+  }
+
   let config: RuntimeConfig;
   try {
     config = await getConfig();

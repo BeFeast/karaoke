@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useMemo, useRef } from "react";
+import { type CSSProperties, useLayoutEffect, useMemo, useRef } from "react";
 
 // ─── LRC parsing ────────────────────────────────────────────────────────────
 //
@@ -301,24 +301,22 @@ export function SyncedLyrics({
 
   const lineRefs = useRef<Array<HTMLLIElement | null>>([]);
   const listRef = useRef<HTMLOListElement | null>(null);
-  const lastScrolled = useRef(-1);
 
-  // Auto-scroll the active line into view, but only when the active index
-  // actually changes (not on every timeupdate frame).
-  useEffect(() => {
-    if (!hasSynced || active < 0) return;
-    if (active === lastScrolled.current) return;
-    lastScrolled.current = active;
+  // Keep scrolling local to the lyrics. If a seek jumps outside the visible
+  // area, bring the line into view before paint instead of animating a long jump.
+  useLayoutEffect(() => {
+    if (active < 0) return;
     const el = lineRefs.current[active];
     const list = listRef.current;
     if (!el || !list) return;
-    // Center the active line within the scroll box.
-    const target = el.offsetTop - list.clientHeight / 2 + el.clientHeight / 2;
+    const top = el.offsetTop;
+    const bottom = top + el.offsetHeight;
+    const visible = top >= list.scrollTop && bottom <= list.scrollTop + list.clientHeight;
     list.scrollTo({
-      top: Math.max(0, target),
-      behavior: reducedMotion ? "auto" : "smooth",
+      top: Math.max(0, (top + bottom - list.clientHeight) / 2),
+      behavior: !reducedMotion && visible ? "smooth" : "auto",
     });
-  }, [active, hasSynced, reducedMotion]);
+  }, [active, lines, reducedMotion]);
 
   // ── Synced path ──────────────────────────────────────────────────────────
   if (hasSynced) {
@@ -326,7 +324,7 @@ export function SyncedLyrics({
       <div className="synced-lyrics" data-synced="true">
         {/* design's stage lyrics header (sections/stage.jsx:114) — the
             provenance segment stays DERIVED from the payload, never hardcoded */}
-        <div className="synced-lyrics-prov">lyrics · synced · {sourceLabel(source)} · click to seek</div>
+        <div className="synced-lyrics-prov">Lyrics · synced · {sourceLabel(source)}</div>
         <ol
           className="synced-lyrics-list"
           ref={listRef}
@@ -349,9 +347,9 @@ export function SyncedLyrics({
                 className="synced-lyrics-seek"
                 onClick={() => onSeek(line.t)}
                 title={`Seek to ${formatTimestamp(line.t)}`}
-                dir="auto"
+                dir={detectTextDirection(line.text)}
               >
-                {line.speech ? <span className="synced-lyrics-speech-tag">[speech] </span> : null}
+                {line.speech ? <bdi dir="ltr" className="synced-lyrics-speech-tag">[speech] </bdi> : null}
                 {line.text}
               </button>
             </li>

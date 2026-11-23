@@ -411,6 +411,29 @@ def test_share_links_use_configured_base_and_accept_both_hosts(client, settings,
         assert "<title>Shared song · Sonereli</title>" in share.text
 
 
+def test_share_serves_built_player_and_keeps_json_representation(client, settings, monkeypatch, tmp_path):
+    (tmp_path / "index.html").write_text(
+        '<title>Sonereli</title><div id="root"></div>'
+        '<script type="module" src="/app/assets/player.js"></script>',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings, "spa_dist_path", str(tmp_path))
+    create = client.post("/jobs", json={"url": "https://example.com/x", "title": "A < B"})
+    path = f"/share/{create.json()['job_token']}"
+
+    page = client.get(path, headers={"Accept": "text/html"}, follow_redirects=False)
+    assert page.status_code == 200
+    assert "<title>A &lt; B · Sonereli</title>" in page.text
+    assert 'src="/app/assets/player.js"' in page.text
+    assert "<audio" not in page.text
+    assert page.headers["Vary"] == "Accept"
+    assert page.headers["X-Robots-Tag"] == "noindex"
+
+    payload = client.get(path, headers={"Accept": "application/json"})
+    assert payload.json()["title"] == "A < B"
+    assert payload.headers["Vary"] == "Accept"
+
+
 def test_share_artifact_404_for_unknown_artifact_name(client):
     create = client.post("/jobs", json={"url": "https://example.com/x"})
     token = create.json()["job_token"]

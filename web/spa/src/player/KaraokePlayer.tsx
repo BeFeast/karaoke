@@ -25,7 +25,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BlendRail, lyricState, ProtoFader, type TimedLine } from "../components/stage-core";
-import { MBulbs, MWipe } from "../components/marks";
+import { MBulbs, MWipe, PlaybackIcon } from "../components/marks";
 import { Perf } from "../components/Perf";
 import { PHONE_QUERY, useCoarsePointer, usePhoneLayout } from "../lib/layout";
 import { useActiveTouchStart } from "../lib/touchGuards";
@@ -66,7 +66,11 @@ function prefersReducedMotion(): boolean {
 // PLAYBACK_RATES (unchanged). The design's loop cycle (none → A set → A–B →
 // none) maps onto markA/markB/clearRegion: the engine wraps at B whenever a
 // region is set, and a B within 1 s of A cancels (the design's guard).
-function TransportBar({ player, onPerf }: { player: KaraokePlayerApi; onPerf: () => void }) {
+function TransportBar({ player, onPerf, compact = false }: {
+  player: KaraokePlayerApi;
+  onPerf: () => void;
+  compact?: boolean;
+}) {
   // Phone: only the play circle grows (40 → 48, thumb-first); every other
   // control stays in the same wrap row — none removed (#185).
   const phone = usePhoneLayout();
@@ -79,20 +83,21 @@ function TransportBar({ player, onPerf }: { player: KaraokePlayerApi; onPerf: ()
     } else player.clearRegion();
   };
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
+    <div className={compact ? "shared-stage-transport" : undefined}
+      style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
       <button className="m-btn primary" type="button" onClick={player.playPause} disabled={!player.ready}
         aria-label={player.playing ? "Pause" : "Play"} title="Play / pause (Space)"
         style={{ width: phone ? 48 : 40, height: phone ? 48 : 40, borderRadius: "50%", justifyContent: "center", fontSize: 14 }}>
-        {player.playing ? "❚❚" : "▶"}
+        <PlaybackIcon playing={player.playing} />
       </button>
       <button className="m-btn sm" type="button" onClick={() => player.skip(-5)} disabled={!player.ready} title="Back 5 seconds (←)">−5s</button>
       <button className="m-btn sm" type="button" onClick={() => player.skip(5)} disabled={!player.ready} title="Forward 5 seconds (→)">+5s</button>
-      <span className="m-mono" style={{ fontSize: 12, color: "var(--fg-soft)", minWidth: 76 }}>{fmt(player.currentTime)} / {fmt(player.duration)}</span>
-      <span style={{ flex: 1, minWidth: 0 }}></span>
+      <span className="m-mono transport-time" style={{ fontSize: 12, color: "var(--fg-soft)", minWidth: 76 }}>{fmt(player.currentTime)} / {fmt(player.duration)}</span>
+      <span className="transport-spacer"></span>
       <button className="m-btn sm" type="button" onClick={cycleLoop} disabled={!player.ready}
         title="A–B repeat: press to mark A, again to mark B, again to clear"
         style={a != null ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}>
-        {a == null ? "A–B" : b == null ? "A set… (B?)" : `${fmt(a)}–${fmt(b)}`}
+        {a == null ? "A–B" : b == null ? (compact ? "Set B" : "A set… (B?)") : `${fmt(a)}–${fmt(b)}`}
       </button>
       <select value={player.rate} disabled={!player.ready} aria-label="Playback speed"
         onChange={(e) => player.setRate(Number(e.target.value))}
@@ -101,7 +106,7 @@ function TransportBar({ player, onPerf }: { player: KaraokePlayerApi; onPerf: ()
           <option key={r} value={r}>{r}×</option>
         ))}
       </select>
-      <button className="m-btn sm primary" type="button" onClick={onPerf} disabled={!player.ready}
+      <button className="m-btn sm primary transport-performance" type="button" onClick={onPerf} disabled={!player.ready}
         title="Performance mode — fullscreen lyrics (esc exits)"
         style={{ background: "transparent", color: "var(--accent)", borderColor: "var(--accent)" }}>Performance</button>
     </div>
@@ -297,14 +302,14 @@ function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: Tim
           pushed the dimmer rail off-screen (pre-existing at 390px), which
           would have left the widened hit zone unreachable. */}
       <div className="m-sign" style={{ flex: 1, minWidth: phone ? 0 : undefined, padding: "16px 22px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 9, textAlign: "center" }}>
-        <div dir="auto" style={{ fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 500, color: "var(--lyric-prev)", minHeight: 18 }}>{ls.prev ? ls.prev.text : "—"}</div>
-        <div style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, lineHeight: 1.25, minHeight: 28 }}>
+        <div dir="auto" style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 500, color: "var(--lyric-prev)", minHeight: 18 }}>{ls.prev ? ls.prev.text : "—"}</div>
+        <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, lineHeight: 1.25, minHeight: 28 }}>
           {ls.cur
-            ? <MWipe text={ls.cur.text} pct={ls.sung} size={22} family="var(--font-display)" weight={700} fill="var(--accent)" dim="var(--lyric-dim)"
+            ? <MWipe text={ls.cur.text} pct={ls.sung} size={20} family="var(--font-display)" weight={700} fill="var(--accent)" dim="var(--lyric-dim)"
                 style={phone ? { maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" } : undefined} />
             : <span style={{ color: "var(--lyric-dim)" }}>{ls.next ? "get ready…" : "intro"}</span>}
         </div>
-        <div dir="auto" style={{ fontFamily: "var(--font-display)", fontSize: 15, fontWeight: 540, color: "var(--lyric-next)", minHeight: 19 }}>{ls.next ? ls.next.text : "— end —"}</div>
+        <div dir="auto" style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 540, color: "var(--lyric-next)", minHeight: 19 }}>{ls.next ? ls.next.text : "— end —"}</div>
         <div style={{ display: "flex", justifyContent: "center", marginTop: 2, minHeight: 8 }}>
           {gapBulbs > 0 ? <MBulbs n={8} lit={gapBulbs} /> : <span></span>}
         </div>
@@ -358,7 +363,7 @@ function LiveLyricWipe({
     [lines, subscribeTime],
   );
   return (
-    <span className="m-wipe" dir="auto" style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 650, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" }}>
+    <span className="m-wipe" dir="auto" style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 650, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" }}>
       <span className="w-dim" style={{ color: "var(--lyric-dim)" }} ref={dimRef}></span>
       <span className="w-fill" style={{ color: "var(--accent)" }} ref={fillRef} aria-hidden="true"></span>
     </span>
@@ -377,8 +382,8 @@ export interface KaraokePlayerProps {
   onTime?: (currentTime: number, duration: number) => void;
   /** Lets a sibling (e.g. lyrics line click) drive the transport. */
   seekRef?: React.MutableRefObject<((time: number) => void) | null>;
-  /** Stage view: console (FINAL default) or setlist. */
-  view: "console" | "setlist";
+  /** Player layout for the Stage or public share page. */
+  view: "console" | "setlist" | "compact";
   /** Timed lyric lines for the wipe / setlist modules (empty = no lyrics). */
   lines: TimedLine[];
   /** Room theme — the ◐ flip re-reads canvas colors off the room container. */
@@ -404,12 +409,13 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
   const coarse = useCoarsePointer();
   // Phone console restructure (#185) — live, so rotation re-lays-out.
   const phone = usePhoneLayout();
+  const compact = view === "compact";
   // Waveform canvas height: 72px on phone (pre-Marquee precedent, #64 /
   // 08fee3c), 96px otherwise. Mount-time choice on purpose — mid-session
   // rotation does NOT need to re-create the canvas, so this is a useState
   // initializer, not live matchMedia.
   const [waveHeight] = useState(() =>
-    typeof window !== "undefined" && window.matchMedia?.(PHONE_QUERY).matches ? 72 : 96,
+    compact ? 32 : window.matchMedia?.(PHONE_QUERY).matches ? 72 : 96,
   );
 
   // Re-read canvas colors off the room container whenever ◐ flips the room
@@ -431,6 +437,33 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
     reducedMotion,
     waveHeight,
   });
+
+  useEffect(() => {
+    if (!player.playing || !navigator.wakeLock) return;
+    let cancelled = false;
+    let pending = false;
+    let lock: WakeLockSentinel | undefined;
+    const keepScreenOn = async () => {
+      if (document.hidden || pending || (lock && !lock.released)) return;
+      pending = true;
+      try {
+        const next = await navigator.wakeLock.request("screen");
+        if (cancelled) await next.release();
+        else lock = next;
+      } catch {
+        // The browser or OS can refuse a wake lock even while the tab is visible.
+      } finally {
+        pending = false;
+      }
+    };
+    void keepScreenOn();
+    document.addEventListener("visibilitychange", keepScreenOn);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", keepScreenOn);
+      void lock?.release().catch(() => {});
+    };
+  }, [player.playing]);
 
   // Expose the transport to siblings (#59). The playhead rides the engine's
   // raw tick feed (subscribeTime) instead of React state, so per-tick updates
@@ -536,13 +569,14 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
     // focusable on purpose so the shortcuts work without hunting for a control.
     <section
       ref={rootRef}
-      className="ksplayer"
+      className={compact ? "ksplayer ksplayer-compact" : "ksplayer"}
       aria-label="Sonereli player"
       tabIndex={0}
       onKeyDown={onKeyDown}
     >
       {/* waveform card (stage.jsx:126-129; ProtoWave contract → wavesurfer) */}
-      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "14px 16px", minWidth: 0 }}>
+      <div className={compact ? "shared-stage-wave" : undefined}
+        style={compact ? undefined : { background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "14px 16px", minWidth: 0 }}>
         {/* min-height mirrors the mount-time canvas height inline — the
             .ksplayer-wave-wrap 96px rule stays untouched (#185) */}
         <div className="ksplayer-wave-wrap" style={{ minHeight: waveHeight }}>
@@ -552,7 +586,12 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
         </div>
       </div>
 
-      {view === "console" ? (
+      {compact ? (
+        <>
+          {player.hasVocals && <BlendRail vox={voxPct} onVox={onVox} reducedMotion={reducedMotion} />}
+          <TransportBar player={player} onPerf={openPerf} compact />
+        </>
+      ) : view === "console" ? (
         // Phone (#185): the row stacks — the left column never forced a wrap
         // (minWidth: 0), so side-by-side it starved TransportBar down to one
         // control per row. Desktop branch byte-identical.
@@ -564,7 +603,7 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
             : { flex: 1, display: "flex", flexDirection: "column", gap: 11, justifyContent: "center", minWidth: 0 }}>
             <TransportBar player={player} onPerf={openPerf} />
             <div className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)" }}>{coarse ? "tap the wave to seek" : "space play · ←/→ seek · V drops vocals · click wave to seek"}</div>
-            <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 650, minHeight: 22, minWidth: 0 }}>
+            <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 650, minHeight: 24, minWidth: 0 }}>
               {lines.length > 0 && <LiveLyricWipe lines={lines} subscribeTime={player.subscribeTime} />}
             </div>
           </div>

@@ -133,3 +133,7 @@ export function MDuetWave({
     </svg>
   );
 }
+
+export function PlaybackIcon({ playing }: { playing: boolean }) {
+  return <span aria-hidden="true" className={playing ? "playback-icon is-playing" : "playback-icon"} />;
+}

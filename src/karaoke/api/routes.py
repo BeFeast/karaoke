@@ -959,14 +959,15 @@ def _wants_json(request: Request) -> bool:
 async def share_page(
     job_token: str,
     request: Request,
+    response: Response,
     owner: Owner | None = Depends(resolve_owner),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
     """Owner-aware + unlisted-token-aware share endpoint.
 
-    Returns HTML for browsers (with embedded ``<audio>`` players), or JSON
-    when ``Accept: application/json`` is sent — keeps API consumers happy.
+    Browsers load the shared Stage player at this URL. JSON clients receive
+    the same SharePayload as the player.
     """
     job = await session.scalar(
         select(Job)
@@ -982,7 +983,9 @@ async def share_page(
     if not (holds_unlisted_token or is_owner or is_lan):  # pragma: no cover
         raise HTTPException(status_code=404, detail="job not found")
 
+    headers = {"Vary": "Accept", "Cache-Control": "no-cache"}
     if _wants_json(request):
+        response.headers.update(headers)
         return SharePayload(
             job_token=job.job_token,
             title=job.title,
@@ -1006,7 +1009,18 @@ async def share_page(
             ],
         )
 
-    # Inline lyrics if they fit comfortably on the page.
+    title = job.title or upload_display_name(job.source_url) or "Shared song"
+    spa_index = _PathLib(settings.spa_dist_path) / "index.html"
+    if spa_index.is_file():
+        page = spa_index.read_text(encoding="utf-8")
+        page = page.replace(
+            "<title>Sonereli</title>",
+            f"<title>{_html_escape(title[:80])} · Sonereli</title>",
+            1,
+        )
+        return HTMLResponse(page, headers={**headers, "X-Robots-Tag": "noindex"})
+
+    # Source-only installs without a Vite build can still stream the exports.
     lyrics_text: str | None = None
     artifact_root = _PathLib(settings.artifact_root)
     lyrics_path = artifact_root / job.job_token / "exports" / "lyrics.txt"
@@ -1016,7 +1030,7 @@ async def share_page(
         except OSError:
             lyrics_text = None
 
-    return HTMLResponse(_render_share_html(job, lyrics_text))
+    return HTMLResponse(_render_share_html(job, lyrics_text), headers=headers)
 
 
 # One LRC line timestamp tag, e.g. "[01:23.45]" / "[1:23]" / "[01:23:456]".

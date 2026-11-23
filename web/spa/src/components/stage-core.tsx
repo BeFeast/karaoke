@@ -310,7 +310,20 @@ export function BlendRail({
         <span style={{ color: "var(--fg-soft)" }}>vox {vox}%</span>
         <span className="m-stem vox">full voice</span>
       </div>
-      <div ref={railRef} onPointerDown={drag} style={{ position: "relative", height: 28, display: "flex", alignItems: "center", cursor: "ew-resize", ...TOUCH_DRAG_GUARDS }}>
+      <div ref={railRef} onPointerDown={drag}
+        role="slider" tabIndex={0} aria-label="Vocal mix" aria-valuemin={0} aria-valuemax={100}
+        aria-valuenow={vox} aria-valuetext={`${vox}% vocals`}
+        onKeyDown={(e) => {
+          const levels: Record<string, number> = {
+            ArrowLeft: vox - 5, ArrowDown: vox - 5, ArrowRight: vox + 5, ArrowUp: vox + 5,
+            Home: 0, End: 100,
+          };
+          if (!Object.prototype.hasOwnProperty.call(levels, e.key)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          onVox(Math.max(0, Math.min(100, levels[e.key])));
+        }}
+        style={{ position: "relative", height: 28, display: "flex", alignItems: "center", cursor: "ew-resize", ...TOUCH_DRAG_GUARDS }}>
         <div style={{ position: "absolute", left: 0, right: 0, height: 6, borderRadius: 3, background: BLEND_GRADIENT }}></div>
         <span style={{ position: "absolute", left: vox + "%", top: "50%", transform: "translate(-50%,-50%)", width: 26, height: 26, borderRadius: "50%", background: "var(--fg)", border: "4px solid var(--bg)", boxShadow: "var(--shadow-sm)", transition: reducedMotion ? undefined : "left .1s" }}></span>
       </div>

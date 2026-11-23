@@ -43,7 +43,7 @@ import { railPct } from "../player/engineMath";
 import type { KaraokePlayerApi } from "../player/useKaraokePlayer";
 import type { StageTheme } from "../theme";
 import { FIT_FLOOR, balancedSplit, fitLineScale, splitFill } from "./lineFit";
-import { MBulbs, SonereliMark } from "./marks";
+import { MBulbs, PlaybackIcon, SonereliMark } from "./marks";
 import { PlainLyrics } from "./SyncedLyrics";
 // BLEND_GRADIENT + the phone rail recipe moved to stage-core (#185) so the
 // phone console reuses them; the desktop rail below still paints the gradient.
@@ -429,7 +429,7 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
               aria-label={player.playing ? "Pause" : "Play"}
               style={{ width: 72, height: 72, borderRadius: "50%", justifyContent: "center", fontSize: 24, boxShadow: "var(--glow)" }}
             >
-              {player.playing ? "❚❚" : "▶"}
+              <PlaybackIcon playing={player.playing} />
             </button>
             <button className="m-btn" type="button" onClick={() => player.skip(5)} disabled={!player.ready} style={{ width: 52, height: 52, borderRadius: "50%", justifyContent: "center", fontSize: 13 }}>+5s</button>
           </div>
@@ -445,7 +445,7 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
             aria-label={player.playing ? "Pause" : "Play"}
             style={{ width: 46, height: 46, borderRadius: "50%", justifyContent: "center", fontSize: 16, boxShadow: "var(--glow)" }}
           >
-            {player.playing ? "❚❚" : "▶"}
+            <PlaybackIcon playing={player.playing} />
           </button>
           <div style={{ width: 320 }}>
             <div className="m-mono" style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--muted)", marginBottom: 6 }}>

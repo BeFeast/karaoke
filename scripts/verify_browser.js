@@ -63,8 +63,9 @@
       const rows = synced ? [...synced.children] : [];
       const current = rows.find((row) => row.getAttribute("aria-current") === "true");
       const sung = rows.filter((row) => !row.classList.contains("is-speech"));
-      const plain = select(".lyrics pre, .synced-lyrics-plain");
-      const sizes = sung.length ? sung.map((row) => parseFloat(getComputedStyle(line(row)).fontSize))
+      const plain = select(".lyrics pre, .lyrics-text");
+      const sizes = rows.length ? rows.filter((row) => row !== current)
+        .map((row) => parseFloat(getComputedStyle(line(row)).fontSize))
         : plain ? [parseFloat(getComputedStyle(plain).fontSize)] : [];
       const hebrewRows = sung.filter((row) => /\p{Script=Hebrew}/u.test(line(row).textContent));
       const firstStrongHebrew = (value) => /\p{Script=Hebrew}/u.test(value.match(/\p{L}/u)?.[0] ?? "");
@@ -77,6 +78,11 @@
         duration: node.buffer.duration,
       }));
       const viewport = document.documentElement.clientWidth;
+      const currentBox = current?.getBoundingClientRect();
+      const lyricsBox = synced?.getBoundingClientRect();
+      const activeInView = !!(currentBox && lyricsBox &&
+        currentBox.top >= Math.max(0, lyricsBox.top) - 1 &&
+        currentBox.bottom <= Math.min(innerHeight, lyricsBox.bottom) + 1);
       return {
         ready: !!(play() && !play().disabled || native),
         player: play() ? "web_audio" : native ? "native_audio" : null,
@@ -91,6 +97,7 @@
         lineCount: rows.length,
         minFontPx: sizes.length ? Math.min(...sizes) : null,
         activeFontPx: current ? parseFloat(getComputedStyle(line(current)).fontSize) : null,
+        activeInView,
         pageWidth: viewport,
         contentWidth: Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth ?? 0),
         lyricsWidth: synced?.clientWidth ?? plain?.clientWidth ?? null,
