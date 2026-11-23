@@ -53,7 +53,8 @@ export function settingsHash(): string {
   return "#/settings";
 }
 
-/** Build the absolute in-app URL (used for copy-to-clipboard / Share). */
+/** Build a public Stage link for the clipboard. The job token grants read access
+ * to the share even when the recipient has neither Clerk nor LAN credentials. */
 export function itemUrl(publicBaseUrl: string, token: string): string {
   return `${publicBaseUrl.replace(/\/+$/, "")}/app/${itemHash(token)}`;
 }

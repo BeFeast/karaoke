@@ -189,6 +189,21 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Set up Android SDK on Forgejo
+        if: steps.filter.outputs.android == 'true' && github.server_url != 'https://github.com'
+        run: |
+          sdk_root="$RUNNER_TEMP/android-sdk"
+          tools_zip="$RUNNER_TEMP/android-command-line-tools.zip"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+            --output "$tools_zip"
+          echo "2d2d50857e4eb553af5a6dc3ad507a17adf43d115264b1afc116f95c92e5e258  $tools_zip" | sha256sum --check
+          unzip -q "$tools_zip" -d "$sdk_root/cmdline-tools"
+          mv "$sdk_root/cmdline-tools/cmdline-tools" "$sdk_root/cmdline-tools/latest"
+          sdkmanager="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+          "$sdkmanager" --sdk_root="$sdk_root" --licenses < <(yes)
+          "$sdkmanager" --sdk_root="$sdk_root" "platforms;android-35" "build-tools;34.0.0"
+          echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
       - name: Validate Gradle wrapper
         if: steps.filter.outputs.android == 'true'
         uses: gradle/actions/wrapper-validation@v6
@@ -204,8 +219,15 @@ jobs:
         working-directory: mobile/android
         run: ./gradlew --no-daemon assembleDebug
       - name: Upload APK artifact
-        if: steps.filter.outputs.android == 'true'
+        if: steps.filter.outputs.android == 'true' && github.server_url == 'https://github.com'
         uses: actions/upload-artifact@v7
+        with:
+          name: karaoke-submitter-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+      - name: Upload APK artifact on Forgejo
+        if: steps.filter.outputs.android == 'true' && github.server_url != 'https://github.com'
+        uses: forgejo/upload-artifact@v4
         with:
           name: karaoke-submitter-debug-apk
           path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
