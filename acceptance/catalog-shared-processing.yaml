@@ -1,0 +1,34 @@
+# Design scenario for the Prepare increment. Use independent Clerk sessions.
+state:
+  authenticated_owners: [first_allowlisted_clerk_user, second_allowlisted_clerk_user]
+  catalog_fixture: approved_recording_without_asset
+  profiles: [iphone, android]
+action:
+  - submit_concurrently: [first_owner_prepare, second_owner_equivalent_youtube_url]
+    assert:
+      distinct_owner_job_ids: true
+      websocket_completed_for_both_owners: 100
+      new_downloads: 1
+      new_gpu_jobs: 1
+      sing_action_visible_to_both_owners: true
+  - open: second_owner_catalog_stage
+    assert: &player
+      playback_advances: 0.75
+      lyric_highlight_sync: 0.5
+  - delete: first_owner_library_entry
+    assert:
+      deleted_job_visible_to_first_owner: false
+      second_owner_library_entry_visible: true
+      ready_recording_visible: true
+  - open: second_owner_catalog_stage
+    assert: *player
+  - open: catalog_stage_as_guest
+    assert:
+      sign_in_required: true
+      lyrics_delivered: false
+      streams_delivered: false
+  - open: catalog_exports_as_non_allowlisted_clerk_user
+    assert:
+      access_denied: true
+      lyrics_delivered: false
+      streams_delivered: false

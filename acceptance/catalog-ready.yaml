@@ -1,0 +1,31 @@
+# Design scenario. The verifier needs catalog support before this can run.
+state:
+  authenticated_owner: clerk_user
+  catalog_access: allowlisted
+  catalog_fixture: ready_recording_with_synced_lyrics
+  owner_library: empty
+  profiles: [iphone, android]
+action:
+  - open: booth
+    assert:
+      ready_recording_visible: true
+  - search: partial_artist_or_title
+    assert:
+      matching_recording_visible: true
+      recording_version_visible: true
+      sing_action_visible: true
+  - open: catalog_sing_link
+    assert: &player
+      playback_advances: 0.75
+      stem_mix_changes: 0.2
+      lyric_highlight_sync: 0.5
+      no_horizontal_scroll: true
+      controls_reachable: true
+  - submit: equivalent_youtube_url_for_ready_recording
+    assert:
+      sing_action_visible: true
+      processing_progress_shown: false
+      new_downloads: 0
+      new_gpu_jobs: 0
+  - open: booth_sing_link
+    assert: *player
