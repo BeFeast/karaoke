@@ -387,12 +387,15 @@ async def submit(args, api, evidence, scenario, profile, bearer):
                 await wait_for(lambda: asyncio.sleep(0, tab.open_sockets), 15,
                                "Booth WebSocket did not open")
                 await tab.tap(field)
+                # Emulated Chrome touch may leave a text field unfocused.
+                await tab.js(f"{song_input}?.focus({{preventScroll: true}})")
                 await tab.call("Input.insertText", {"text": source})
-                button = await tab.element_point(
-                    f'{song_input}?.parentElement.querySelector("button.primary")'
+                button = await wait_for(
+                    lambda: tab.element_point(
+                        f'{song_input}?.parentElement.querySelector("button.primary")'
+                    ),
+                    5, "Submit button missing, disabled or obscured",
                 )
-                if not button:
-                    raise VerifyError("Submit button missing, disabled or obscured")
                 attempted = True
                 await tab.tap(button)
                 job = await wait_for(lambda: asyncio.sleep(0, tab.response), 30,
