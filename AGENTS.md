@@ -36,6 +36,8 @@ Use `uv` for Python and `bun` for Node; do not switch to `pip`, `npm` or `npx`.
 
 ## Merge gate
 
+Run `scripts/verify <scenario>|all` for browser and real-job acceptance. See [docs/verify.md](docs/verify.md).
+
 Workflow `ci` (`.github/workflows/ci.yml`, run by Forgejo Actions) on the PR head: `lint-test`, `migrations`, `extension-version-guard`, `extension`, `spa`, `android`. No branch protection is configured on Forgejo. Releases are separate from merges: a version bump PR (`pyproject.toml`, `uv lock`, `CHANGELOG.md`), then a tag and release `vX.Y.Z`, then a deploy approved in the vault area. Auth, owner scoping, per-job cookies, the release script and migrations get one async review by another model family.
 
 ## Hard rules

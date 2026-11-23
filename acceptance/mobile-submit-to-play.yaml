@@ -1,0 +1,23 @@
+state:
+  authenticated_owner: machine_bearer
+  youtube_url: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+  profiles: [android]
+action:
+  - submit: youtube_url
+    assert:
+      owner_authenticated: machine_bearer
+      job_submitted: queued
+      websocket_completed: 100
+      real_gpu_job: runpod-
+      synced_lyrics: true
+  - open: booth_sing_link
+    assert:
+      playback_advances: 0.75
+      stem_mix_changes: 0.2
+      lyric_highlight_sync: 0.5
+      lyric_font_size: 18
+      no_horizontal_scroll: true
+      controls_reachable: true
+  - cleanup: submitted_job
+    assert:
+      job_and_exports_removed: true

@@ -1,0 +1,17 @@
+state:
+  completed_song: https://www.youtube.com/watch?v=tlHn-L6_f6o
+  profiles: [iphone, android]
+  lyrics_script: Hebrew
+action:
+  - open: public_share
+    assert: &player
+      playback_advances: 0.75
+      stem_mix_changes: 0.2
+      lyric_highlight_sync: 0.5
+      lyric_font_size: 18
+      no_horizontal_scroll: true
+      controls_reachable: true
+      hebrew_direction: rtl
+      lyric_highlight_progresses: true
+  - open: stage
+    assert: *player

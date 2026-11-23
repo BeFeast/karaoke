@@ -1,0 +1,14 @@
+state:
+  completed_song: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+  profiles: [desktop]
+action:
+  - open: public_share
+    assert: &player
+      playback_advances: 0.75
+      stem_mix_changes: 0.2
+      lyric_highlight_sync: 0.5
+      lyric_font_size: 18
+      no_horizontal_scroll: true
+      controls_reachable: true
+  - open: stage
+    assert: *player
