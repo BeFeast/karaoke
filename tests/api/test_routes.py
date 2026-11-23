@@ -398,6 +398,19 @@ def test_share_endpoint_renders_html_for_browsers(client):
     assert 'class="chip' in body
 
 
+def test_share_links_use_configured_base_and_accept_both_hosts(client, settings, monkeypatch):
+    monkeypatch.setattr(settings, "public_base_url", "https://sonereli.oklabs.uk/")
+    create = client.post("/jobs", json={"url": "https://example.com/x", "title": "Shared song"})
+    assert create.status_code == 201
+    job = create.json()
+    path = f"/share/{job['job_token']}"
+    assert job["share_url"] == f"https://sonereli.oklabs.uk{path}"
+    for host in ("karaoke.oklabs.uk", "sonereli.oklabs.uk"):
+        share = client.get(path, headers={"Host": host}, follow_redirects=False)
+        assert share.status_code == 200
+        assert "<title>Shared song · Sonereli</title>" in share.text
+
+
 def test_share_artifact_404_for_unknown_artifact_name(client):
     create = client.post("/jobs", json={"url": "https://example.com/x"})
     token = create.json()["job_token"]

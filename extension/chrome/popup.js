@@ -1,3 +1,4 @@
+import { DEFAULT_BASE_URL } from "./deployment.js";
 // Doorway popup-as-receipt (issue #155, design/m-doorway.jsx MPopupBoard).
 //
 // Opening the popup IS the toolbar click: the service worker preflights the
@@ -11,7 +12,6 @@
 
 import { extractorReceiptLabel, failedReceiptLine } from "./receipt.js";
 
-const DEFAULT_BASE_URL = "https://karaoke.oklabs.uk";
 const ACTIVE_STATUSES = new Set(["queued", "downloading", "separating", "transcribing"]);
 const FEED_LIMIT = 6;
 const RECEIPT_POLL_MS = 1500;

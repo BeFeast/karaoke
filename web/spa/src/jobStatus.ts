@@ -66,10 +66,7 @@ export function sourceLabel(url: string): string {
   }
 }
 
-// Same-origin links. We deliberately do NOT use job.share_url (the public
-// https://karaoke.oklabs.uk/... base) — on the LAN that 401s through the CF
-// tunnel; the SPA is served from the same host as these routes, so relative
-// paths open correctly. (Real "sharing" only matters once auth is wired.)
+// In-page reads stay on the current origin, including on the LAN.
 export function resultHref(token: string): string {
   return `/share/${token}`;
 }

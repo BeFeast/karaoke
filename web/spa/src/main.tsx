@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { ClerkProvider, SignedIn, SignedOut, useAuth, useClerk, useUser } from "@clerk/clerk-react";
 import { App } from "./App";
 import { getConfig, type RuntimeConfig, setTokenGetter } from "./api";
-import { MicMark } from "./components/marks";
+import { SonereliMark } from "./components/marks";
 import { SettingsPage } from "./components/SettingsPage";
 import { Stage } from "./components/Stage";
 import { SignInScreen, UserAvatar } from "./components/SignInWall";
@@ -34,7 +34,7 @@ import "./styles.css";
 function Routed({ config, authControl }: { config: RuntimeConfig; authControl?: React.ReactNode }) {
   const route = useRoute();
   if (route.name === "item") {
-    return <Stage token={route.token} />;
+    return <Stage token={route.token} publicBaseUrl={config.public_base_url} />;
   }
   if (route.name === "settings") {
     return <SettingsPage authControl={authControl} />;
@@ -46,7 +46,7 @@ function Boot({ children }: { children: React.ReactNode }) {
   return (
     <div className="center">
       <span className="brand-mark">
-        <MicMark size={28} accent="var(--accent-fg)" ink="var(--accent-fg)" />
+        <SonereliMark size={28} />
       </span>
       {children}
     </div>
@@ -88,7 +88,11 @@ function ClerkAvatar() {
 // S1 — the stage door. The CTA opens the real Clerk sign-in (modal flow).
 function SignInGate() {
   const clerk = useClerk();
-  return <SignInScreen onSignIn={() => void clerk.openSignIn()} />;
+  return (
+    <SignInScreen onSignIn={() => void clerk.openSignIn({
+      appearance: { layout: { logoImageUrl: "/favicon.svg", logoLinkUrl: "/app/" } },
+    })} />
+  );
 }
 
 // Clerk routing: the stage room (#/job/:token) renders WITHOUT the sign-in
@@ -99,7 +103,7 @@ function SignInGate() {
 function ClerkRouted({ config }: { config: RuntimeConfig }) {
   const route = useRoute();
   if (route.name === "item") {
-    return <Stage token={route.token} />;
+    return <Stage token={route.token} publicBaseUrl={config.public_base_url} />;
   }
   return (
     <>
@@ -145,7 +149,7 @@ async function bootstrap() {
   } catch (err) {
     root.render(
       <Boot>
-        <h1>Karaoke</h1>
+        <h1>Sonereli</h1>
         <p className="error">
           Failed to load runtime config: {err instanceof Error ? err.message : String(err)}
         </p>

@@ -54,12 +54,8 @@ export function settingsHash(): string {
 }
 
 /** Build the absolute in-app URL (used for copy-to-clipboard / Share). */
-export function itemUrl(token: string): string {
-  // base is /app/ (see vite.config.ts). Resolve against the current origin so
-  // the copied link is a full, openable URL on the same host the SPA loaded
-  // from — same-origin, never the public base which 401s on the LAN.
-  const base = window.location.pathname.replace(/\/[^/]*$/, "/");
-  return `${window.location.origin}${base}${itemHash(token)}`;
+export function itemUrl(publicBaseUrl: string, token: string): string {
+  return `${publicBaseUrl.replace(/\/+$/, "")}/app/${itemHash(token)}`;
 }
 
 /** Navigate within the SPA by updating the hash. */

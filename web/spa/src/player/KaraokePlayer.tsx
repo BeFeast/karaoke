@@ -92,7 +92,7 @@ function TransportBar({ player, onPerf }: { player: KaraokePlayerApi; onPerf: ()
       <button className="m-btn sm" type="button" onClick={cycleLoop} disabled={!player.ready}
         title="A–B repeat: press to mark A, again to mark B, again to clear"
         style={a != null ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}>
-        ⟲ {a == null ? "A–B" : b == null ? "A set… (B?)" : `${fmt(a)}–${fmt(b)}`}
+        {a == null ? "A–B" : b == null ? "A set… (B?)" : `${fmt(a)}–${fmt(b)}`}
       </button>
       <select value={player.rate} disabled={!player.ready} aria-label="Playback speed"
         onChange={(e) => player.setRate(Number(e.target.value))}
@@ -103,7 +103,7 @@ function TransportBar({ player, onPerf }: { player: KaraokePlayerApi; onPerf: ()
       </select>
       <button className="m-btn sm primary" type="button" onClick={onPerf} disabled={!player.ready}
         title="Performance mode — fullscreen lyrics (esc exits)"
-        style={{ background: "transparent", color: "var(--accent)", borderColor: "var(--accent)" }}>⤢ Performance</button>
+        style={{ background: "transparent", color: "var(--accent)", borderColor: "var(--accent)" }}>Performance</button>
     </div>
   );
 }
@@ -537,7 +537,7 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
     <section
       ref={rootRef}
       className="ksplayer"
-      aria-label="Karaoke player"
+      aria-label="Sonereli player"
       tabIndex={0}
       onKeyDown={onKeyDown}
     >

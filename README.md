@@ -1,16 +1,15 @@
-# karaoke
+# Sonereli
 
-Self-hosted service: take a YouTube (or any `yt-dlp`-supported) URL and split it into
-isolated **vocals** and an instrumental **playback** track, transcribe the **lyrics**,
-and serve in-browser playback and share links.
+Choose a song and sing. Paste a song link or upload audio, then adjust the balance
+between vocals and instrumental playback as you follow synced lyrics. Use A–B
+repeat, playback speed, and fullscreen Performance to practice or sing through
+the whole song. Share a song with an unlisted link.
 
-Coordinator runs on `devbox` (residential IP, owns `yt-dlp` + `ffmpeg`); GPU stages
-(Demucs separation + Whisper lyrics) run on **ephemeral on-demand vast.ai** instances
-with hard cost caps and guaranteed teardown. Auth is multi-layer (Clerk JWT, machine
-bearer, trusted-LAN, `ktx_` extension tokens) — scribe parity. Live progress is pushed
-over WebSocket. A Chrome extension (MV3, "Karaoke Submitter") submits the current tab.
-
-Status: **scaffolding** — just the empty seed; implementation tracked in issues.
+Sonereli is self-hosted. The coordinator downloads and prepares source audio,
+tracks processing over WebSocket, and serves the player and share pages. Workers
+separate the stems and obtain lyrics from existing sources or transcription.
+The Chrome extension and Android share target send songs from other apps.
+iOS can submit with a Shortcut.
 
 ## Where things live
 
@@ -22,16 +21,16 @@ Status: **scaffolding** — just the empty seed; implementation tracked in issue
   one role for this product: an NFS artifact store.
 - **Real dev checkout:** `workshop:/mnt/storage/src/karaoke`. The local Mac checkout is
   reference-only.
-- **Runtime stack** *(to provision)*: `devbox:/opt/stacks/karaoke/`, port `:13140`.
+- **Runtime stack**: `devbox:/opt/stacks/karaoke/`, port `:13140`.
 
 ## Tech
 
 - Python with `uv`. Lint `ruff`, tests `pytest`.
 - FastAPI + WebSocket; Postgres (Alembic) for owners/jobs/tokens; Valkey/Redis for the queue.
-- Chrome extension (MV3) under `extension/chrome/` *(to add)*.
+- Chrome extension (MV3) under `extension/chrome/`.
 - Android submitter app (share target + per-job YouTube cookies, CI-built debug APK)
   under `mobile/android/` — see [`docs/mobile-android.md`](docs/mobile-android.md).
-- vast.ai GPU image `ghcr.io/befeast/karaoke-vast:cuda12.4` *(to add under `docker/vast/`)*.
+- GPU processing runs on RunPod Serverless, with ephemeral vast.ai instances as a fallback.
 - YouTube anti-bot: the coordinator image bundles pinned `yt-dlp`,
   `yt-dlp-ejs`, `deno`, Node/npm, and the `bgutil-ytdlp-pot-provider` yt-dlp
   plugin; downloads use backoff, and a `bgutil-ytdlp-pot-provider` sidecar
@@ -79,8 +78,8 @@ LAN-only.
 
 A job is done only when `vocals.mp3`, `karaoke.mp3`, and `lyrics.txt` exist on the NFS store,
 the share page plays both audio tracks, owner scoping holds for both SPA and extension
-submitters, and `metadata.json` shows a real `vast_instance_id` + `vast_cost` and the
-instance has been destroyed. Health-only / empty-queue / 404 screenshots are not acceptance
+submitters, and `metadata.json` records the processing run and cost. For a vast.ai
+job, verify the instance has been destroyed. Health-only / empty-queue / 404 screenshots are not acceptance
 evidence.
 
 ## Releases

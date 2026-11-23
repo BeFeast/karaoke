@@ -41,16 +41,22 @@ describe("MENU_SPEC", () => {
     expect(covering[0].contexts).toContain("link");
   });
 
-  test("exactly one toolbar-icon entry — Open Karaoke booth on contexts:[action] (#181)", () => {
+  test("exactly one toolbar-icon entry — Open Sonereli booth on contexts:[action] (#181)", () => {
     const actions = MENU_SPEC.filter((item) => item.contexts.includes("action"));
     expect(actions).toHaveLength(1);
     expect(actions[0].id).toBe(OPEN_BOOTH_MENU_ID);
     expect(actions[0].contexts).toEqual(["action"]);
-    expect(actions[0].title).toBe("Open Karaoke booth");
+    expect(actions[0].title).toBe("Open Sonereli booth");
   });
 });
 
 describe("submitRefusal", () => {
+  test("refuses both public aliases from a custom booth", () => {
+    const customBase = "http://10.10.0.13:13140";
+    expect(submitRefusal("https://karaoke.oklabs.uk/share/token", customBase)?.reason).toBe("own-booth");
+    expect(submitRefusal("https://sonereli.oklabs.uk/app/", customBase)?.reason).toBe("own-booth");
+  });
+
   test("youtube watch URL is allowed", () => {
     expect(submitRefusal("https://www.youtube.com/watch?v=dQw4w9WgXcQ", BASE)).toBeNull();
   });
@@ -63,7 +69,7 @@ describe("submitRefusal", () => {
   test("the configured booth itself is refused (self-submit, doomed job #79)", () => {
     const refusal = submitRefusal("https://karaoke.oklabs.uk/app/#/settings", BASE);
     expect(refusal?.reason).toBe("own-booth");
-    expect(refusal.message).toContain("karaoke booth");
+    expect(refusal.message).toContain("Sonereli booth");
   });
 
   test("self-submit is refused regardless of scheme and path", () => {

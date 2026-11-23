@@ -58,51 +58,9 @@ export function MBulbs({
   );
 }
 
-// The mic mark — the original glyph, painted in brand colors:
-// capsule = marquee accent, stand = room ink. Theme-aware via tokens.
-export function MicMark({
-  size = 24,
-  accent = "var(--vox-ui)",
-  ink = "var(--fg)",
-}: {
-  size?: number;
-  accent?: string;
-  ink?: string;
-}) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-label="Karaoke mark">
-      <rect x="9" y="2" width="6" height="12" rx="3" fill={accent}></rect>
-      <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" stroke={ink} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"></path>
-    </svg>
-  );
-}
-
-// The marquee tile mark (kept for canvas boards / extension icons).
-// `lit` = stage version (bulbs on night ink); unlit = booth version (ink on paper).
-export function MarqueeMark({
-  size = 48,
-  lit = true,
-  label = "K",
-}: {
-  size?: number;
-  lit?: boolean;
-  label?: string;
-}) {
-  // theme-aware: resolves from the surrounding room's tokens
-  const bg = lit ? "var(--bg)" : "var(--bg-card)";
-  const frame = lit ? "var(--bulb)" : "var(--fg)";
-  const letter = frame;
-  const bulbOn = lit ? "var(--bulb)" : "var(--vox-ui)";
-  const bulbPos = [14, 24, 34];
-  return (
-    <svg width={size} height={size} viewBox="0 0 48 48" aria-label="Karaoke mark">
-      <rect x="2" y="2" width="44" height="44" rx="11" fill={bg}></rect>
-      <rect x="2" y="2" width="44" height="44" rx="11" fill="none" stroke={frame} strokeWidth="2.5"></rect>
-      {bulbPos.map((x) => <circle key={"t" + x} cx={x} cy="8.5" r="1.8" fill={bulbOn}></circle>)}
-      {bulbPos.map((x) => <circle key={"b" + x} cx={x} cy="39.5" r="1.8" fill={bulbOn}></circle>)}
-      <text x="24" y="33" textAnchor="middle" fontFamily="Bungee, sans-serif" fontSize="20" fill={letter}>{label}</text>
-    </svg>
-  );
+// The adjacent wordmark or control label names the product.
+export function SonereliMark({ size = 24 }: { size?: number }) {
+  return <img src={`${import.meta.env.BASE_URL}favicon.svg`} width={size} height={size} alt="" />;
 }
 
 // A small marquee sign with a word in Bungee — used for naming candidates.

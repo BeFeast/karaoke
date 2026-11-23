@@ -1,6 +1,6 @@
-# Karaoke Chrome Extension
+# Sonereli Chrome Extension
 
-Small Manifest V3 operator tool for submitting video URLs to the Karaoke service
+Small Manifest V3 operator tool for submitting video URLs to the Sonereli service
 (YouTube / `yt-dlp`-supported pages → vocals + instrumental playback + lyrics).
 
 ## Doorway UI (Marquee port, issue #155)
@@ -31,7 +31,7 @@ export sources; the live pages adapt their DOM/classes/styles):
   refusal. A preflight error or timeout (>2 s, AbortController) falls back to
   the confirm state — infrastructure never hard-blocks a submit. No title
   prefetch anywhere.
-- **Right-click on the toolbar icon** — an "Open Karaoke booth" entry
+- **Right-click on the toolbar icon** — an "Open Sonereli booth" entry
   (`contexts: ["action"]`) opens `<base>/app/` in a new tab (#181).
 - **Toolbar badge** — idle (none) / working (job progress %) / ready (✓) /
   error (!), following the submitted job via a poll alarm.
@@ -54,23 +54,23 @@ No build step is required.
 
 Open the extension options page and set:
 
-- Karaoke base URL — defaults to the public deployment `https://karaoke.oklabs.uk`,
+- Sonereli base URL — defaults to the public deployment `https://sonereli.oklabs.uk`,
   so the extension works from any machine. On the LAN you can point it at the
   runtime directly, e.g. `http://10.10.0.13:13140`. The host permission patterns
   in `manifest.json` cover `*.oklabs.uk` and the LAN runtime; any other origin is
   requested at save time via `chrome.permissions.request`.
-- Optional bearer token. Create a Chrome extension token (`ktx_...`) in Karaoke
-  Settings, then paste it here. A token is required when the configured Karaoke
+- Optional bearer token. Create a Chrome extension token (`ktx_...`) in Sonereli
+  Settings, then paste it here. A token is required when the configured Sonereli
   URL is protected, especially when using it outside a trusted LAN.
 
-Saving the base URL asks Chrome for permission to reach that Karaoke origin.
+Saving the base URL asks Chrome for permission to reach that Sonereli origin.
 The token is stored in Chrome sync storage and sent as `Authorization: Bearer ...`
 only when configured. No token is hardcoded in the extension.
 
 ## YouTube cookies (per-job, ephemeral)
 
 Some videos ask you to "sign in to confirm you're not a bot". To download those,
-Karaoke needs a logged-in YouTube session. This extension is the cookie supplier:
+Sonereli needs a logged-in YouTube session. This extension is the cookie supplier:
 on **every submit** it reads your browser's YouTube/Google cookies
 (`chrome.cookies.getAll`) and attaches them to that one request as the optional
 `youtube_cookies` field of `POST /jobs`. The server uses them for that job's
@@ -90,7 +90,7 @@ download.
 
 ## API
 
-The extension talks to Karaoke's coordinator over HTTP and (eventually) WebSocket:
+The extension talks to Sonereli's coordinator over HTTP and (eventually) WebSocket:
 
 - `POST /jobs` — submit a URL. Body:
   `{"url":"...","source":"chrome-extension","youtube_cookies":"<Netscape cookies.txt>"}`.
@@ -104,9 +104,9 @@ scribe (do not regress to a single shared bearer).
 
 ## Manual Verification
 
-1. Load the unpacked extension and keep the default Karaoke base URL
-   (`https://karaoke.oklabs.uk`) or set a local/runtime Karaoke URL.
-2. If using a non-default Karaoke URL, open the extension options page, save
+1. Load the unpacked extension and keep the default Sonereli base URL
+   (`https://sonereli.oklabs.uk`) or set a local/runtime Sonereli URL.
+2. If using a non-default Sonereli URL, open the extension options page, save
    the base URL, and approve Chrome's host access prompt.
 3. While **signed in to YouTube** in this browser, open a session-gated video
    page and click the toolbar action; confirm the popup receipt shows the job
@@ -116,22 +116,22 @@ scribe (do not regress to a single shared bearer).
    Confirm the popup receipt renders the job, the "tonight" feed lists real
    jobs, and "open the booth →" opens the SPA. Close and reopen the popup on
    the same tab; confirm no second job is created.
-5. Right-click a video page and choose Submit video to Karaoke; confirm the
-   menu shows exactly one Karaoke entry, a success notification appears, and
+5. Right-click a video page and choose Submit video to Sonereli; confirm the
+   menu shows exactly one Sonereli entry, a success notification appears, and
    clicking it opens the job page.
-6. Right-click a video link and choose Submit video to Karaoke (the same
+6. Right-click a video link and choose Submit video to Sonereli (the same
    single entry serves pages and links); confirm a success notification.
-7. For a protected Karaoke URL, leave the bearer token blank and submit again;
+7. For a protected Sonereli URL, leave the bearer token blank and submit again;
    confirm the receipt (toolbar) or notification (context menu) explains that
    auth is required.
-8. Set an invalid `ktx_...` bearer token for a protected Karaoke URL and submit
+8. Set an invalid `ktx_...` bearer token for a protected Sonereli URL and submit
    again; confirm the error explains that the token is invalid or unauthorized.
 9. Set the base URL to an unreachable host and submit again; confirm the error
    includes a useful connectivity message.
 10. Open the popup on a non-http(s) page (e.g. `chrome://extensions`); confirm
     the receipt says nothing was submitted and asks for an http(s) video page.
-11. Open the popup on the Karaoke app itself (the configured base URL);
-    confirm the friendly "that's the karaoke booth itself" note and that no
+11. Open the popup on the Sonereli app itself (the configured base URL);
+    confirm the friendly "that's the Sonereli booth itself" note and that no
     job is created. Right-click the same page and submit; confirm the same
     refusal as a notification.
 12. On a failed receipt, confirm the status word appears once (chip only),
@@ -145,7 +145,7 @@ scribe (do not regress to a single shared bearer).
     random blog page; confirm the generic-extractor note with the Submit
     anyway button (nothing submitted yet), and that the button submits and
     renders the normal receipt (#181).
-14. Right-click the toolbar icon and choose Open Karaoke booth; confirm the
+14. Right-click the toolbar icon and choose Open Sonereli booth; confirm the
     booth dashboard (`<base>/app/`) opens in a new tab (#181).
 
 ## Versioning

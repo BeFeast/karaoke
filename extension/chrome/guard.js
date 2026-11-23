@@ -1,9 +1,11 @@
-// Submit policy for the Karaoke Submitter extension (issue #177).
+// Submit policy for the Sonereli Submitter extension (issue #177).
 //
 // Pure and free of any `chrome.*` reference so it unit-tests under `bun test`
 // (see guard.test.js). The service worker imports MENU_SPEC to register the
 // context menu and `submitRefusal` to gate every submit path (toolbar popup
 // and context menu) before a job is minted.
+
+import { isBoothHost } from "./deployment.js";
 
 // Right-click on the toolbar icon (#181): a shortcut straight to the booth
 // dashboard at `<base>/app/`. The popup footer keeps its "open the booth →"
@@ -18,12 +20,12 @@ const OPEN_BOOTH_MENU_ID = "open-booth";
 const MENU_SPEC = [
   {
     id: "submit-video",
-    title: "Submit video to Karaoke",
+    title: "Submit video to Sonereli",
     contexts: ["page", "link"],
   },
   {
     id: OPEN_BOOTH_MENU_ID,
-    title: "Open Karaoke booth",
+    title: "Open Sonereli booth",
     contexts: ["action"],
   },
 ];
@@ -31,8 +33,7 @@ const MENU_SPEC = [
 // Why a URL must not be submitted, or null when it may. Refuses (a) non-http(s)
 // schemes (chrome://, about:, file:, …) and (b) the configured booth itself —
 // submitting the app's own pages mints a doomed yt-dlp job (#177, job #79).
-// `baseUrl` is the configured Karaoke base URL; a missing/garbled base only
-// disables the self-submit check, never the scheme check.
+// Also refuse both public hosts when a different or invalid base is configured.
 function submitRefusal(url, baseUrl) {
   let parsed;
   try {
@@ -57,10 +58,10 @@ function submitRefusal(url, baseUrl) {
   } catch {
     baseHost = "";
   }
-  if (baseHost && parsed.host === baseHost) {
+  if (isBoothHost(parsed.host, baseHost)) {
     return {
       reason: "own-booth",
-      message: "that's the karaoke booth itself — it can't be submitted as a job",
+      message: "that's the Sonereli booth itself — it can't be submitted as a job",
     };
   }
 

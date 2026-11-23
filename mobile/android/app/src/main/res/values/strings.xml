@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Karaoke Submitter</string>
+    <string name="app_name">Sonereli Submitter</string>
 
     <string name="url_hint">YouTube / video URL</string>
     <string name="submit">Submit</string>

@@ -19,7 +19,7 @@ import { costDollars, fmtDuration, formatRelativeTime, type JobSort } from "../l
 import { usePhoneLayout } from "../lib/layout";
 import { sourceDisplay } from "../lib/source";
 import { itemHash } from "../router";
-import { MBulbs, MDuetWave, MicMark, MWipe } from "./marks";
+import { MBulbs, MDuetWave, SonereliMark, MWipe } from "./marks";
 
 export interface JobActions {
   onDelete: (job: JobOut) => void;
@@ -34,14 +34,14 @@ export function MarqueeTopBar({ authControl }: { authControl?: ReactNode }) {
   // Phone (#186): the row wraps instead of overflowing — same elements, same
   // order, tighter side padding; the fixed height becomes a minHeight so a
   // wrapped auth control stays visible. Shared with Settings (wave 4/4 gives
-  // that page its own pass). Desktop branch byte-identical.
+  // that page its own pass). The desktop row keeps its single-line layout.
   const phone = usePhoneLayout();
   return (
     <div style={phone
       ? { display: "flex", alignItems: "center", gap: 12, padding: "8px 14px", minHeight: 56, borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap" }
       : { display: "flex", alignItems: "center", gap: 12, padding: "0 24px", height: 56, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-      <MicMark size={24} />
-      <span style={{ fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 17, letterSpacing: "-0.01em" }}>Karaoke</span>
+      <SonereliMark size={24} />
+      <span style={{ fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 17, letterSpacing: "-0.01em" }}>Sonereli</span>
       <span style={{ flex: 1 }}></span>
       {authControl}
     </div>
@@ -134,7 +134,7 @@ function CompactRow({ job, actions }: { job: JobOut; actions: JobActions }) {
   // Phone (#186): the single ported row packed chip + title + meta + up to
   // four trailing controls + a fixed-width sparkline — at 390px the title's
   // minWidth: 0 ellipsis squeezed to ~nothing. Two lines instead: chip +
-  // title, then meta + right-aligned actions. Desktop branch byte-identical.
+  // title, then meta + right-aligned actions. The desktop row keeps its single-line layout.
   const phone = usePhoneLayout();
   const chip = jobChip(job);
   const source = sourceDisplay(job.source_url);
@@ -151,9 +151,9 @@ function CompactRow({ job, actions }: { job: JobOut; actions: JobActions }) {
   const openOriginal = source.kind === "url" && (
     <a href={job.source_url} target="_blank" rel="noopener" title="Original video" className="m-btn sm ghost" style={{ textDecoration: "none" }}>↗</a>
   );
-  const singAction = ready && <a className="m-btn sm primary" href={itemHash(job.job_token)} style={{ textDecoration: "none" }}>▸ Sing</a>;
+  const singAction = ready && <a className="m-btn sm primary" href={itemHash(job.job_token)} style={{ textDecoration: "none" }}>Sing</a>;
   const retryAction = canRetryJob(job) && <button className="m-btn sm" type="button" onClick={() => actions.onRetry(job)}>↻ Retry</button>;
-  const removeAction = <button className="m-btn sm ghost" type="button" title="Remove job + artifacts" onClick={() => actions.onDelete(job)}>✕</button>;
+  const removeAction = <button className="m-btn sm ghost" type="button" aria-label="Remove song" title="Remove song and its files" onClick={() => actions.onDelete(job)}>×</button>;
   const failedBox = job.status === "failed" && job.error && (
     <div className="m-mono" style={{ marginTop: 8, padding: "8px 10px", borderRadius: "var(--radius)", background: "color-mix(in oklab, var(--err) 9%, var(--bg))", border: "1px solid color-mix(in oklab, var(--err) 24%, transparent)", color: "var(--err)", fontSize: 11, lineHeight: 1.5, overflowWrap: "anywhere" }}>
       {job.error}
@@ -303,7 +303,7 @@ export function BoothScreen({
 }) {
   // Phone (#186): the submit console stacks — input on its own full-width
   // row, then the two actions side by side. Live matchMedia so rotation
-  // re-lays-out. Desktop branch byte-identical.
+  // re-lays-out. The desktop row keeps its single-line layout.
   const phone = usePhoneLayout();
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -340,14 +340,14 @@ export function BoothScreen({
   // on phone it drops flex: 1 (a column child stretches full width instead)
   // and the primary action grows to fill its row.
   const urlInput = (
-    <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste a YouTube link…"
+    <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste a song link…"
       onKeyDown={(e) => e.key === "Enter" && doSubmit()}
-      disabled={busy || uploading} autoComplete="off" spellCheck={false} aria-label="Source URL"
+      disabled={busy || uploading} autoComplete="off" spellCheck={false} aria-label="Song link"
       style={{ flex: phone ? undefined : 1, minWidth: 0, padding: "10px 13px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg)", color: "var(--fg)", fontSize: 14, fontFamily: "var(--font-mono)", outline: "none" }}></input>
   );
   const submitAction = (
     <button className="m-btn primary" type="button" onClick={doSubmit} disabled={busy || uploading || !url.trim()} style={{ fontSize: 14, padding: "8px 18px", flex: phone ? 1 : undefined }}>
-      {busy ? "Staging…" : "Put it on stage"}
+      {busy ? "Staging…" : "Prepare song"}
     </button>
   );
   const uploadAction = (
@@ -369,6 +369,7 @@ export function BoothScreen({
 
       <div style={{ flex: 1, padding: "24px 24px 16px", maxWidth: 780, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", minHeight: 0 }}>
         <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)", padding: 16 }}>
+          <h1 style={{ margin: "0 0 16px", fontFamily: "var(--font-display)", fontSize: 24, lineHeight: "32px", textWrap: "balance" }}>Choose a song and sing</h1>
           {phone ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {urlInput}
@@ -387,10 +388,9 @@ export function BoothScreen({
             </div>
           )}
           <div className="m-mono" style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11, color: "var(--muted)", alignItems: "center", flexWrap: "wrap" }}>
-            <span>one link →</span>
-            <span className="m-stem vox">vocals.mp3</span>
-            <span className="m-stem inst">karaoke.mp3</span>
-            <span style={{ color: "var(--fg-soft)" }}>≡ lyrics.lrc</span>
+            <span className="m-stem vox">vocals</span>
+            <span className="m-stem inst">instrumental</span>
+            <span style={{ color: "var(--fg-soft)" }}>synced lyrics</span>
           </div>
           {submitError && (
             <div className="m-mono" style={{ marginTop: 8, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>{submitError}</div>
@@ -416,7 +416,7 @@ export function BoothScreen({
 
         <div style={{ display: "flex", gap: 8, marginBottom: 11 }}>
           <input type="search" value={query} onChange={(e) => onQuery(e.target.value)}
-            placeholder="Search title, artist or URL…" aria-label="Search jobs"
+            placeholder="Search songs…" aria-label="Search songs by title, artist, or URL"
             style={{ flex: 1, minWidth: 0, padding: "7px 11px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", outline: "none" }} />
           <select value={sort} onChange={(e) => onSort(e.target.value as JobSort)} aria-label="Sort jobs" style={{
             appearance: "none", padding: "7px 28px 7px 11px", border: "1px solid var(--border)", borderRadius: "var(--radius)",
@@ -456,7 +456,7 @@ export function BoothScreen({
         <div className="m-mono" style={{ marginTop: "auto", paddingTop: 16, display: "flex", gap: 16, fontSize: 11, color: "var(--muted)", borderTop: "1px dashed var(--border-soft)", alignItems: "center" }}>
           <span><span style={{ color: wsOpen ? "var(--ok)" : "var(--err)" }}>{wsOpen ? "●" : "○"}</span> ws {wsOpen ? "live" : "down"}</span>
           <span>today {costDollars(todaySpend) ?? "$0.00"}</span>
-          {version && <span style={{ marginLeft: "auto" }}>karaoke v{version}</span>}
+          {version && <span style={{ marginLeft: "auto" }}>Sonereli v{version}</span>}
         </div>
       </div>
       {children}

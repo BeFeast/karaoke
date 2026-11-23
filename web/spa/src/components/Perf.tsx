@@ -43,7 +43,7 @@ import { railPct } from "../player/engineMath";
 import type { KaraokePlayerApi } from "../player/useKaraokePlayer";
 import type { StageTheme } from "../theme";
 import { FIT_FLOOR, balancedSplit, fitLineScale, splitFill } from "./lineFit";
-import { MBulbs, MicMark } from "./marks";
+import { MBulbs, SonereliMark } from "./marks";
 import { PlainLyrics } from "./SyncedLyrics";
 // BLEND_GRADIENT + the phone rail recipe moved to stage-core (#185) so the
 // phone console reuses them; the desktop rail below still paints the gradient.
@@ -355,7 +355,7 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
           ...fade,
         }}
       >
-        <MicMark size={phone ? 20 : 22} />
+        <SonereliMark size={phone ? 20 : 22} />
         <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {title}
           {artist ? ` — ${artist}` : ""}
