@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.45.0] - 2026-11-23
+
+_Bump: minor_
+
+- Use the Stage player on public share links, with mobile-first lyrics, synced highlighting, a stem mixer, A–B repeat, speed control, Performance mode, and screen wake lock during playback.
+- Rebrand the public experience as Sonereli (#342).
+- Add browser acceptance checks for mobile and desktop playback and real-job submission.
+- Pin CI tool versions to avoid setup requests to the GitHub API (#341).
+
 ## [v0.44.1] - 2026-10-29
 
 _Bump: patch_
