@@ -6,6 +6,8 @@
 // feeds the verdict to `classifySubmit`, the single decision function for the
 // toolbar submit path.
 
+import { isBoothHost } from "./deployment.js";
+
 // Hard cap on the preflight round-trip: past this the extension stops waiting
 // and falls back to the Submit-anyway confirm state. The preflight is a
 // courtesy check, never an infrastructure hard-block (#181).
@@ -50,7 +52,7 @@ function classifySubmit(url, baseHost, preflightResult) {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return "refuse";
   }
-  if (baseHost && parsed.host === baseHost) {
+  if (isBoothHost(parsed.host, baseHost)) {
     return "refuse";
   }
   if (!preflightResult) {

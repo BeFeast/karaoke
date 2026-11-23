@@ -1,5 +1,4 @@
-const DEFAULT_BASE_URL = "https://karaoke.oklabs.uk";
-
+import { DEFAULT_BASE_URL } from "./deployment.js";
 const form = document.querySelector("#settings-form");
 const baseUrlInput = document.querySelector("#base-url");
 const bearerTokenInput = document.querySelector("#bearer-token");

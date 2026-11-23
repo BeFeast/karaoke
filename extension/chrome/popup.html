@@ -1,29 +1,19 @@
 <!doctype html>
 <!-- Doorway popup — the click already submitted; this is the receipt.
      DOM/classes/inline styles ported from design/m-doorway.jsx MPopupBoard
-     (lines 4-60), wired to the real submit + GET /jobs feed in popup.js.
-     The header mark is the sign-in mic card (#163): the SignInWall rounded
-     card scaled from 76px to 20px (radius 20 -> 5, border 2 -> 1) around the
-     MicMark glyph verbatim (marks.tsx: 24-viewBox, capsule rect x=9 y=2 w=6
-     h=12 rx=3, stroke-width 2, round caps/joins) at the sign-in 38/76 ratio.
-     Colors route through the vendored marquee.css tokens. -->
+     (lines 4-60), wired to the real submit + GET /jobs feed in popup.js. -->
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <title>Karaoke</title>
+    <title>Sonereli</title>
     <link rel="stylesheet" href="marquee.css">
     <link rel="stylesheet" href="doorway.css">
   </head>
   <body class="doorway-popup">
     <div class="m-booth" style="height: 100%; display: flex; flex-direction: column; font-size: 13px">
       <div style="display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--border)">
-        <div style="width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; flex: none; background: var(--bg-card); border: 1px solid var(--accent); box-shadow: var(--shadow)">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-label="Karaoke mark">
-            <rect x="9" y="2" width="6" height="12" rx="3" fill="var(--accent)"></rect>
-            <path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" stroke="var(--fg)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
-          </svg>
-        </div>
-        <span style="font-family: var(--font-display); font-weight: 650; font-size: 14px">Karaoke</span>
+        <img src="icons/mark.svg" width="20" height="20" alt="">
+        <span style="font-family: var(--font-display); font-weight: 650; font-size: 14px">Sonereli</span>
         <span style="flex: 1"></span>
         <span class="m-chip ok" style="font-size: 10px"><span class="m-dot"></span><span id="booth-host">booth</span></span>
         <button id="open-settings" class="m-btn sm ghost" type="button" title="Settings" style="padding: 2px 6px">⚙</button>

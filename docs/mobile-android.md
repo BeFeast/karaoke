@@ -1,6 +1,6 @@
 # Android submitter app (issue #169)
 
-A minimal native Android app ("Karaoke Submitter", `mobile/android/`) that
+A minimal native Android app ("Sonereli Submitter", `mobile/android/`) that
 submits videos to the karaoke coordinator from a phone. It registers as a
 share target for the YouTube app, can sign in to YouTube in an embedded
 WebView, and attaches the resulting cookies **per job** — the same contract
@@ -26,7 +26,7 @@ There is no Play Store listing and no release signing — the app is a
 ## First-run setup
 
 1. Open the app → **Settings**.
-2. **Base URL**: keep `https://karaoke.oklabs.uk` (default) or point at your
+2. **Base URL**: keep `https://sonereli.oklabs.uk` (default) or point at your
    own deployment.
 3. **Access pass**: in the web app, open `<base URL>/app/#/settings` → "Mint
    pass" and paste the `ktx_…` token into the app. The pass is stored in
@@ -39,7 +39,7 @@ pass, and each row links out to the job's share page.
 ## Submitting
 
 - **Share target:** in the YouTube app (or any app sharing a link as text),
-  Share → "Karaoke Submitter". The first `http(s)://` URL in the shared text
+  Share → "Sonereli Submitter". The first `http(s)://` URL in the shared text
   is prefilled; confirm with Submit.
 - **Manual:** paste any yt-dlp-supported URL into the URL field and Submit.
 

@@ -18,7 +18,7 @@ import { useCoarsePointer, usePhoneLayout } from "../lib/layout";
 import { compactUrlLabel, sourceDisplay } from "../lib/source";
 import { goDashboard, itemUrl } from "../router";
 import { type StageTheme, useStageTheme } from "../theme";
-import { MBulbs, MicMark } from "./marks";
+import { MBulbs, SonereliMark } from "./marks";
 import { timeLines } from "./stage-core";
 import { parseLrc, sungLines, SyncedLyrics } from "./SyncedLyrics";
 import { Toast } from "./Toast";
@@ -43,7 +43,7 @@ function initialView(): StageView {
   return "console";
 }
 
-export function Stage({ token }: { token: string }) {
+export function Stage({ token, publicBaseUrl }: { token: string; publicBaseUrl: string }) {
   const [payload, setPayload] = useState<SharePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -123,9 +123,8 @@ export function Stage({ token }: { token: string }) {
     setLyrics(updated);
   }, [token]);
 
-  // Same-origin copy path — the public base 401s on the LAN (#131).
   const onCopyLink = useCallback(async () => {
-    const url = itemUrl(token);
+    const url = itemUrl(publicBaseUrl, token);
     try {
       await navigator.clipboard.writeText(url);
       setToast("Link copied");
@@ -133,7 +132,7 @@ export function Stage({ token }: { token: string }) {
       // Clipboard API blocked (insecure context / permissions) — fall back.
       window.prompt("Copy this link:", url);
     }
-  }, [token]);
+  }, [publicBaseUrl, token]);
 
   // ── Player ↔ lyrics transport seam (#59) ─────────────────────────────────
   // `onTime` pushes the live playhead into state that only feeds the lyrics
@@ -207,14 +206,14 @@ export function Stage({ token }: { token: string }) {
         {/* phone (#184): the row wraps instead of overflowing — same elements,
             same order; the desktop branch is the untouched port. */}
         <div style={phone
-          ? { display: "flex", alignItems: "center", gap: 12, padding: "8px 14px", minHeight: 54, borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap", minWidth: 0 }
+          ? { display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", minHeight: 54, borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap", minWidth: 0 }
           : { display: "flex", alignItems: "center", gap: 12, padding: "0 22px", height: 54, borderBottom: "1px solid var(--border)", flexShrink: 0, minWidth: 0 }}>
-          <button className="m-btn sm ghost" type="button" onClick={goDashboard}>← booth</button>
-          <MicMark size={20} />
+          <button className="m-btn sm ghost" type="button" onClick={goDashboard}>← Booth</button>
+          <SonereliMark size={20} />
           <span style={{ flex: 1, minWidth: 0 }}></span>
-          <span className="m-chip info">unlisted share</span>
-          <button className="m-btn sm" type="button" onClick={() => void onCopyLink()}>⧉ Copy link</button>
-          <button className="m-btn sm ghost" type="button" title="Day / night" onClick={toggleTheme}>◐</button>
+          <span className="m-chip info">Unlisted</span>
+          <button className="m-btn sm" type="button" onClick={() => void onCopyLink()}>Copy link</button>
+          <button className="m-btn sm ghost" type="button" onClick={toggleTheme}>{theme === "day" ? "Night" : "Day"}</button>
         </div>
 
         <div style={{ flex: 1, maxWidth: 760, width: "100%", margin: "0 auto", padding: phone ? "18px 14px 18px" : "22px 24px 20px", display: "flex", flexDirection: "column", gap: 16, minHeight: 0, minWidth: 0 }}>

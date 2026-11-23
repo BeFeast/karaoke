@@ -11,7 +11,7 @@ import androidx.security.crypto.MasterKey
 
 object Prefs {
 
-    const val DEFAULT_BASE_URL = "https://karaoke.oklabs.uk"
+    const val DEFAULT_BASE_URL = "https://sonereli.oklabs.uk"
 
     private const val FILE = "karaoke-submitter"
     private const val KEY_BASE_URL = "base_url"

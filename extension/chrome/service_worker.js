@@ -1,3 +1,4 @@
+import { DEFAULT_BASE_URL } from "./deployment.js";
 import { buildJobBody, countYoutubeCookies } from "./cookies.js";
 import { MENU_SPEC, OPEN_BOOTH_MENU_ID, submitRefusal } from "./guard.js";
 import {
@@ -9,7 +10,6 @@ import {
   fetchPreflight,
 } from "./preflight.js";
 
-const DEFAULT_BASE_URL = "https://karaoke.oklabs.uk";
 const SOURCE = "chrome-extension";
 const NOTIFICATION_LINKS_KEY = "notificationLinks";
 const NOTIFICATION_ICON = "icons/karaoke-128.png";
@@ -112,7 +112,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 
   try {
-    const { job, cookiesAttached } = await submitToKaraoke(url);
+    const { job, cookiesAttached } = await submitToBooth(url);
     await notifySuccess(job);
     if (!info.linkUrl && tab?.id != null && tab?.url === url) {
       await rememberTabSubmit(tab.id, url, job.id, cookiesAttached);
@@ -219,7 +219,7 @@ async function submitActiveTab({ force = false } = {}) {
     extractor = preflightResult?.extractor ?? null;
   }
 
-  const { job, cookiesAttached } = await submitToKaraoke(url);
+  const { job, cookiesAttached } = await submitToBooth(url);
   await chrome.storage.session.set({
     [dedupKey]: { jobId: job.id, cookiesAttached, extractor },
   });
@@ -234,7 +234,7 @@ async function rememberTabSubmit(tabId, url, jobId, cookiesAttached) {
 
 // ── submit ──────────────────────────────────────────────────────────────────
 
-async function submitToKaraoke(url) {
+async function submitToBooth(url) {
   setWorkingBadge("…");
 
   try {
@@ -246,7 +246,7 @@ async function submitToKaraoke(url) {
     const cookies = await collectSessionCookies();
     const job = await createJob(config, url, cookies);
     if (job.id == null) {
-      throw new Error("Karaoke responded OK but returned no job ID.");
+      throw new Error("Sonereli responded OK but returned no job ID.");
     }
     await startTrackingJob(job);
     return { job, cookiesAttached: countYoutubeCookies(cookies) > 0 };
@@ -283,7 +283,7 @@ function normalizeBaseUrl(value) {
   const trimmed = String(value || DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
   const parsed = new URL(trimmed);
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    throw new Error("Karaoke base URL must start with http:// or https://.");
+    throw new Error("Sonereli base URL must start with http:// or https://.");
   }
   return parsed.origin + parsed.pathname.replace(/\/+$/, "");
 }
@@ -304,7 +304,7 @@ async function ensureHostPermission(baseUrl) {
   }
 
   throw new Error(
-    `Chrome has not granted access to ${new URL(baseUrl).origin}. Open extension settings and save the Karaoke base URL.`,
+    `Chrome has not granted access to ${new URL(baseUrl).origin}. Open extension settings and save the Sonereli base URL.`,
   );
 }
 
@@ -334,7 +334,7 @@ async function createJob(config, url, cookies) {
       body: JSON.stringify(body),
     });
   } catch (error) {
-    throw new Error(`Could not reach Karaoke at ${config.baseUrl}: ${error.message}`);
+    throw new Error(`Could not reach Sonereli at ${config.baseUrl}: ${error.message}`);
   }
 
   let parsed = null;
@@ -484,7 +484,7 @@ async function notifySuccess(job) {
   chrome.notifications.create(notificationId, {
     type: "basic",
     iconUrl: NOTIFICATION_ICON,
-    title: "Submitted to Karaoke",
+    title: "Submitted to Sonereli",
     message,
     priority: 1,
   });
@@ -494,7 +494,7 @@ async function notifyFailure(message) {
   chrome.notifications.create(`karaoke-error-${Date.now()}`, {
     type: "basic",
     iconUrl: NOTIFICATION_ICON,
-    title: "Karaoke submit failed",
+    title: "Sonereli submit failed",
     message: truncate(message, 240),
     priority: 2,
   });
@@ -522,18 +522,18 @@ function formatHttpError(status, body, tokenConfigured) {
   if (status === 401) {
     const guidance = tokenConfigured
       ? "The saved bearer token was rejected. Check the ktx_ token in extension settings."
-      : "This Karaoke URL requires authentication. Add a ktx_ bearer token in extension settings.";
-    return `Karaoke authentication required (401): ${guidance}`;
+      : "This Sonereli URL requires authentication. Add a ktx_ bearer token in extension settings.";
+    return `Sonereli authentication required (401): ${guidance}`;
   }
 
   if (status === 403) {
     const guidance = tokenConfigured
       ? "The saved bearer token is invalid or does not allow this request. Check the ktx_ token in extension settings."
-      : "This Karaoke URL is protected. Add a ktx_ bearer token in extension settings.";
-    return `Karaoke authorization failed (403): ${guidance}`;
+      : "This Sonereli URL is protected. Add a ktx_ bearer token in extension settings.";
+    return `Sonereli authorization failed (403): ${guidance}`;
   }
 
-  return `Karaoke rejected the URL (${status}): ${formatDetail(body)}`;
+  return `Sonereli rejected the URL (${status}): ${formatDetail(body)}`;
 }
 
 function truncate(value, limit) {

@@ -240,7 +240,7 @@ export function SettingsPage({ authControl }: { authControl?: ReactNode }) {
           </SettingsSection>
 
           <div className="m-mono" style={{ marginTop: "auto", paddingTop: 26, display: "flex", gap: 16, fontSize: 11, color: "var(--muted)", borderTop: "1px dashed var(--border-soft)", alignItems: "center", flexWrap: "wrap" }}>
-            {version && <span>karaoke v{version}</span>}
+            {version && <span>Sonereli v{version}</span>}
             <a href={K_REPO} target="_blank" rel="noopener" style={{ color: "var(--info)", textDecoration: "none" }}>github.com/BeFeast/karaoke ↗</a>
             <span>open source · MIT</span>
             <span style={{ marginLeft: "auto" }}>self-hosted · your music never leaves your boxes</span>

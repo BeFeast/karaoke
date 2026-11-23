@@ -1,6 +1,7 @@
 {
-  "name": "Karaoke",
-  "short_name": "Karaoke",
+  "name": "Sonereli",
+  "short_name": "Sonereli",
+  "id": "/app/",
   "start_url": "/app/",
   "scope": "/",
   "display": "standalone",

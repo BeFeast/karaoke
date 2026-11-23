@@ -10,7 +10,7 @@
 import { useEffect, useState } from "react";
 import { getHealth } from "../api";
 import { useCoarsePointer } from "../lib/layout";
-import { MBulbs, MicMark } from "./marks";
+import { SonereliMark } from "./marks";
 
 export function SignInScreen({ onSignIn }: { onSignIn: () => void }) {
   const [version, setVersion] = useState<string | null>(null);
@@ -30,39 +30,21 @@ export function SignInScreen({ onSignIn }: { onSignIn: () => void }) {
   return (
     <div className="m-booth" style={{ minHeight: "100%", display: "grid", placeItems: "center", padding: 24 }}>
       <div style={{ display: "grid", justifyItems: "center", gap: 0, textAlign: "center", maxWidth: 360 }}>
-        {/* the sign above the door */}
-        <div style={{
-          width: 76, height: 76, borderRadius: 20, display: "grid", placeItems: "center",
-          background: "var(--bg-card)", border: "2px solid var(--accent)",
-          boxShadow: "var(--shadow)",
-        }}>
-          <MicMark size={38} accent="var(--accent)" ink="var(--fg)" />
-        </div>
-        <div style={{ marginTop: 8 }}>
-          <MBulbs n={7} lit={7} size={4} gap={7} />
-        </div>
-
-        <h1 style={{ margin: "18px 0 0", fontFamily: "var(--font-display)", fontWeight: 680, fontSize: 32, letterSpacing: "-0.02em", lineHeight: 1.05 }}>Karaoke</h1>
-        <div style={{ marginTop: 8, fontSize: 13.5, color: "var(--fg-soft)", lineHeight: 1.5 }}>
-          One link in — vocals, karaoke track<br></br>and synced lyrics out.
-        </div>
-
+        <SonereliMark size={76} />
+        <h1 style={{ margin: "16px 0 0", fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 48, lineHeight: 1, letterSpacing: "-0.04em" }}>Sonereli</h1>
+        <p style={{ margin: "12px 0 0", fontSize: 20, lineHeight: "28px", fontWeight: 600 }}>Your song. Your voice.</p>
+        <p style={{ margin: "8px 0 0", fontSize: 16, lineHeight: "24px", color: "var(--fg-soft)", textWrap: "pretty" }}>
+          Paste a song link or upload audio to sing with an adjustable vocal mix and synced lyrics.
+        </p>
         <button className="m-btn primary" type="button" onClick={onSignIn}
-          style={{ marginTop: 22, fontSize: 14, padding: "10px 26px", justifyContent: "center" }}>
-          Sign in to the booth
+          style={{ marginTop: 24, minHeight: 44, fontSize: 16, padding: "8px 16px", justifyContent: "center" }}>
+          Sign in
         </button>
 
-        <div className="m-mono" style={{ marginTop: 26, display: "flex", gap: 14, fontSize: 10.5, color: "var(--muted)", alignItems: "center" }}>
-          <span>secured by clerk</span>
+        <div className="m-mono" style={{ marginTop: 24, display: "flex", gap: 8, fontSize: 10.5, color: "var(--muted)", alignItems: "center" }}>
+          <span>Sonereli{version ? ` v${version}` : ""}</span>
           <span style={{ color: "var(--border)" }}>·</span>
-          <span>trusted lan skips this door</span>
-        </div>
-        <div className="m-mono" style={{ marginTop: 10, display: "flex", gap: 14, fontSize: 10.5, color: "var(--muted)", alignItems: "center" }}>
-          <span>karaoke{version ? ` v${version}` : ""}</span>
-          <span style={{ color: "var(--border)" }}>·</span>
-          <a href="https://github.com/BeFeast/karaoke" target="_blank" rel="noopener" style={{ color: "var(--info)", textDecoration: "none" }}>github.com/BeFeast/karaoke ↗</a>
-          <span style={{ color: "var(--border)" }}>·</span>
-          <span>open source</span>
+          <a href="https://github.com/BeFeast/karaoke" target="_blank" rel="noopener" style={{ color: "var(--info)", textDecoration: "none" }}>Source code ↗</a>
         </div>
       </div>
     </div>

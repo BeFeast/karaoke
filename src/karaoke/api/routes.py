@@ -788,14 +788,12 @@ _SHARE_HTML_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<!-- The MarqueeMark favicon family (#205) — served at the site root by the
-     API, the same sign as the SPA tab and the extension icons. The share page
-     is the most-shared surface, so it must not unfurl a blank/generic icon. -->
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="manifest" href="/site.webmanifest">
-<title>{title} — karaoke</title>
+<meta name="robots" content="noindex">
+<title>{title} · Sonereli</title>
 <style>
  :root {{
    color-scheme: light dark;
@@ -817,9 +815,7 @@ _SHARE_HTML_TEMPLATE = """<!doctype html>
    line-height:1.5; -webkit-font-smoothing:antialiased; font-feature-settings:"ss01","cv11"; }}
  .bar {{ display:flex; align-items:center; gap:10px; padding:0 20px; height:56px;
    border-bottom:1px solid var(--border); font-weight:600; font-size:17px; letter-spacing:-0.01em; }}
- .mark {{ width:24px; height:24px; display:grid; place-items:center; background:var(--accent);
-   color:var(--bg-card); border-radius:3px; }}
- .mark svg {{ display:block; }}
+ .bar a {{ display:inline-flex; align-items:center; gap:10px; color:inherit; text-decoration:none; }}
  .wrap {{ max-width:760px; margin:0 auto; padding:32px 20px 64px; }}
  h1 {{ font-size:30px; font-weight:600; letter-spacing:-0.02em; margin:0 0 10px; word-break:break-word; }}
  .meta {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:28px;
@@ -851,8 +847,7 @@ _SHARE_HTML_TEMPLATE = """<!doctype html>
 </head>
 <body>
 <header class="bar">
-  <span class="mark"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3" fill="currentColor"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-  karaoke
+  <a href="/app/"><img src="/favicon.svg" width="24" height="24" alt="">Sonereli</a>
 </header>
 <main class="wrap">
 <h1>{title_escaped}</h1>
@@ -894,7 +889,7 @@ def _html_escape(s: str | None) -> str:
 def _render_share_html(job: Job, lyrics_text: str | None) -> str:
     # Upload jobs (#172) fall back to the uploaded filename, never the raw
     # ``upload://`` sentinel; URL jobs keep falling back to the URL.
-    title = job.title or upload_display_name(job.source_url) or "karaoke job"
+    title = job.title or upload_display_name(job.source_url) or "Shared song"
     owner = (job.owner_display_name or "").strip()
     owner_block = f"<span>· {_html_escape(owner)}</span>" if owner else ""
     base = f"/share/{job.job_token}"
@@ -908,7 +903,7 @@ def _render_share_html(job: Job, lyrics_text: str | None) -> str:
             )
         return (
             f'<div class="player"><div class="player-label">{label}</div>'
-            f'<audio controls preload="none" src="{base}/{kind}.mp3"></audio></div>'
+            f'<audio aria-label="{label}" controls preload="none" src="{base}/{kind}.mp3"></audio></div>'
         )
 
     if lyrics_text:
@@ -941,14 +936,14 @@ def _render_share_html(job: Job, lyrics_text: str | None) -> str:
     )
 
     return _SHARE_HTML_TEMPLATE.format(
-        title=_html_escape(title)[:80],
+        title=_html_escape(title[:80]),
         title_escaped=_html_escape(title),
         status=job.status.value,
         status_chip_class=_STATUS_CHIP_CLASS.get(job.status.value, ""),
         progress=job.progress,
         owner_block=owner_block,
-        karaoke_block=audio_block("karaoke", "karaoke (instrumental)"),
-        vocals_block=audio_block("vocals", "vocals only"),
+        karaoke_block=audio_block("karaoke", "Instrumental"),
+        vocals_block=audio_block("vocals", "Vocals only"),
         lyrics_block=lyrics_block,
         downloads_block=downloads_block,
     )

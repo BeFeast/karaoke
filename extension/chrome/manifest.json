@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Karaoke Submitter",
-  "short_name": "Karaoke",
-  "description": "Submit the current video page or link to a configured Karaoke queue (vocals + instrumental playback + lyrics).",
-  "version": "0.5.2",
+  "name": "Sonereli Submitter",
+  "short_name": "Sonereli",
+  "description": "Send a video to Sonereli to sing with an adjustable vocal mix and synced lyrics.",
+  "version": "0.6.0",
   "action": {
-    "default_title": "Submit video to Karaoke",
+    "default_title": "Submit video to Sonereli",
     "default_popup": "popup.html"
   },
   "background": {
