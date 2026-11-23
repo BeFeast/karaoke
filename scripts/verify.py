@@ -376,8 +376,12 @@ async def submit(args, api, evidence, scenario, profile, bearer):
                 }, actual == checks["owner_authenticated"])
                 if actual != state["authenticated_owner"]:
                     raise VerifyError("The browser did not authenticate with the machine bearer")
+                song_input = (
+                    'document.querySelector(\'input[aria-label="Song link"], '
+                    'input[aria-label="Source URL"]\')'
+                )
                 field = await wait_for(
-                    lambda: tab.element_point('document.querySelector(\'input[aria-label="Source URL"]\')'),
+                    lambda: tab.element_point(song_input),
                     20, "Booth source input unavailable",
                 )
                 await wait_for(lambda: asyncio.sleep(0, tab.open_sockets), 15,
@@ -385,7 +389,7 @@ async def submit(args, api, evidence, scenario, profile, bearer):
                 await tab.tap(field)
                 await tab.call("Input.insertText", {"text": source})
                 button = await tab.element_point(
-                    '[...document.querySelectorAll("button")].find(el => el.textContent === "Put it on stage")'
+                    f'{song_input}?.parentElement.querySelector("button.primary")'
                 )
                 if not button:
                     raise VerifyError("Submit button missing, disabled or obscured")
