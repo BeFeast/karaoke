@@ -16,5 +16,9 @@ action:
   - seek: 0.75
     assert:
       active_line_follows_seek: true
+  - background_and_resume: stage
+    assert:
+      playback_continues_in_background: true
 evidence:
   - ios-stage-hebrew
+  - ios-stage-after-seek

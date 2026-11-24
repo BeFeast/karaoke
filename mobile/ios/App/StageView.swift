@@ -11,7 +11,7 @@ struct StageView: View {
     @State private var lines: [Lyrics.Line] = []
     @State private var loadError: String?
     @State private var attempt = 0
-    @State private var dragPosition: Double?
+    @State private var resumeAfterScrub = false
     @State private var scrollTarget: Int?
     @ScaledMetric(relativeTo: .body) private var lyricSize = 16.0
     @ScaledMetric(relativeTo: .title3) private var activeSize = 20.0
@@ -137,23 +137,20 @@ struct StageView: View {
 
     private func controls(_ player: StemPlayer) -> some View {
         @Bindable var player = player
-        let position = dragPosition ?? player.position
         return VStack(spacing: 8) {
             if let error = player.errorMessage {
                 Text(error).foregroundStyle(.secondary)
             }
             Slider(
-                value: Binding(get: { position }, set: { value in
-                    if dragPosition != nil { dragPosition = value }
-                    else { player.seek(to: value) }
-                }),
+                value: Binding(get: { player.position }, set: { player.seek(to: $0) }),
                 in: 0...player.duration,
                 onEditingChanged: { editing in
                     if editing {
-                        dragPosition = player.position
-                    } else if let time = dragPosition {
-                        dragPosition = nil
-                        player.seek(to: time)
+                        resumeAfterScrub = player.isPlaying
+                        if resumeAfterScrub { player.pause() }
+                    } else if resumeAfterScrub {
+                        resumeAfterScrub = false
+                        if player.position < player.duration { player.play() }
                     }
                 }
             )
@@ -161,8 +158,8 @@ struct StageView: View {
             .accessibilityIdentifier("stage.seek")
 
             HStack {
-                Text(timeLabel(position))
-                    .accessibilityIdentifier("stage.elapsed")
+                Text(timeLabel(player.position))
+                .accessibilityIdentifier("stage.elapsed")
                 Spacer()
                 Text(timeLabel(player.duration))
             }

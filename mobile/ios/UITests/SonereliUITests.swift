@@ -50,6 +50,15 @@ final class SonereliUITests: XCTestCase {
         capture(app, name: "ios-stage-after-seek")
         XCTAssertEqual(result, .completed,
                        "Expected the Hebrew line at 14 seconds, observed time \(sought). \(app.debugDescription)")
+
+        play.tap()
+        XCTAssertEqual(play.label, "Пауза")
+        let beforeBackground = app.staticTexts["stage.elapsed"].label
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 2)
+        app.activate()
+        XCTAssertEqual(play.label, "Пауза")
+        XCTAssertNotEqual(app.staticTexts["stage.elapsed"].label, beforeBackground)
     }
 
     @MainActor
