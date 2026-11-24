@@ -4,6 +4,13 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.46.3] - 2026-11-24
+
+_Bump: patch_
+
+- Raise the catalog pilot lifetime budget to $5 (#357).
+- Run the catalog pilot with yt-dlp on PATH (#355).
+
 ## [v0.46.2] - 2026-11-24
 
 _Bump: patch_
