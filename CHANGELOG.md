@@ -4,6 +4,13 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.51.0] - 2026-11-24
+
+_Bump: minor_
+
+- Stage: lyrics first, dock in thumb reach, ⋯ menu (#374).
+- Retry R2 transfers on HTTP 429 and 5xx (#373).
+
 ## [v0.50.0] - 2026-11-24
 
 _Bump: minor_
