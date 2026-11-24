@@ -538,7 +538,10 @@ async def inspect_long_lines(tab, evidence, scope, checks, lyrics, performance):
         if sample["index"] == index and (sample["text"] or "").split() == intervals[index][2].split():
             sizes.append(sample)
 
-    await tab.js(f"karaokeVerify.seekLyric({longest})")
+    # Start away from the target and use a real tap/click while audio is
+    # running so we can verify that it changes the underlying playback time.
+    seek_from = sung[0] if longest != sung[0] else sung[-1]
+    await tab.js(f"karaokeVerify.seekLyric({seek_from})")
     play = ('(document.querySelector(".sn-perf [data-sn-play]") ?? document.querySelector('
             '\'[aria-label="Exit performance mode"]\').parentElement'
             '.parentElement.querySelector(\'button[aria-label="Play"]\'))'
@@ -547,6 +550,15 @@ async def inspect_long_lines(tab, evidence, scope, checks, lyrics, performance):
     if not point:
         raise VerifyError("Play is unreachable")
     await tab.tap(point)
+    await wait_for(lambda: tab.js("karaokeVerify.snapshot().tracks.length > 0"), 8, "Audio did not start")
+    lyric = f'document.querySelectorAll(".synced-lyrics-line")[{longest}]?.querySelector(".synced-lyrics-seek")'
+    point = await tab.element_point(lyric)
+    before_seek = (await tab.js(snapshot))["time"]
+    if not point:
+        raise VerifyError("Longest lyric line is unreachable")
+    await tab.tap(point)
+    await tab.js("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+    after_seek = (await tab.js(snapshot))["time"]
     if not performance and not scope.endswith(".public_share"):
         await tab.js('document.querySelector(".synced-lyrics-list").scrollIntoView({block:"center", behavior:"instant"})')
 
@@ -582,6 +594,9 @@ async def inspect_long_lines(tab, evidence, scope, checks, lyrics, performance):
             <= sum(w["t"] <= s["time"] + word_tolerance for w in words) - 1
         )
     ]
+    started_samples = [s for s in active_samples if s["lastStarted"] >= 0]
+    emphasized = sum(s["wordEmphasized"] for s in started_samples)
+    underlined = sum(s["wordUnderlined"] for s in started_samples)
     scope_data = {
         "whole_song_font_size": (
             {"sung_lines": len(sung), "sampled": len(sizes), **font},
@@ -612,6 +627,19 @@ async def inspect_long_lines(tab, evidence, scope, checks, lyrics, performance):
             {"expected_words": len(words), "sample_errors": len(word_errors),
              "distinct_highlights": len({s["lastStarted"] for s in active_samples})},
             covered and len({s["lastStarted"] for s in active_samples}) >= 2 and not word_errors,
+        ),
+        "current_word_underline": (
+            {"underlined": underlined, "samples": len(started_samples)},
+            bool(started_samples) and underlined == len(started_samples),
+        ),
+        "current_word_emphasis": (
+            {"emphasized": emphasized, "samples": len(started_samples)},
+            emphasized > 0 and all(s["wordMotionOK"] for s in started_samples),
+        ),
+        "lyric_tap_seeks": (
+            {"before_s": before_seek, "after_s": after_seek, "target_s": start},
+            before_seek is not None and after_seek is not None
+            and abs(after_seek - before_seek) > 2 and abs(after_seek - start) <= timing,
         ),
     }
     for name, expected in checks.items():

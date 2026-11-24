@@ -13,6 +13,9 @@ action:
       active_lyric_in_view: true
       lyric_highlight_sync: 0.5
       word_highlight_sync: 0.5
+      current_word_underline: true
+      current_word_emphasis: true
+      lyric_tap_seeks: true
       # Sonereli Stage (UI/UX v1 step 7): the active line's top sits at 20–40%
       # of the lyrics viewport while it is sung.
       active_line_anchored: [0.2, 0.4]
@@ -29,3 +32,6 @@ action:
       active_lyric_in_view: true
       lyric_highlight_sync: 0.5
       word_highlight_sync: 0.5
+      current_word_underline: true
+      current_word_emphasis: true
+      lyric_tap_seeks: true

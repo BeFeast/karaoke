@@ -244,8 +244,6 @@ function SyncedStageLyrics({ lines, duration, currentTime, onSeek, size, reduced
                 dir={detectTextDirection(line.text)}
               >
                 {line.speech ? <bdi className="synced-lyrics-speech-tag">{t("stage.speech")} · </bdi> : null}
-                {/* No reducedMotion here: the Stage has no wipe, and the
-                    current-word underline is not motion. */}
                 <LyricText line={timed[i]}
                   currentTime={role === "active" && line.words ? currentTime : undefined} />
               </button>
