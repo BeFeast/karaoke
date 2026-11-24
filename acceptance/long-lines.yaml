@@ -1,0 +1,21 @@
+state:
+  completed_song: https://www.youtube.com/watch?v=aQfI0WP-fcE
+  fixture_job: 458
+  # Resolve the unlisted share token from GET /jobs/458/status at runtime.
+  profiles: [iphone, android, desktop]
+  lyrics_script: Hebrew
+action:
+  - open: public_share
+    assert: &lyrics
+      whole_song_font_size: {inactive_px: 16, active_px: 20}
+      lyric_lines_fit: true
+      longest_lyric_wraps: true
+      active_lyric_in_view: true
+      lyric_highlight_sync: 0.5
+      word_highlight_sync: 0.5
+  - open: stage
+    assert: *lyrics
+  - open: performance
+    assert:
+      <<: *lyrics
+      whole_song_font_size: {inactive_px: 20, active_px: 24}

@@ -82,8 +82,8 @@ class Coordinator:
         return (await self.request("GET", f"{route(job)}/lyrics", private=False)).json()
 
     async def fixture(self, state, reused):
-        if reused:
-            jobs = [await self.status({"id": reused})]
+        if fixture_id := reused or state.get("fixture_job"):
+            jobs = [await self.status({"id": fixture_id})]
         else:
             jobs = [job for job in await self.jobs()
                     if not urlsplit(job["source_url"]).fragment.startswith("karaoke-verify-")
@@ -329,6 +329,113 @@ async def inspect_player(tab, evidence, scope, checks, lyrics):
     ))
 
 
+async def inspect_long_lines(tab, evidence, scope, checks, lyrics, performance):
+    intervals = list(lyric_intervals(lyrics))
+    sung = [index for index, (_, _, _, speech) in enumerate(intervals) if not speech]
+    longest = max(sung, key=lambda index: len(intervals[index][2]))
+    start, next_start, text, _ = intervals[longest]
+    words = lyrics["lines"][longest].get("words") or []
+    end = min(lyrics["lines"][longest].get("end") or next_start, next_start)
+    if not words or not start < end < float("inf"):
+        raise VerifyError("The longest lyric fixture must have a bounded interval and word timing")
+    await wait_for(lambda: tab.js(
+        'karaokeVerify.snapshot().ready && document.querySelector(".synced-lyrics-list") !== null'
+    ), 40, "Player or lyrics never became ready")
+    await tab.js("document.fonts.ready.then(() => true)")
+    if performance:
+        point = await tab.element_point('document.querySelector(\'button[title^="Performance mode"]\')')
+        if not point:
+            raise VerifyError("Performance control is unreachable")
+        await tab.tap(point)
+
+    snapshot = f"karaokeVerify.lyricLayout({json.dumps(performance)})"
+    sizes = []
+    for index in sung:
+        # Use the real lyric button's seek action. Sampling paused keeps short
+        # lines from being skipped, and lets us cover every active font size.
+        await tab.js(f"karaokeVerify.seekLyric({index})")
+        sample = await tab.js(snapshot)
+        if sample["index"] == index and (sample["text"] or "").split() == intervals[index][2].split():
+            sizes.append(sample)
+
+    await tab.js(f"karaokeVerify.seekLyric({longest})")
+    play = ('document.querySelector(\'[aria-label="Exit performance mode"]\').parentElement'
+            '.parentElement.querySelector(\'button[aria-label="Play"]\')'
+            if performance else 'document.querySelector(\'button[aria-label="Play"]\')')
+    point = await tab.element_point(play)
+    if not point:
+        raise VerifyError("Play is unreachable")
+    await tab.tap(point)
+    if not performance and not scope.endswith(".public_share"):
+        await tab.js('document.querySelector(".synced-lyrics-list").scrollIntoView({block:"center", behavior:"instant"})')
+
+    samples = []
+    captured = False
+    deadline = asyncio.get_running_loop().time() + end - start + 10
+    while asyncio.get_running_loop().time() < deadline:
+        sample = await tab.js(snapshot)
+        now = sample["time"]
+        if now is not None and start <= now < end:
+            samples.append(sample)
+            if not captured and now >= start + min(6, (end - start) / 2):
+                await evidence.capture(tab, scope, "longest-line")
+                captured = True
+        if now is not None and now >= end:
+            break
+        await asyncio.sleep(0.12)
+    if not captured:
+        await evidence.capture(tab, scope, "longest-line")
+
+    font = {key: min((sample[field] for sample in sizes if sample[field] is not None), default=None)
+            for key, field in (("active_px", "activePx"), ("inactive_px", "inactivePx"))}
+    timing = checks["lyric_highlight_sync"]
+    covered = bool(samples and samples[0]["time"] <= start + timing and samples[-1]["time"] >= end - timing)
+    active_samples = [s for s in samples if s["index"] == longest and (s["text"] or "").split() == text.split()]
+    mistimed = [s for s in samples if start + timing <= s["time"] < end - timing and s not in active_samples]
+    word_tolerance = checks["word_highlight_sync"]
+    word_errors = [
+        s for s in active_samples
+        if s["wordCount"] != len(words) or not (
+            sum(w["t"] < s["time"] - word_tolerance for w in words) - 1
+            <= s["lastStarted"]
+            <= sum(w["t"] <= s["time"] + word_tolerance for w in words) - 1
+        )
+    ]
+    scope_data = {
+        "whole_song_font_size": (
+            {"sung_lines": len(sung), "sampled": len(sizes), **font},
+            len(sizes) == len(sung) and all(
+                px is not None and px >= checks["whole_song_font_size"][key] for key, px in font.items()),
+        ),
+        "lyric_lines_fit": (
+            {"overflow": sum(s["overflow"] for s in sizes)},
+            len(sizes) == len(sung) and not any(s["overflow"] for s in sizes),
+        ),
+        "longest_lyric_wraps": (
+            {"length": len(text), "rtl": all(s["direction"] == "rtl" for s in active_samples),
+             "visual_rows": max((s["visualRows"] for s in active_samples), default=0),
+             "inline_wraps": all(s["inlineWraps"] for s in active_samples)},
+            bool(active_samples) and all(
+                s["visualRows"] > 1 and s["inlineWraps"] and s["direction"] == "rtl" for s in active_samples),
+        ),
+        "active_lyric_in_view": (
+            {"samples": len(active_samples), "clipped": sum(not s["inView"] for s in active_samples)},
+            covered and bool(active_samples) and all(s["inView"] for s in active_samples),
+        ),
+        "lyric_highlight_sync": (
+            {"interval_s": [start, end], "samples": len(samples), "mismatches": len(mistimed)},
+            covered and bool(active_samples) and not mistimed,
+        ),
+        "word_highlight_sync": (
+            {"expected_words": len(words), "sample_errors": len(word_errors),
+             "distinct_highlights": len({s["lastStarted"] for s in active_samples})},
+            covered and len({s["lastStarted"] for s in active_samples}) >= 2 and not word_errors,
+        ),
+    }
+    for name, expected in checks.items():
+        evidence.check(scope, name, expected, *scope_data[name])
+
+
 async def run_player(args, evidence, profile, job, lyrics, step):
     surface = step["open"]
     scope = f"{profile}.{surface}"
@@ -336,7 +443,10 @@ async def run_player(args, evidence, profile, job, lyrics, step):
         try:
             path = route(job) if surface == "public_share" else f"/app/#/job/{job['job_token']}"
             await tab.navigate(f"{args.target}{path}")
-            await inspect_player(tab, evidence, scope, step["assert"], lyrics)
+            if "whole_song_font_size" in step["assert"]:
+                await inspect_long_lines(tab, evidence, scope, step["assert"], lyrics, surface == "performance")
+            else:
+                await inspect_player(tab, evidence, scope, step["assert"], lyrics)
         except Exception as exc:
             evidence.skip(scope, step["assert"], str(exc))
             with suppress(Exception):

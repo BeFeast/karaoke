@@ -43,6 +43,75 @@
   }
 
   window.karaokeVerify = {
+    async seekLyric(index) {
+      line(all(".synced-lyrics-line")[index]).click();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    },
+
+    lyricLayout(performance) {
+      const list = select(".synced-lyrics-list");
+      const rows = [...list.children];
+      const current = rows.find((row) => row.getAttribute("aria-current") === "true");
+      // Keep the old surface selectors so this scenario can also run against v0.45.0.
+      const overlay = select('[aria-label="Exit performance mode"]')?.parentElement.parentElement;
+      const legacyParts = [...(overlay?.querySelectorAll(".m-wipe .w-dim") ?? [])]
+        .filter((part) => part.getClientRects().length);
+      const legacyActive = legacyParts[0]?.closest(".m-wipe")?.parentElement.parentElement;
+      const active = performance
+        ? overlay?.querySelector("[data-lyric-active]") ?? legacyActive
+        : current && line(current);
+      const ladder = performance && (overlay?.querySelector(".performance-lyrics")
+        ?? legacyActive?.parentElement.parentElement);
+      const inactive = performance
+        ? [...(ladder?.querySelectorAll("[data-lyric-neighbor], span[dir][style*='font-size']") ?? [])]
+        : rows.filter((row) => row !== current).map(line);
+      const inline = !performance && select(".ksplayer [data-lyric-active], .ksplayer .m-wipe");
+      if (!performance) inactive.push(...all(".ksplayer [data-lyric-neighbor]"));
+      const bounds = (element) => element?.getBoundingClientRect();
+      const viewport = bounds(performance ? active?.closest(".performance-current") ?? ladder : list);
+      const box = bounds(active);
+      const glyphRows = (element) => {
+        const range = document.createRange();
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        const rows = new Set();
+        for (let text; (text = walker.nextNode());) {
+          if (!text.textContent.trim()) continue;
+          range.selectNodeContents(text);
+          for (const box of range.getClientRects()) {
+            if (box.width > 0) rows.add(Math.round(box.bottom / 4));
+          }
+        }
+        return rows.size;
+      };
+      const font = (el) => parseFloat(getComputedStyle(el).fontSize);
+      const overflow = [active, inline, ...inactive].filter(Boolean)
+        .filter((el) => el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0);
+      const words = active ? [...active.querySelectorAll("[data-lyric-word-start]")] : [];
+      const lastStarted = words.findLastIndex((word) => parseFloat(
+        word.style.getPropertyValue("--lyric-progress")) > 0);
+      const tracks = [...sources.entries()].filter(([node]) => node.context.state === "running");
+      const [node, source] = tracks[0] ?? [];
+      return {
+        index: rows.indexOf(current),
+        text: legacyParts.length && performance
+          ? legacyParts.map((part) => part.textContent.trim()).join(" ")
+          : active?.textContent.trim() ?? null,
+        activePx: active ? Math.min(font(active), inline ? font(inline) : Infinity) : null,
+        inactivePx: inactive.length ? Math.min(...inactive.map(font)) : null,
+        overflow: overflow.length,
+        inView: !!(box && viewport && box.top >= Math.max(0, viewport.top) - 1
+          && box.bottom <= Math.min(innerHeight, viewport.bottom) + 1
+          && box.left >= -1 && box.right <= innerWidth + 1),
+        visualRows: performance && legacyParts.length ? legacyParts.length : active ? glyphRows(active) : 0,
+        inlineWraps: !inline || glyphRows(inline) > 1,
+        direction: active ? getComputedStyle((performance && legacyParts[0]) || active).direction : null,
+        wordCount: words.length,
+        lastStarted,
+        time: node ? source.offset
+          + Math.max(0, node.context.currentTime - source.when) * node.playbackRate.value : null,
+      };
+    },
+
     point(control, scroll = false, mixLevel = 0.5) {
       const element = control === "play" ? play() ?? audio() : mix();
       if (!element || element.disabled) return null;

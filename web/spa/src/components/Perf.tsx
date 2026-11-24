@@ -14,13 +14,12 @@
 //     playPause, blend slider → setVocalLevel (the ONE equal-power crossfade
 //     parameter — same recorded deviation as the Stage port: no per-stem
 //     gains), top-strip time + progress bar → the quantized currentTime
-//     state, the current-line wipe → the raw subscribeTime tick feed
-//     (bypasses the React render path entirely).
+//     state, shared with the current-line highlight.
 //   * SONG/usePlayback clock → real SharePayload title/artist and the timed
 //     synced-lyrics lines (stage-core.timeLines over the LRC payload, so the
 //     wipe + MBulbs gap countdown derive from real timestamps); no synced
 //     data → centered plain text, no fake timing.
-//   * lyricScale baked at 150 (FINAL.lyricScale) — no TweaksPanel pickers;
+//   * Readable phone/desktop sizes stay fixed while lyrics wrap.
 //     ◐ shares the stage room's persisted day/night theme (token classes).
 //   * Token resolutions (audit item 4): perf.jsx:40 radial background blends
 //     var(--bg-soft) → var(--bg) (day & night resolve via the room's token
@@ -30,27 +29,17 @@
 //     thumb shadow (m-perf.jsx:46) → var(--shadow-sm).
 //   * prefers-reduced-motion: the 3 s idle fade is disabled (controls stay
 //     visible) and the wipe doesn't sweep — the current line fills whole.
-//   * Recorded deviations: pointerdown also wakes the controls (a touch tap
-//     emits no pointermove); long real-world lines fit-to-width (#166): the
-//     active line downscales its font via --line-scale, or wraps to two
-//     balanced rows below FIT_FLOOR with the wipe fill split across the rows;
-//     prev/next get the same overflow guard at their scale (the pure math
-//     lives in lineFit.ts); play/skip disable until the engine is ready.
-
 import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePhoneLayout } from "../lib/layout";
 import { railPct } from "../player/engineMath";
 import type { KaraokePlayerApi } from "../player/useKaraokePlayer";
 import type { StageTheme } from "../theme";
-import { FIT_FLOOR, balancedSplit, fitLineScale, splitFill } from "./lineFit";
+import { LyricText } from "./LyricText";
 import { MBulbs, PlaybackIcon, SonereliMark } from "./marks";
 import { PlainLyrics } from "./SyncedLyrics";
 // BLEND_GRADIENT + the phone rail recipe moved to stage-core (#185) so the
 // phone console reuses them; the desktop rail below still paints the gradient.
 import { BLEND_GRADIENT, BlendRail, lyricState, type TimedLine } from "./stage-core";
-
-// FINAL.lyricScale (final-app.jsx:9) — baked, no scale picker.
-const LYRIC_SCALE = 150;
 
 /** mm:ss for a (possibly NaN/Infinity) seconds value (the design's fmtTime). */
 function fmtTime(sec: number): string {
@@ -58,199 +47,6 @@ function fmtTime(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-// Available width for a lyric row — the #166 cap: min(92vw, container
-// content width), so nothing ever reaches the viewport edges.
-function availWidth(container: HTMLElement): number {
-  return Math.min(window.innerWidth * 0.92, container.clientWidth);
-}
-
-// The current line rides the engine's raw tick feed (subscribeTime) and
-// writes the DOM directly — per-tick wipe updates bypass React rendering
-// (the same seam as the console LiveLyricWipe). Reduced motion: no sweep —
-// the line fills whole while it's current.
-//
-// Fit-to-width (#166): real LRC lines overflow the 150%-scaled row the design
-// assumes. On line change (never per tick) the natural single-row width is
-// measured at scale 1 and fitLineScale picks a proportional --line-scale —
-// font-size based, so layout and centering stay true (the previous
-// transform:scale left the overflowing box off-center and still clipped).
-// Below FIT_FLOOR the line wraps at the balancedSplit whitespace into two
-// stacked .m-wipe rows and splitFill carries the progressive fill across
-// them; a single giant word (no split point) falls back to the exact-fit
-// downscale so nothing ever clips.
-function PerfWipe({
-  lines,
-  subscribeTime,
-  currentTime,
-  size,
-  reducedMotion,
-}: {
-  lines: TimedLine[];
-  subscribeTime: (cb: (t: number) => void) => () => void;
-  /** Mount-time playhead — paints the wipe before the first engine tick. */
-  currentTime: number;
-  size: number;
-  reducedMotion: boolean;
-}) {
-  const rootRef = useRef<HTMLSpanElement | null>(null);
-  const headRowRef = useRef<HTMLSpanElement | null>(null);
-  const headDimRef = useRef<HTMLSpanElement | null>(null);
-  const headFillRef = useRef<HTMLSpanElement | null>(null);
-  const tailWrapRef = useRef<HTMLSpanElement | null>(null);
-  const tailRowRef = useRef<HTMLSpanElement | null>(null);
-  const tailDimRef = useRef<HTMLSpanElement | null>(null);
-  const tailFillRef = useRef<HTMLSpanElement | null>(null);
-  const mountTimeRef = useRef(currentTime);
-  mountTimeRef.current = currentTime;
-  useEffect(() => {
-    let lastText: string | null = null;
-    // Wrapped-mode [headLen, tailLen] for splitFill; null = single row.
-    let split: [number, number] | null = null;
-
-    const relayout = (text: string) => {
-      const root = rootRef.current;
-      const headRow = headRowRef.current;
-      const headDim = headDimRef.current;
-      const headFill = headFillRef.current;
-      const tailWrap = tailWrapRef.current;
-      const tailRow = tailRowRef.current;
-      const tailDim = tailDimRef.current;
-      const tailFill = tailFillRef.current;
-      if (!root || !headRow || !headDim || !headFill || !tailWrap || !tailRow || !tailDim || !tailFill) return;
-      // Reset to a natural single row at scale 1 and measure.
-      split = null;
-      root.style.setProperty("--line-scale", "1");
-      headDim.textContent = text;
-      headFill.textContent = text;
-      tailWrap.style.display = "none";
-      tailDim.textContent = "";
-      tailFill.textContent = "";
-      const avail = availWidth(root);
-      if (!text || !(avail > 0)) return;
-      let fit = fitLineScale(headRow.getBoundingClientRect().width, avail);
-      const halves = fit.wrap ? balancedSplit(text) : null;
-      if (halves) {
-        headDim.textContent = halves[0];
-        headFill.textContent = halves[0];
-        tailDim.textContent = halves[1];
-        tailFill.textContent = halves[1];
-        tailWrap.style.display = "block";
-        split = [halves[0].length, halves[1].length];
-        fit = fitLineScale(Math.max(headRow.getBoundingClientRect().width, tailRow.getBoundingClientRect().width), avail);
-      }
-      root.style.setProperty("--line-scale", String(fit.scale));
-      // Glyph metrics aren't perfectly linear under font-size scaling —
-      // correct any residual overflow so no character ever clips.
-      const widest = Math.max(headRow.getBoundingClientRect().width, halves ? tailRow.getBoundingClientRect().width : 0);
-      if (widest > avail) root.style.setProperty("--line-scale", String(fit.scale * (avail / widest)));
-    };
-
-    const apply = (t: number) => {
-      const headFill = headFillRef.current;
-      const tailFill = tailFillRef.current;
-      if (!headFill || !tailFill) return;
-      const ls = lyricState(lines, t);
-      const text = ls.cur ? ls.cur.text : "";
-      if (lastText !== text) {
-        lastText = text;
-        relayout(text);
-      }
-      const sung = ls.cur ? (reducedMotion ? 100 : ls.sung) : 0;
-      if (split) {
-        const [head, tail] = splitFill(sung, split[0], split[1]);
-        headFill.style.width = `${head}%`;
-        tailFill.style.width = `${tail}%`;
-      } else {
-        headFill.style.width = `${sung}%`;
-      }
-    };
-    apply(mountTimeRef.current);
-    // Container/viewport resizes change the available width — re-fit the
-    // current line. Width-gated so font-size-driven height changes from
-    // relayout itself never re-trigger the observer.
-    const root = rootRef.current;
-    let lastW = root ? root.clientWidth : -1;
-    const ro =
-      root && typeof ResizeObserver !== "undefined"
-        ? new ResizeObserver(() => {
-            const w = root.clientWidth;
-            if (w === lastW) return;
-            lastW = w;
-            if (lastText !== null) relayout(lastText);
-          })
-        : null;
-    if (ro && root) ro.observe(root);
-    const unsub = subscribeTime(apply);
-    return () => {
-      ro?.disconnect();
-      unsub();
-    };
-  }, [lines, subscribeTime, reducedMotion, size]);
-  // The recipe's font-family is set per .m-wipe row (a class rule on the row
-  // would beat inheritance from the root); --line-scale is written only by
-  // relayout, so React never fights the manual style updates.
-  const rowStyle: CSSProperties = { fontFamily: "var(--font-display)" };
-  return (
-    <span ref={rootRef} style={{ display: "block", fontWeight: 700, fontSize: `calc(${size}px * var(--line-scale, 1))` }}>
-      <span style={{ display: "block" }}>
-        <span ref={headRowRef} className="m-wipe" dir="auto" style={rowStyle}>
-          <span className="w-dim" style={{ color: "var(--lyric-dim)" }} ref={headDimRef}></span>
-          <span className="w-fill" style={{ color: "var(--accent)" }} ref={headFillRef} aria-hidden="true"></span>
-        </span>
-      </span>
-      <span ref={tailWrapRef} style={{ display: "none" }}>
-        <span ref={tailRowRef} className="m-wipe" dir="auto" style={rowStyle}>
-          <span className="w-dim" style={{ color: "var(--lyric-dim)" }} ref={tailDimRef}></span>
-          <span className="w-fill" style={{ color: "var(--accent)" }} ref={tailFillRef} aria-hidden="true"></span>
-        </span>
-      </span>
-    </span>
-  );
-}
-
-// Neighbour (prev/next) lines — the same overflow guard at their scale
-// (#166): render nowrap, measure once per text change (two-pass
-// useLayoutEffect, re-rendered before paint so nothing flashes), and
-// downscale the font to fit. Below FIT_FLOOR the line switches to a natural
-// balanced wrap at the floor scale instead — there is no fill to preserve
-// here, so CSS does the splitting.
-function FitLine({ text }: { text: string }) {
-  const ref = useRef<HTMLSpanElement | null>(null);
-  const [fit, setFit] = useState<{ forText: string | null; scale: number; wrap: boolean }>({
-    forText: null,
-    scale: 1,
-    wrap: false,
-  });
-  const measured = fit.forText === text;
-  useLayoutEffect(() => {
-    if (measured) return;
-    const el = ref.current;
-    if (!el) return;
-    const avail = el.parentElement ? availWidth(el.parentElement) : 0;
-    const f = fitLineScale(el.getBoundingClientRect().width, avail);
-    setFit({ forText: text, scale: f.wrap ? FIT_FLOOR : f.scale, wrap: f.wrap });
-  });
-  useEffect(() => {
-    const onResize = () => setFit((s) => (s.forText === null ? s : { ...s, forText: null }));
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-  return (
-    <span
-      ref={ref}
-      dir="auto"
-      style={{
-        display: "inline-block",
-        whiteSpace: measured && fit.wrap ? "normal" : "nowrap",
-        textWrap: measured && fit.wrap ? "balance" : undefined,
-        fontSize: measured ? `${fit.scale}em` : "1em",
-      }}
-    >
-      {text}
-    </span>
-  );
 }
 
 export interface PerfProps {
@@ -295,11 +91,13 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
     };
   }, [poke, onExit]);
 
-  // Line ladder + gap countdown from the quantized playhead (~10 Hz) — line
-  // granularity; only the wipe fill needs the raw tick feed (PerfWipe).
+  // The line ladder and word highlight share the player playhead.
   const ls = lyricState(lines, player.currentTime);
   const gapBulbs = ls.inGap && ls.next ? Math.min(8, Math.ceil(ls.gap)) : 0;
-  const sz = LYRIC_SCALE / 100;
+  const activeRow = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    if (activeRow.current) activeRow.current.scrollTop = 0;
+  }, [ls.idx]);
   const vox = Math.round(player.vocalLevel * 100);
   const progress = (player.duration > 0 ? (player.currentTime / player.duration) * 100 : 0) + "%";
 
@@ -321,11 +119,9 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
 
   const day = theme === "day";
   const fade: CSSProperties = { opacity: idle ? 0 : 1, transition: reducedMotion ? undefined : "opacity .5s" };
-  // Lyric metrics: phone per m-perf.jsx:22-28, desktop/TV per perf.jsx:51-57
-  // (the design minHeights), everything × the baked 150% scale.
   const m = phone
-    ? { prev: 17, cur: 29, next: 18, prevH: 22, curH: 35, nextH: 23, gap: 16, pad: "0 26px", track: "-0.01em", lh: 1.22, lineLh: 1.3 }
-    : { prev: 20, cur: 41, next: 22, prevH: 26, curH: 48, nextH: 28, gap: 18, pad: "0 64px", track: "-0.015em", lh: 1.15, lineLh: undefined };
+    ? { neighbor: 20, active: 24, gap: 12, pad: "0 24px", lh: 1.2 }
+    : { neighbor: 30, active: 60, gap: 16, pad: "0 64px", lh: 1.15 };
 
   return (
     <div
@@ -372,27 +168,21 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
 
       {/* center: prev / current (wipe) / next + gap countdown (perf.jsx:50-61) */}
       {lines.length > 0 ? (
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", gap: m.gap, padding: m.pad, textAlign: "center", minHeight: 0 }}>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: m.prev * sz, fontWeight: 500, color: "var(--lyric-prev)", lineHeight: m.lineLh, minHeight: m.prevH * sz }}>
-            {ls.prev ? <FitLine text={ls.prev.text} /> : ""}
+        <div className="performance-lyrics" style={{ gap: m.gap, padding: m.pad }}>
+          <div className="performance-neighbor performance-previous"
+            style={{ fontSize: m.neighbor, color: "var(--lyric-prev)" }}>
+            {ls.prev && <LyricText line={ls.prev} neighbor />}
           </div>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: m.cur * sz, fontWeight: 700, letterSpacing: m.track, lineHeight: m.lh, minHeight: m.curH * sz, textShadow: "var(--glow)" }}>
+          <div ref={activeRow} className="performance-current"
+            style={{ fontSize: m.active, lineHeight: m.lh, textShadow: "var(--glow)" }}>
             {ls.cur ? (
-              <PerfWipe
-                lines={lines}
-                subscribeTime={player.subscribeTime}
-                currentTime={player.currentTime}
-                size={m.cur * sz}
-                reducedMotion={reducedMotion}
-              />
+              <LyricText line={ls.cur} currentTime={player.currentTime} reducedMotion={reducedMotion} />
             ) : (
-              <span style={{ color: "var(--lyric-dim)" }}>
-                {ls.next ? "get ready…" : player.currentTime < 2 ? title : "instrumental"}
-              </span>
+              <span>{ls.next ? "get ready…" : player.currentTime < 2 ? title : "instrumental"}</span>
             )}
           </div>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: m.next * sz, fontWeight: 540, color: "var(--lyric-next)", lineHeight: m.lineLh, minHeight: m.nextH * sz }}>
-            {ls.next ? <FitLine text={ls.next.text} /> : "— end —"}
+          <div className="performance-neighbor" style={{ fontSize: m.neighbor, color: "var(--lyric-next)" }}>
+            {ls.next ? <LyricText line={ls.next} neighbor /> : "— end —"}
           </div>
           <div style={{ display: "flex", justifyContent: "center", marginTop: 4, minHeight: 8 }}>
             {gapBulbs > 0 && <MBulbs n={8} lit={gapBulbs} size={7} gap={phone ? 9 : 10} />}
@@ -404,11 +194,11 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
           {plain ? (
             <PlainLyrics
               text={plain}
-              style={{ margin: "auto", padding: "24px 0", fontFamily: "var(--font-display)", fontSize: m.prev * sz, fontWeight: 500, lineHeight: 1.5, color: "var(--fg-soft)", whiteSpace: "pre-wrap" }}
+              style={{ margin: "auto", padding: "24px 0", fontFamily: "var(--font-display)", fontSize: m.neighbor, fontWeight: 500, lineHeight: 1.5, color: "var(--fg-soft)", whiteSpace: "pre-wrap" }}
             />
           ) : (
             <div style={{ margin: "auto", padding: "24px 0" }}>
-              <div style={{ fontFamily: "var(--font-display)", fontSize: m.cur * sz, fontWeight: 700, letterSpacing: m.track, lineHeight: m.lh, textShadow: "var(--glow)" }}>{title}</div>
+              <div style={{ fontFamily: "var(--font-display)", fontSize: m.active, fontWeight: 700, lineHeight: m.lh, textShadow: "var(--glow)" }}>{title}</div>
               <div className="m-mono" style={{ marginTop: 14, fontSize: 11.5, color: "var(--muted)" }}>no lyrics for this track</div>
             </div>
           )}

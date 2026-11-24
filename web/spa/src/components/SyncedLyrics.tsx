@@ -1,4 +1,6 @@
 import { type CSSProperties, useLayoutEffect, useMemo, useRef } from "react";
+import { LyricText } from "./LyricText";
+import { timeLines } from "./stage-core";
 
 // ─── LRC parsing ────────────────────────────────────────────────────────────
 //
@@ -289,6 +291,7 @@ export function SyncedLyrics({
 }: SyncedLyricsProps) {
   // Parse once per LRC body (not per frame).
   const lines = useMemo(() => (lrc ? parseLrc(lrc) : []), [lrc]);
+  const timedLines = useMemo(() => timeLines(lines, null), [lines]);
   const hasSynced = lines.length > 0;
   const lyricsDirection = useMemo(() => detectLyricsDirection(lines), [lines]);
 
@@ -309,13 +312,20 @@ export function SyncedLyrics({
     const el = lineRefs.current[active];
     const list = listRef.current;
     if (!el || !list) return;
-    const top = el.offsetTop;
-    const bottom = top + el.offsetHeight;
-    const visible = top >= list.scrollTop && bottom <= list.scrollTop + list.clientHeight;
-    list.scrollTo({
-      top: Math.max(0, (top + bottom - list.clientHeight) / 2),
-      behavior: !reducedMotion && visible ? "smooth" : "auto",
-    });
+    const follow = (animate: boolean) => {
+      const top = el.offsetTop;
+      const bottom = top + el.offsetHeight;
+      const visible = top >= list.scrollTop && bottom <= list.scrollTop + list.clientHeight;
+      list.scrollTo({
+        top: el.offsetHeight > list.clientHeight ? top : (top + bottom - list.clientHeight) / 2,
+        behavior: animate && !reducedMotion && visible ? "smooth" : "instant",
+      });
+    };
+    follow(true);
+    const observer = new ResizeObserver(() => follow(false));
+    observer.observe(list);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, [active, lines, reducedMotion]);
 
   // ── Synced path ──────────────────────────────────────────────────────────
@@ -350,7 +360,8 @@ export function SyncedLyrics({
                 dir={detectTextDirection(line.text)}
               >
                 {line.speech ? <bdi dir="ltr" className="synced-lyrics-speech-tag">[speech] </bdi> : null}
-                {line.text}
+                <LyricText line={timedLines[i]} reducedMotion={reducedMotion}
+                  currentTime={i === active && !line.speech && line.words ? currentTime : undefined} />
               </button>
             </li>
           ))}

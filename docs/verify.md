@@ -30,7 +30,13 @@ The share scenarios find a retained completed GPU job with synced lyrics for the
 scenario's song. `--reuse-job` selects a specific completed fixture for each
 share scenario in the run. Run the Hebrew scenario separately when using a
 different fixture. The verifier checks the public link and the anonymous Stage
-player separately. The submit scenario opens the mobile Booth, taps the real
+player separately. The `long-lines` scenario uses a pinned Hebrew patter song.
+It resolves the share token from the coordinator at runtime, seeks to each
+sung line to check font size and width, then plays through the longest line
+to check wrapping, visibility and word timing on the share page, Stage and
+Performance.
+
+The submit scenario opens the mobile Booth, taps the real
 submit button, verifies the Booth's WebSocket through completion, then taps the
 new job's **Sing** link. It always creates a fresh job and consumes the
 deployed coordinator's GPU budget. You can set `KARAOKE_CANARY_URLS` to use

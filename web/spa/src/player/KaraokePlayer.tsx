@@ -25,7 +25,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BlendRail, lyricState, ProtoFader, type TimedLine } from "../components/stage-core";
-import { MBulbs, MWipe, PlaybackIcon } from "../components/marks";
+import { MBulbs, PlaybackIcon } from "../components/marks";
+import { LyricText } from "../components/LyricText";
 import { Perf } from "../components/Perf";
 import { PHONE_QUERY, useCoarsePointer, usePhoneLayout } from "../lib/layout";
 import { useActiveTouchStart } from "../lib/touchGuards";
@@ -248,7 +249,7 @@ function PhoneConsoleModule({
 
 // ── SetlistModule (stage.jsx:49-89): marquee sign + spotlight dimmer ────────
 // The vertical rail drives the SAME single crossfade parameter as the faders.
-function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: TimedLine[] }) {
+function SetlistModule({ player, lines, reducedMotion }: { player: KaraokePlayerApi; lines: TimedLine[]; reducedMotion: boolean }) {
   // Phone: the dimmer rail keeps its 4px bar but the drag hit zone widens to
   // 44px and the thumb grows to the m-perf 26px/4px-border resolution (#185).
   const phone = usePhoneLayout();
@@ -295,21 +296,18 @@ function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: Tim
   });
   return (
     <div style={{ display: "flex", gap: 16, alignItems: "stretch", minWidth: 0 }}>
-      {/* Phone (#185): the sign must be allowed to shrink (minWidth: 0) and
-          the current-line wipe gets the #176 console cap (maxWidth +
-          ellipsis on the .m-wipe root) — the nowrap .m-wipe recipe never
-          shrinks, so a real lyric line blew the row past the viewport and
-          pushed the dimmer rail off-screen (pre-existing at 390px), which
-          would have left the widened hit zone unreachable. */}
-      <div className="m-sign" style={{ flex: 1, minWidth: phone ? 0 : undefined, padding: "16px 22px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 9, textAlign: "center" }}>
-        <div dir="auto" style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 500, color: "var(--lyric-prev)", minHeight: 18 }}>{ls.prev ? ls.prev.text : "—"}</div>
-        <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, lineHeight: 1.25, minHeight: 28 }}>
+      <div className="m-sign" style={{ flex: 1, minWidth: 0, padding: "16px 22px", display: "flex", flexDirection: "column", justifyContent: "center", gap: 9, textAlign: "center" }}>
+        <div className="stage-lyric-neighbor" style={{ color: "var(--lyric-prev)", minHeight: 18 }}>
+          {ls.prev ? <LyricText line={ls.prev} neighbor /> : "—"}
+        </div>
+        <div className="stage-lyric-current">
           {ls.cur
-            ? <MWipe text={ls.cur.text} pct={ls.sung} size={20} family="var(--font-display)" weight={700} fill="var(--accent)" dim="var(--lyric-dim)"
-                style={phone ? { maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" } : undefined} />
+            ? <LyricText line={ls.cur} currentTime={player.currentTime} reducedMotion={reducedMotion} />
             : <span style={{ color: "var(--lyric-dim)" }}>{ls.next ? "get ready…" : "intro"}</span>}
         </div>
-        <div dir="auto" style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 540, color: "var(--lyric-next)", minHeight: 19 }}>{ls.next ? ls.next.text : "— end —"}</div>
+        <div className="stage-lyric-neighbor" style={{ color: "var(--lyric-next)", minHeight: 19 }}>
+          {ls.next ? <LyricText line={ls.next} neighbor /> : "— end —"}
+        </div>
         <div style={{ display: "flex", justifyContent: "center", marginTop: 2, minHeight: 8 }}>
           {gapBulbs > 0 ? <MBulbs n={8} lit={gapBulbs} /> : <span></span>}
         </div>
@@ -324,49 +322,6 @@ function SetlistModule({ player, lines }: { player: KaraokePlayerApi; lines: Tim
         <span className="m-mono" style={{ fontSize: 9, color: "var(--muted)" }}>{vox}%</span>
       </div>
     </div>
-  );
-}
-
-// ── Inline current-lyric wipe (console view, stage.jsx:136-138) ─────────────
-// Rides the engine's raw tick feed (subscribeTime) and writes the DOM
-// directly, bypassing the React render path entirely — the same .m-wipe
-// markup MWipe renders, updated imperatively. Recorded deviation (#176): the
-// .m-wipe recipe is a nowrap inline-block, which never shrinks — a long line
-// painted past its column under the console card. The design slot is a single
-// line (stage.jsx:136 minHeight:22), so the span is capped at the column width
-// and ellipsized; inline-block stays so the fill % keeps mapping to the text
-// width on short lines (vertical-align compensates the hidden-overflow
-// baseline shift).
-function LiveLyricWipe({
-  lines,
-  subscribeTime,
-}: {
-  lines: TimedLine[];
-  subscribeTime: (cb: (t: number) => void) => () => void;
-}) {
-  const dimRef = useRef<HTMLSpanElement | null>(null);
-  const fillRef = useRef<HTMLSpanElement | null>(null);
-  useEffect(
-    () =>
-      subscribeTime((t) => {
-        const dim = dimRef.current;
-        const fill = fillRef.current;
-        if (!dim || !fill) return;
-        const ls = lyricState(lines, t);
-        const text = ls.cur ? ls.cur.text : "";
-        if (dim.textContent !== text) {
-          dim.textContent = text;
-          fill.textContent = text;
-        }
-        fill.style.width = `${ls.cur ? ls.sung : 0}%`;
-      }),
-    [lines, subscribeTime],
-  );
-  return (
-    <span className="m-wipe" dir="auto" style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 650, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" }}>
-      <span className="w-dim" style={{ color: "var(--lyric-dim)" }} ref={dimRef}></span>
-      <span className="w-fill" style={{ color: "var(--accent)" }} ref={fillRef} aria-hidden="true"></span>
-    </span>
   );
 }
 
@@ -437,6 +392,7 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
     reducedMotion,
     waveHeight,
   });
+  const consoleLine = view === "console" ? lyricState(lines, player.currentTime).cur : null;
 
   useEffect(() => {
     if (!player.playing || !navigator.wakeLock) return;
@@ -603,8 +559,8 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
             : { flex: 1, display: "flex", flexDirection: "column", gap: 11, justifyContent: "center", minWidth: 0 }}>
             <TransportBar player={player} onPerf={openPerf} />
             <div className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)" }}>{coarse ? "tap the wave to seek" : "space play · ←/→ seek · V drops vocals · click wave to seek"}</div>
-            <div style={{ fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 650, minHeight: 24, minWidth: 0 }}>
-              {lines.length > 0 && <LiveLyricWipe lines={lines} subscribeTime={player.subscribeTime} />}
+            <div className="stage-lyric-current">
+              {consoleLine && <LyricText line={consoleLine} currentTime={player.currentTime} reducedMotion={reducedMotion} />}
             </div>
           </div>
           {player.hasVocals && (phone ? (
@@ -630,7 +586,7 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
-          <SetlistModule player={player} lines={lines} />
+          <SetlistModule player={player} lines={lines} reducedMotion={reducedMotion} />
           <TransportBar player={player} onPerf={openPerf} />
         </div>
       )}
