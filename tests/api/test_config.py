@@ -16,12 +16,14 @@ def test_config_default_has_clerk_disabled(client):
         "clerk_enabled",
         "trusted_client",
         "public_base_url",
+        "feedback_base_url",
     }
     # conftest sets no KARAOKE_CLERK_PUBLISHABLE_KEY -> empty -> disabled.
     assert body["clerk_publishable_key"] == ""
     assert body["clerk_enabled"] is False
     # conftest pins the public base URL.
     assert body["public_base_url"] == "http://test.local"
+    assert body["feedback_base_url"] == "https://pomoi.co"
 
 
 def test_config_reports_clerk_enabled_when_key_set(client):
@@ -32,6 +34,7 @@ def test_config_reports_clerk_enabled_when_key_set(client):
             clerk_publishable_key="pk_test_abc123",
             clerk_spa_enabled=True,
             public_base_url="https://karaoke.example",
+            feedback_base_url="https://feedback.example",
         )
 
     client.app.dependency_overrides[get_settings] = override
@@ -45,6 +48,7 @@ def test_config_reports_clerk_enabled_when_key_set(client):
     assert body["clerk_publishable_key"] == "pk_test_abc123"
     assert body["clerk_enabled"] is True
     assert body["public_base_url"] == "https://karaoke.example"
+    assert body["feedback_base_url"] == "https://feedback.example"
 
 
 def test_config_is_public_no_auth(client):

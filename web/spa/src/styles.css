@@ -855,3 +855,71 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   .m-btn.sm { min-height: 44px; padding: 8px 12px; }
 }
 /* ── END MARQUEE RECIPES ── */
+
+/* Feedback stays in the header layout, outside the transport and lyrics. */
+.feedback-trigger.m-btn {
+  min-height: 44px;
+  padding: 8px 12px;
+  white-space: nowrap;
+  font: 600 0.875rem/1.25rem var(--font-ui, system-ui);
+  flex-shrink: 0;
+}
+.feedback-trigger[aria-busy="true"] { cursor: progress; }
+.feedback-performance {
+  display: flex;
+  justify-content: flex-end;
+  padding-inline: 16px;
+}
+.feedback-sheet {
+  position: fixed;
+  inset: auto 0 0;
+  margin: 0 auto;
+  width: min(100%, 28rem);
+  max-width: 100%;
+  max-height: min(100%, 80dvh);
+  overflow: auto;
+  padding: 16px 16px max(16px, env(safe-area-inset-bottom));
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg-card);
+}
+.feedback-sheet::backdrop { background: color-mix(in oklab, var(--scrim) 56%, transparent); }
+.feedback-heading, .feedback-options, .feedback-attachment, .feedback-logs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.feedback-heading { justify-content: space-between; margin-bottom: 8px; }
+.feedback-heading h2 { margin: 0; font: 600 1.25rem/1.75rem var(--font-ui); }
+.feedback-close.m-btn { min-width: 40px; min-height: 44px; justify-content: center; font-size: 1.25rem; }
+.feedback-form { display: grid; gap: 12px; }
+.feedback-form textarea {
+  width: 100%;
+  padding: 8px 12px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 1rem/1.5rem var(--font-ui);
+}
+.feedback-attachment img {
+  display: block;
+  width: 120px;
+  height: 80px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.feedback-photo { position: relative; min-width: 0; overflow: hidden; overflow-wrap: anywhere; }
+.feedback-photo:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.feedback-photo input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
+.feedback-logs { min-height: 32px; color: var(--fg-soft); font-size: 0.875rem; }
+.feedback-logs input { accent-color: var(--accent); }
+.feedback-error { color: var(--err); margin: 0; }
+.feedback-send.m-btn { justify-content: center; min-height: 44px; font-size: 1rem; }
+.feedback-sheet a { color: var(--info); }
+
+@media (min-width: 701px) {
+  .feedback-sheet { inset: 0; margin: auto; padding: 24px; }
+}

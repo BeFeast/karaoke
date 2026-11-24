@@ -55,3 +55,18 @@ cancels and deletes, and flags that the worker's shutdown could not be
 confirmed. The HTTP cleanup check proves that the API can no longer serve the
 job or exports. A coordinator-side write after cancellation can still leave
 orphan files ([#337](https://git.oklabs.uk/BeFeast/karaoke/issues/337)).
+
+The feedback scenario opens a public share page at 390×844 and desktop sizes,
+sends empty feedback twice per browser context, and checks the multipart body
+and success receipt. Its default run intercepts feedback POSTs in the isolated
+tab. No tracker issues are created. To create exactly one real canary issue
+from the Android phone profile after the mocked checks pass, run:
+
+```sh
+scripts/verify feedback --target prod --reuse-job 435 --live-feedback
+```
+
+The SPA uses the public `/config` setting `feedback_base_url`. Set
+`KARAOKE_FEEDBACK_BASE_URL` on the coordinator to override the default
+`https://pomoi.co`. The configured origin must allow browser feedback requests
+from the target app's origin.

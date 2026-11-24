@@ -7,6 +7,7 @@
 // Clerk user data via props (the export's fake name/email defaults dropped,
 // "Manage account" wired).
 
+import { FeedbackButton } from "../feedback/Feedback";
 import { useEffect, useState } from "react";
 import { getHealth } from "../api";
 import { useCoarsePointer } from "../lib/layout";
@@ -45,6 +46,7 @@ export function SignInScreen({ onSignIn }: { onSignIn: () => void }) {
           <span>Sonereli{version ? ` v${version}` : ""}</span>
           <span style={{ color: "var(--border)" }}>·</span>
           <a href="https://github.com/BeFeast/karaoke" target="_blank" rel="noopener" style={{ color: "var(--info)", textDecoration: "none" }}>Source code ↗</a>
+          <FeedbackButton />
         </div>
       </div>
     </div>
@@ -88,7 +90,7 @@ export function UserAvatar({
           hit area (30 + 2×7 = 44); the negative margin keeps the 30px layout
           footprint so the topbar and the visual circle (inner span) are
           unchanged. Fine pointers keep the exact pre-#187 30×30 geometry. */}
-      <button type="button" onClick={() => setOpen(!open)} aria-label="Account" style={{
+      <button type="button" onClick={() => setOpen(!open)} aria-label="Account" data-feedback-private style={{
         appearance: "none", cursor: "pointer", border: "none", background: "transparent",
         padding: coarse ? 7 : 0, margin: coarse ? -7 : 0, display: "grid", placeItems: "center",
       }}>
@@ -100,7 +102,7 @@ export function UserAvatar({
         }}>{(name || email || "?")[0]}</span>
       </button>
       {open && (
-        <div style={{
+        <div data-feedback-private style={{
           position: "absolute", right: 0, top: 38, zIndex: 20, minWidth: 198,
           background: "var(--bg-card)", border: "1px solid var(--border)",
           borderRadius: 10, boxShadow: "var(--shadow)", padding: 6,

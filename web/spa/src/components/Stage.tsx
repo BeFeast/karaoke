@@ -10,6 +10,7 @@
 // not see cost); the ⤢ Performance control opens the #156 fullscreen overlay
 // (components/Perf.tsx), mounted inside the player so the engine persists.
 
+import { FeedbackButton } from "../feedback/Feedback";
 import { type CSSProperties, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getLyrics, getShare, type LyricsPayload, type SharePayload } from "../api";
 import { artifactHref, artifactView, statusMeta } from "../jobStatus";
@@ -217,6 +218,7 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
           <SonereliMark size={20} />
           <span style={{ flex: 1, minWidth: 0 }}></span>
           <span className="m-chip info">Unlisted</span>
+          <FeedbackButton />
           <button className="m-btn sm" type="button" onClick={() => void onCopyLink()}>Copy link</button>
           <button className="m-btn sm ghost" type="button" onClick={toggleTheme}>{theme === "day" ? "Night" : "Day"}</button>
         </div>
@@ -338,7 +340,7 @@ function StageBody({
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="m-mono stage-song-meta" style={{ fontSize: 11, color: "var(--muted)", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
             {metaBits && <span>{metaBits}</span>}
-            {payload.owner_display_name && <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>shared by {payload.owner_display_name}</span>}
+            {payload.owner_display_name && <span data-feedback-private style={{ minWidth: 0, overflowWrap: "anywhere" }}>shared by {payload.owner_display_name}</span>}
             {/* uploads (#173) have no external source — show the filename, no link.
                 Single-line ellipsis on both widths (#184): the raw URL used to
                 wrap across ~4 lines; the full URL stays in the href. */}
