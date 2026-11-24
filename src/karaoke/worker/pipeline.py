@@ -36,6 +36,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -108,6 +109,8 @@ def _llm_corrector(settings, lang: str | None) -> LlmCorrector | None:
     configured or the language was never benchmarked."""
     url = getattr(settings, "llm_url", "") or ""
     key = getattr(settings, "llm_api_key", "") or ""
+    if isinstance(key, SecretStr):
+        key = key.get_secret_value()
     languages = {x.strip() for x in str(getattr(settings, "llm_corrector_languages", "") or "").split(",") if x.strip()}
     if not (url and key and lang and lang in languages):
         return None

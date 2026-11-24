@@ -7,6 +7,8 @@ implemented.
 """
 from __future__ import annotations
 
+import sys
+from collections.abc import Sequence
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
@@ -18,10 +20,20 @@ except PackageNotFoundError:  # pragma: no cover - editable/uninstalled fallback
     __version__ = "0.0.0+unknown"
 
 
-def main() -> int:
-    """Entry point stub for the ``karaoke`` console script.
+def main(argv: Sequence[str] = ()) -> int:
+    """Dispatch the coordinator's operator CLI."""
+    args = list(argv)
+    if args == ["catalog", "ledger"]:
+        from karaoke.catalog_ledger import main as ledger
 
-    Real CLI/server entry points land as the API and worker are scaffolded.
-    """
+        return ledger()
+    if args:
+        print("usage: karaoke [catalog ledger]", file=sys.stderr)
+        return 2
+
     print(f"karaoke {__version__} — scaffold; nothing wired up yet.")
     return 0
+
+
+def cli() -> int:
+    return main(sys.argv[1:])

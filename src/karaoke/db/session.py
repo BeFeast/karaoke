@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+from pydantic import SecretStr
+from sqlalchemy.engine import URL
+from sqlalchemy.exc import ArgumentError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -18,22 +21,29 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
 def create_engine_and_sessionmaker(
-    database_url: str,
+    database_url: str | URL | SecretStr,
 ) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     """Build a fresh engine + session factory (used by tests with isolated DBs)."""
-    engine = create_async_engine(database_url, future=True)
+    if isinstance(database_url, SecretStr):
+        database_url = database_url.get_secret_value()
+    if not isinstance(database_url, (str, URL)):
+        raise ValueError("invalid database URL")
+    try:
+        engine = create_async_engine(database_url, future=True)
+    except (ArgumentError, ValueError):
+        raise ValueError("invalid database URL") from None
     factory = async_sessionmaker(engine, expire_on_commit=False)
     return engine, factory
 
 
-async def init_engine(database_url: str | None = None) -> None:
+async def init_engine(database_url: str | SecretStr | None = None) -> None:
     """Initialise the process-wide engine and create tables for SQLite dev/test."""
     global _engine, _session_factory
     url = database_url or get_settings().database_url
     _engine, _session_factory = create_engine_and_sessionmaker(url)
     # For sqlite (dev/test) we auto-create tables; for Postgres production
     # Alembic is the source of truth.
-    if url.startswith("sqlite"):
+    if _engine.dialect.name == "sqlite":
         async with _engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 

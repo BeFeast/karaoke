@@ -381,7 +381,7 @@ async def resolve_owner(
     bearer = _bearer_token(request, strict=True)
     if bearer is not None:
         # 1a. Machine bearer.
-        machine = settings.service_token.strip()
+        machine = settings.service_token.get_secret_value().strip()
         if machine and secrets.compare_digest(bearer, machine):
             return _default_owner(settings, state=AuthState.machine_bearer)
 
