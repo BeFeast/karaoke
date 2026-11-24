@@ -12,12 +12,12 @@
 
 import { FeedbackButton } from "../feedback/Feedback";
 import { type CSSProperties, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getLyrics, getShare, type LyricsPayload, type SharePayload } from "../api";
+import { fetchProtectedArtifact, getLyrics, getShare, type LyricsPayload, type SharePayload } from "../api";
 import { artifactHref, artifactView, statusMeta } from "../jobStatus";
 import { fmtDuration, formatRelativeTime } from "../lib/jobListUtils";
 import { useCoarsePointer, usePhoneLayout } from "../lib/layout";
 import { compactUrlLabel, sourceDisplay } from "../lib/source";
-import { goDashboard, publicShareUrl } from "../router";
+import { clerkStageToken, goDashboard, mySongsHash, navigate, publicShareUrl } from "../router";
 import { type StageTheme, useStageTheme } from "../theme";
 import { MBulbs, SonereliMark } from "./marks";
 import { timeLines } from "./stage-core";
@@ -49,6 +49,7 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
   publicBaseUrl: string;
   shared?: boolean;
 }) {
+  const protectedStage = clerkStageToken(token);
   const [payload, setPayload] = useState<SharePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -139,6 +140,21 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
     }
   }, [publicBaseUrl, token]);
 
+  const download = useCallback(async (url: string, filename: string) => {
+    try {
+      const response = await fetchProtectedArtifact(url);
+      if (!response.ok) throw new Error("Download request failed");
+      const objectUrl = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch {
+      setToast("Couldn’t download this file");
+    }
+  }, []);
+
   // ── Player ↔ lyrics transport seam (#59) ─────────────────────────────────
   // `onTime` pushes the live playhead into state that only feeds the lyrics
   // highlight (the player owns its own clock, so this doesn't drive playback).
@@ -187,6 +203,8 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
         payload={payload}
         token={token}
         shared={shared}
+        protectedStage={protectedStage}
+        download={download}
         lyrics={lyrics}
         onLyricsSaved={setLyrics}
         onReloadLyrics={reloadLyrics}
@@ -214,12 +232,16 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
         <div style={phone
           ? { display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", minHeight: 54, borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap", minWidth: 0 }
           : { display: "flex", alignItems: "center", gap: 12, padding: "0 22px", height: 54, borderBottom: "1px solid var(--border)", flexShrink: 0, minWidth: 0 }}>
-          {!shared && <button className="m-btn sm ghost" type="button" onClick={goDashboard}>← Booth</button>}
+          {!shared && <button className="m-btn sm ghost" type="button" onClick={() => token.startsWith("clerk.") ? navigate(mySongsHash) : goDashboard()}>← Booth</button>}
           <SonereliMark size={20} />
           <span style={{ flex: 1, minWidth: 0 }}></span>
-          <span className="m-chip info">Unlisted</span>
+          {protectedStage ? <span className="m-chip info">Catalog</span> : (
+            <>
+              <span className="m-chip info">Unlisted</span>
+              <button className="m-btn sm" type="button" onClick={() => void onCopyLink()}>Copy link</button>
+            </>
+          )}
           <FeedbackButton />
-          <button className="m-btn sm" type="button" onClick={() => void onCopyLink()}>Copy link</button>
           <button className="m-btn sm ghost" type="button" onClick={toggleTheme}>{theme === "day" ? "Night" : "Day"}</button>
         </div>
 
@@ -236,6 +258,8 @@ function StageBody({
   payload,
   token,
   shared,
+  protectedStage,
+  download,
   lyrics,
   onLyricsSaved,
   onReloadLyrics,
@@ -252,6 +276,8 @@ function StageBody({
   payload: SharePayload;
   token: string;
   shared: boolean;
+  protectedStage: boolean;
+  download: (url: string, filename: string) => Promise<void>;
   lyrics: LyricsPayload | null;
   onLyricsSaved: (lyrics: LyricsPayload) => void;
   onReloadLyrics: () => Promise<void>;
@@ -318,15 +344,16 @@ function StageBody({
       reducedMotion={reducedMotion}
     />
   );
+  const downloadControl = (url: string, name: string, label: ReactNode) => protectedStage
+    ? <button className="m-btn sm" type="button" onClick={() => void download(url, name)}>{label}</button>
+    : <a className="m-btn sm" href={url} download>{label}</a>;
   const downloads = (
     <>
-      {vocals && <a className="m-btn sm" href={vocals.href} download><span className="m-stem vox"></span>vocals.mp3</a>}
-      {instrumental && <a className="m-btn sm" href={instrumental.href} download><span className="m-stem inst"></span>karaoke.mp3</a>}
-      {lyrics?.synced ? (
-        <a className="m-btn sm" href={artifactHref(token, "lyrics.lrc")} download>≡ lyrics.lrc</a>
-      ) : lyricsFile ? (
-        <a className="m-btn sm" href={lyricsFile.href} download>≡ {lyricsFile.name}</a>
-      ) : null}
+      {vocals && downloadControl(vocals.href, "vocals.mp3", <><span className="m-stem vox"></span>vocals.mp3</>)}
+      {instrumental && downloadControl(instrumental.href, "karaoke.mp3", <><span className="m-stem inst"></span>karaoke.mp3</>)}
+      {lyrics?.synced
+        ? downloadControl(artifactHref(token, "lyrics.lrc"), "lyrics.lrc", "≡ lyrics.lrc")
+        : lyricsFile && downloadControl(lyricsFile.href, lyricsFile.name, `≡ ${lyricsFile.name}`)}
     </>
   );
   const original = source.kind === "url" && (
@@ -414,6 +441,7 @@ function StageBody({
           <KaraokePlayer
             instrumentalUrl={instrumental.href}
             vocalsUrl={vocals?.href ?? null}
+            fetchStem={protectedStage ? fetchProtectedArtifact : undefined}
             onTime={onTime}
             seekRef={seekRef}
             view={shared ? "compact" : view}

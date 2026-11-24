@@ -7,6 +7,8 @@ at the configured interval, cost events, and the worker→hub wiring.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
+import sqlite3
 import time
 
 import pytest
@@ -19,6 +21,8 @@ from karaoke.config import reset_settings_for_tests
 from karaoke.db.models import Base, Job, JobStatus
 from karaoke.db.session import create_engine_and_sessionmaker
 
+from .test_auth import _sqlite_path
+
 # Canonical lifecycle order for ordering assertions (issue #8 vocabulary).
 _STAGE_ORDER = [
     "queued",
@@ -28,6 +32,17 @@ _STAGE_ORDER = [
     "finalizing",
     "completed",
 ]
+
+
+def _seed_legacy_jobs(*ids: int) -> None:
+    now = dt.datetime.now(dt.UTC).isoformat()
+    with sqlite3.connect(_sqlite_path()) as db:
+        db.executemany(
+            """INSERT INTO jobs (id, job_token, owner_subject, source_url, status,
+               progress, created_at, updated_at)
+               VALUES (?, ?, 'owner', 'https://example.com/song', 'queued', 0, ?, ?)""",
+            [(job_id, f"legacy-{job_id}", now, now) for job_id in ids],
+        )
 
 
 def _publish_stage(hub, job_id: int, status: str, progress: int) -> None:
@@ -44,6 +59,7 @@ def test_per_job_feed_streams_fake_job_through_all_stages(client):
     performs, plus cost_update and error events, in publish order."""
     hub = ws_module.get_hub()
     job_id = 7777
+    _seed_legacy_jobs(job_id)
     _publish_stage(hub, job_id, "queued", 0)
 
     with client.websocket_connect(f"/ws/{job_id}") as sock:
@@ -140,6 +156,7 @@ def test_late_subscriber_replays_latest_cached_stage(client):
     """A subscriber connecting mid-job immediately sees the latest stage."""
     hub = ws_module.get_hub()
     job_id = 4242
+    _seed_legacy_jobs(job_id)
     _publish_stage(hub, job_id, "downloading", 25)
     _publish_stage(hub, job_id, "separating", 60)
 
@@ -186,7 +203,8 @@ def test_late_subscriber_replays_from_db_after_hub_restart(client):
 
 
 def test_broadcast_feed_carries_all_jobs(client):
-    """``WS /ws`` without a subscribe message receives every job's events."""
+    """``WS /ws`` without a subscribe message receives ordinary job events."""
+    _seed_legacy_jobs(11, 22)
     hub = ws_module.get_hub()
     with client.websocket_connect("/ws") as sock:
         _publish_stage(hub, 11, "downloading", 25)
@@ -203,6 +221,7 @@ def test_broadcast_feed_carries_all_jobs(client):
 def test_broadcast_feed_legacy_subscribe_narrows_to_one_job(client):
     """The pre-#8 ``{"action": "subscribe", "job_id": N}`` protocol still
     works: replay arrives, then only that job's events."""
+    _seed_legacy_jobs(33, 44)
     hub = ws_module.get_hub()
     _publish_stage(hub, 33, "downloading", 25)
 
@@ -236,6 +255,7 @@ def test_heartbeats_arrive_at_configured_interval_while_in_progress(monkeypatch)
     with TestClient(app) as tc:
         hub = ws_module.get_hub()
         job_id = 555
+        _seed_legacy_jobs(job_id)
         _publish_stage(hub, job_id, "transcribing", 90)
 
         with tc.websocket_connect(f"/ws/{job_id}") as sock:
@@ -265,6 +285,7 @@ def test_heartbeat_replayed_to_late_subscriber(monkeypatch):
     with TestClient(app) as tc:
         hub = ws_module.get_hub()
         job_id = 556
+        _seed_legacy_jobs(job_id)
         _publish_stage(hub, job_id, "separating", 60)
         # Let at least one heartbeat tick land in the cache.
         deadline = time.monotonic() + 5.0

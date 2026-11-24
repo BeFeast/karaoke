@@ -1,0 +1,29 @@
+# Exercise the pilot controls with an isolated database, fake time, and stub providers.
+state:
+  catalog_fixture: pilot_manifest_with_duplicate_video_id
+  pilot_budget: {total_usd: 1.00, daily_usd: 0.35}
+  profiles: [desktop]
+  cooldown_fixture: prior_pilot_download_started_299_seconds_before_fake_now
+action:
+  - import_twice: seed_metadata
+    assert:
+      duplicate_sources: 0
+      new_downloads: 0
+      new_gpu_jobs: 0
+  - run_pilot: while_foreground_download_is_active
+    assert:
+      pilot_state: waiting_for_foreground
+      new_pilot_downloads: 0
+  - run_pilot: within_five_minutes_of_previous_pilot_download_start
+    assert:
+      pilot_state: waiting_for_cooldown
+      new_pilot_downloads: 0
+  - run_pilot: when_next_reservation_exceeds_remaining_budget
+    assert:
+      pilot_state: waiting_for_budget
+      new_gpu_jobs: 0
+  - run_pilot: with_available_budget_and_provider_429
+    assert:
+      pilot_state: paused
+      new_gpu_jobs: 0
+      automatic_retries: 0

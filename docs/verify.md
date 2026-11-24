@@ -56,6 +56,8 @@ confirmed. The HTTP cleanup check proves that the API can no longer serve the
 job or exports. A coordinator-side write after cancellation can still leave
 orphan files ([#337](https://git.oklabs.uk/BeFeast/karaoke/issues/337)).
 
+## Feedback acceptance
+
 The feedback scenario opens a public share page at 390×844 and desktop sizes,
 sends empty feedback twice per browser context, and checks the multipart body
 and success receipt. Its default run intercepts feedback POSTs in the isolated
@@ -70,3 +72,27 @@ The SPA uses the public `/config` setting `feedback_base_url`. Set
 `KARAOKE_FEEDBACK_BASE_URL` on the coordinator to override the default
 `https://pomoi.co`. The configured origin must allow browser feedback requests
 from the target app's origin.
+
+## Song catalog acceptance
+
+For `catalog-ready`, `catalog-miss`, and `catalog-shared-processing`, set
+`KARAOKE_VERIFY_CLERK_TICKET_COMMAND` to the path of an executable that
+prints a fresh, one-use Clerk sign-in ticket for QA user `1` or `2` when
+called with that number. The verifier opens isolated browser contexts and
+signs in through the deployed Clerk SDK. Use two distinct testing accounts
+with permission to submit private jobs. Tickets and job tokens are
+redacted from output. Never commit the ticket executable's credentials.
+
+Publish at least one reviewed pilot recording first, using
+[`catalog/README.md`](../catalog/README.md). The ready scenario checks both
+mobile profiles, shelves and full shelf links, search, one-tap Stage, and
+the owner link created by submitting an equivalent URL. The shared scenario
+checks two Clerk owners and verifies that a guest receives neither exports
+nor a public share. The private miss scenario creates one real GPU job and
+deletes it on exit. To override the default private source, set
+`KARAOKE_VERIFY_CATALOG_MISS_URL` to a public single video outside the
+catalog that is suitable for processing and has audible lyrics.
+
+`catalog-pilot` exercises the actual import, admission and pause logic in
+an isolated database with a fixed clock and stub providers. It starts no
+live precompute jobs.

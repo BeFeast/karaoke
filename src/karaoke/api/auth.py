@@ -277,7 +277,9 @@ def _jwt_payload_unverified(token: str) -> dict[str, object]:
     return decoded if isinstance(decoded, dict) else {}
 
 
-def _validate_clerk_jwt(token: str, settings: Settings) -> dict[str, object]:
+def _validate_clerk_jwt(
+    token: str, settings: Settings, *, enforce_email_allowlist: bool = True,
+) -> dict[str, object]:
     if settings.auth_test_mode:
         # Test escape hatch: trust unverified payload.
         return _jwt_payload_unverified(token)
@@ -305,7 +307,7 @@ def _validate_clerk_jwt(token: str, settings: Settings) -> dict[str, object]:
     if not isinstance(claims, dict):
         return {}
     allowed = _allowed_emails(settings)
-    if allowed:
+    if allowed and enforce_email_allowlist:
         email = _claims_email(claims)
         if email is None or email not in allowed:
             raise HTTPException(
@@ -391,7 +393,9 @@ async def resolve_owner(
 
         # 1c. Clerk JWT.
         if _clerk_configured(settings) or settings.auth_test_mode:
-            claims = _validate_clerk_jwt(bearer, settings)
+            path = request.url.path
+            catalog_route = path == "/catalog" or path.startswith(("/share/cat.", "/share/clerk."))
+            claims = _validate_clerk_jwt(bearer, settings, enforce_email_allowlist=not catalog_route)
             owner = _owner_from_clerk_claims(claims)
             if owner is not None:
                 return owner

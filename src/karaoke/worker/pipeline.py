@@ -40,6 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from karaoke.api import ws as ws_events
+from karaoke.catalog import PILOT_DOWNLOAD_GATE, PILOT_DOWNLOAD_GATE_NOTE, pilot_job_root
 from karaoke.db.models import Artifact, Job, JobStatus
 from karaoke.textnorm import bigram_agreement
 from karaoke.titles import derive_metadata
@@ -227,6 +228,41 @@ class PipelineError(RuntimeError):
     pass
 
 
+class PilotDownloadGate(PipelineError):
+    """yt-dlp reported a gate that requires a manual pilot resume."""
+
+
+def _run_pilot_download(cmd: list[str]) -> None:
+    """Inspect the whole provider result before bounding persisted diagnostics."""
+    try:
+        proc = subprocess.run(cmd, text=True, capture_output=True, timeout=900)
+    except subprocess.TimeoutExpired as exc:
+        # TimeoutExpired carries bytes even for text-mode subprocesses.
+        def decode(value: str | bytes | None) -> str:
+            return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+
+        _check_pilot_download(decode(exc.stdout), decode(exc.stderr), "yt-dlp timed out")
+    else:
+        failed = f"yt-dlp exited with status {proc.returncode}" if proc.returncode else None
+        _check_pilot_download(proc.stdout, proc.stderr, failed)
+
+
+def _check_pilot_download(stdout: str, stderr: str, failure: str | None) -> None:
+    output = f"{stderr}\n{stdout}"
+    gated = bool(PILOT_DOWNLOAD_GATE.search(output) or _is_bot_check(output))
+    if not (gated or failure):
+        return
+    # The argument list and output tail alone are insufficient. Some builds
+    # report the HTTP gate only once near the beginning of stderr.
+    diagnostic = stderr if len(stderr) <= 2400 else f"{stderr[:1200]}\n…\n{stderr[-1200:]}"
+    stdout_gate = PILOT_DOWNLOAD_GATE.search(stdout) or _BOT_CHECK_RE.search(stdout)
+    if stdout_gate:
+        diagnostic += f"\nstdout: {stdout_gate[0]}"
+    reason = failure or "yt-dlp reported a gate"
+    error_type = PilotDownloadGate if gated else PipelineError
+    raise error_type(f"{reason}\n{diagnostic}")
+
+
 # ---------------------------------------------------------------------------
 # coordinator-side subprocess steps (download + normalize + encode)
 # ---------------------------------------------------------------------------
@@ -343,7 +379,10 @@ def _ytdlp_metadata(source_url: str, settings=None, *, cookies_blob: str | None 
     return {}
 
 
-def _download_audio(source_url: str, dest: Path, settings=None, *, cookies_blob: str | None = None) -> Path:
+def _download_audio(
+    source_url: str, dest: Path, settings=None, *,
+    cookies_blob: str | None = None, pilot: bool = False,
+) -> Path:
     """yt-dlp the best audio stream to ``dest`` (no postprocessing).
 
     Retries with exponential backoff when yt-dlp fails with a YouTube bot-check
@@ -357,12 +396,22 @@ def _download_audio(source_url: str, dest: Path, settings=None, *, cookies_blob:
     with _ytdlp_aux_args(settings, cookies_blob=cookies_blob) as aux:
         cmd = [
             "yt-dlp", "--no-playlist",
+            *(["--ignore-config", "--retries", "0", "--extractor-retries", "0",
+               "--fragment-retries", "0", "--abort-on-unavailable-fragments",
+               "--match-filters", "availability = public & !is_live",
+               "--write-info-json", "-o", f"infojson:{dest.with_suffix('.info.json')}"] if pilot else []),
             *_ytdlp_extractor_args(settings),
             *aux,
             "-f", "ba/bestaudio/best",
             "-o", str(dest),
             source_url,
         ]
+        if pilot:
+            _run_pilot_download(cmd)
+            if not dest.is_file() or dest.stat().st_size == 0:
+                raise PipelineError(f"yt-dlp produced no audio at {dest}")
+            return dest
+
         attempt = 0
         media_retries = 0
         while True:
@@ -1264,6 +1313,9 @@ async def run_real_job(
     session_factory: async_sessionmaker,
     job_id: int,
     settings,
+    *,
+    pilot_execution_seconds: int | None = None,
+    pilot_runpod_id=None,
 ) -> None:
     """Run a real karaoke job end-to-end. Always leaves the Job in a terminal
     state (completed / failed) and never leaks a vast instance."""
@@ -1283,9 +1335,11 @@ async def run_real_job(
             return
         source_url = job.source_url
         job_token = job.job_token
+        curated_title, curated_artist = job.title, job.artist
 
     artifact_root = Path(settings.artifact_root)
-    job_root = artifact_root / job_token
+    pilot = pilot_execution_seconds is not None
+    job_root = pilot_job_root(artifact_root, job_token) if pilot else artifact_root / job_token
     work_dir = job_root / "work"
     exports_dir = job_root / "exports"
 
@@ -1329,12 +1383,23 @@ async def run_real_job(
                     stage_note=UPLOAD_BAD_SOURCE_NOTE,
                 )
                 return
+        elif pilot:
+            if not _use_runpod(settings):
+                raise PipelineError("catalog pilot requires RunPod")
+            await asyncio.to_thread(_download_audio, source_url, raw_audio, settings, pilot=True)
+            meta = _read_json_object(raw_audio.with_suffix(".info.json")) or {}
+            if meta.get("availability") != "public":
+                raise PipelineError("catalog source was not confirmed public")
         else:
             meta = await asyncio.to_thread(
                 _ytdlp_metadata, source_url, settings, cookies_blob=cookies_blob
             )
         title = (meta.get("title") or "").strip() or None
         source_meta = derive_metadata(meta)
+        if pilot:
+            title = curated_title or title
+            source_meta["artist"] = curated_artist or source_meta.get("artist")
+            source_meta["track"] = curated_title or source_meta.get("track")
         if title or any(source_meta.values()):
             await _set_stage(
                 session_factory,
@@ -1345,7 +1410,7 @@ async def run_real_job(
                 metadata=source_meta,
             )
 
-        if not is_upload:
+        if not is_upload and not pilot:
             await asyncio.to_thread(
                 _download_audio, source_url, raw_audio, settings, cookies_blob=cookies_blob
             )
@@ -1482,7 +1547,11 @@ async def run_real_job(
 
             # RunPod Serverless has no provisioning moment (no instance we
             # own); the teardown cost_update after the GPU window covers it.
-            client = RunpodClient(settings, prior_24h_cost_micros=prior)
+            client = RunpodClient(
+                settings, prior_24h_cost_micros=prior,
+                execution_timeout_s=pilot_execution_seconds,
+                on_submitted=pilot_runpod_id,
+            ) if pilot else RunpodClient(settings, prior_24h_cost_micros=prior)
         else:
             client = VastClient(
                 settings,
@@ -1501,17 +1570,23 @@ async def run_real_job(
         # aligns it against the vocal stem and returns a synced LRC (#55).
         if not await _set_stage(session_factory, job_id, JobStatus.transcribing, 75):
             return
-        gpu = await _run_gpu_with_capacity_retry(
-            session_factory,
-            job_id,
-            settings,
-            client,
-            mix_wav,
-            work_dir,
-            align_text=align_text,
-            align_lang=align_lang,
-            whisper_lang=lang_hint,
-        )
+        if pilot:
+            gpu = await asyncio.to_thread(
+                client.run, mix_wav, work_dir,
+                align_text=align_text, align_lang=align_lang, whisper_lang=lang_hint,
+            )
+        else:
+            gpu = await _run_gpu_with_capacity_retry(
+                session_factory,
+                job_id,
+                settings,
+                client,
+                mix_wav,
+                work_dir,
+                align_text=align_text,
+                align_lang=align_lang,
+                whisper_lang=lang_hint,
+            )
         # GPU window closed (the client destroyed the instance in its own
         # ``finally``): push the final cost, then the WS-only ``finalizing``
         # stage while we encode + write exports (issue #8). The Job row stays
@@ -1552,6 +1627,7 @@ async def run_real_job(
         if (
             not (lyrics.synced_lrc or lyrics.plain or lyrics.rejected_text or lyrics.instrumental)
             and settings.post_asr_reference_enabled
+            and not pilot
         ):
             asr_doc = _read_json_object(gpu.lyrics_json_path) or {}
             queries, hit, hit_text, hit_agreement = await _post_asr_lookup(
@@ -1696,7 +1772,7 @@ async def run_real_job(
                     Artifact(
                         job_id=job.id,
                         kind=kind,
-                        relative_path=f"{job_token}/exports/{fname}",
+                        relative_path=str((exports_dir / fname).relative_to(artifact_root)),
                         size_bytes=size,
                         content_type=ctype,
                     )
@@ -1709,6 +1785,10 @@ async def run_real_job(
             job.vast_cost_micros = round((gpu.vast_cost + extra_gpu_cost) * 1_000_000)
             await session.commit()
         ws_events.publish_stage(job_id, JobStatus.completed, 100, stage_note=job.stage_note)
+    except PilotDownloadGate as exc:
+        await _mark_failed(
+            session_factory, job_id, str(exc), stage_note=PILOT_DOWNLOAD_GATE_NOTE,
+        )
     except Exception as exc:  # noqa: BLE001 — surface as a failed job, never crash the loop
         await _mark_failed(session_factory, job_id, f"{type(exc).__name__}: {exc}")
 

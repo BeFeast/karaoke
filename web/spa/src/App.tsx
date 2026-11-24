@@ -14,6 +14,7 @@ import { BoothScreen, type JobActions } from "./components/Booth";
 import { ConfirmDialog, type ConfirmState } from "./components/ConfirmDialog";
 import { canRetryJob, jobCounts, type JobFilter, jobMatchesFilter } from "./jobStatus";
 import { filterJobs, type JobSort, sortJobs, todaySpendMicros } from "./lib/jobListUtils";
+import { type CatalogShelf, mySongsHash, navigate } from "./router";
 import { connectJobSocket, isTerminal, type JobEvent } from "./ws";
 
 const POLL_MS = 3000;
@@ -34,8 +35,11 @@ export function App(props: {
   config: RuntimeConfig;
   // The auth-control node from the boot shell: a LAN chip, or the Clerk avatar.
   authControl?: ReactNode;
+  catalogEnabled?: boolean;
+  mySongs?: boolean;
+  shelf?: CatalogShelf;
 }) {
-  const { authControl } = props;
+  const { authControl, catalogEnabled = false, mySongs = false, shelf } = props;
   const [jobs, setJobs] = useState<JobOut[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
@@ -152,10 +156,11 @@ export function App(props: {
   const onCreate = useCallback(
     async (url: string) => {
       await createJob({ url });
+      if (catalogEnabled) navigate(mySongsHash);
       setFilter("all"); // make the freshly-queued job visible regardless of current filter
       await refresh();
     },
-    [refresh],
+    [refresh, catalogEnabled],
   );
 
   // Audio-file upload (#173) — same receipt path as onCreate: the queued row
@@ -249,6 +254,9 @@ export function App(props: {
         actions={actions}
         onClearFailed={onClearFailed}
         authControl={authControl}
+        catalogEnabled={catalogEnabled}
+        mySongs={mySongs}
+        shelf={shelf ?? null}
       >
         <ConfirmDialog state={confirmState} onClose={() => setConfirmState(null)} />
       </BoothScreen>

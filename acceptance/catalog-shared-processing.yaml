@@ -1,0 +1,26 @@
+state:
+  authenticated_owners: [first_clerk_user, second_clerk_user]
+  catalog_fixture: ready_recording_with_synced_lyrics
+  profiles: [iphone, android]
+action:
+  - submit_concurrently: [first_owner_ready_url, second_owner_equivalent_url]
+    assert:
+      distinct_owner_job_ids: true
+      immediate_completed_links: true
+      new_gpu_jobs: 0
+  - delete: first_owner_library_entry
+    assert:
+      deleted_job_visible_to_first_owner: false
+      second_owner_library_entry_visible: true
+      ready_recording_visible: true
+  - open: catalog_stage_as_guest
+    assert:
+      sign_in_required: true
+      public_share_available: false
+      lyrics_delivered: false
+      streams_delivered: false
+  - open: catalog_exports_as_second_clerk_user
+    assert:
+      catalog_access: true
+      lyrics_delivered: true
+      streams_delivered: true

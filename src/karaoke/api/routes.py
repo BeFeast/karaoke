@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field, model_serializer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload, selectinload
 from starlette.datastructures import UploadFile
 
 from karaoke import __version__
@@ -35,6 +35,7 @@ from karaoke.api.auth import (
     require_owner,
     resolve_owner,
 )
+from karaoke.api.catalog import catalog_asset_id
 from karaoke.api.cookies_store import (
     CookieValidationError,
     validate_netscape_cookies,
@@ -42,8 +43,15 @@ from karaoke.api.cookies_store import (
 from karaoke.api.lyrics_review import revision, save_review, snapshot
 from karaoke.api.preflight import match_url
 from karaoke.api.ws import forget_job, publish_stage
+from karaoke.catalog import (
+    lock_download_admission,
+    pilot_job_root,
+    ready_assets,
+    ready_for_url,
+)
+from karaoke.catalog_identity import CATALOG_OWNER_LINK_PREFIX, PILOT_OWNER
 from karaoke.config import Settings, get_settings
-from karaoke.db.models import Job, JobStatus
+from karaoke.db.models import CatalogAsset, Job, JobStatus
 from karaoke.db.session import get_session, get_session_factory
 from karaoke.uploads import (
     ALLOWED_UPLOAD_EXTENSIONS,
@@ -138,7 +146,7 @@ class JobOut(BaseModel):
     progress: int
     stage_note: str | None
     error: str | None
-    share_url: str
+    share_url: str | None
     owner_subject: str
     # GPU bookkeeping, runtime-neutral names — the ORM columns keep their
     # legacy ``vast_*`` names but the RunPod path writes them too.
@@ -150,7 +158,10 @@ class JobOut(BaseModel):
 
     @classmethod
     def from_orm_job(cls, job: Job, *, public_base_url: str) -> JobOut:
-        share = public_base_url.rstrip("/") + f"/share/{job.job_token}"
+        share = (
+            public_base_url.rstrip("/") + f"/share/{job.job_token}"
+            if job.catalog_asset_id is None else None
+        )
         return cls(
             id=job.id,
             job_token=job.job_token,
@@ -403,6 +414,34 @@ async def create_job(
     # for this one download, then discarded. Empty / whitespace → absent, so
     # the existing fallback applies (public video, or the central jar bridge).
     cookies_blob = _validate_job_cookies(payload.youtube_cookies)
+    asset = (
+        await ready_for_url(session, payload.url)
+        if owner.state == AuthState.clerk_user else None
+    )
+    if asset is not None:
+        track = asset.source.recording.track
+        job = Job(
+            job_token=CATALOG_OWNER_LINK_PREFIX + secrets.token_urlsafe(24),
+            owner_subject=owner.subject,
+            owner_email=owner.email,
+            owner_display_name=owner.display_name,
+            source_url=payload.url,
+            title=track.title,
+            artist=track.artist,
+            track=track.title,
+            album=asset.job.album,
+            duration=asset.job.duration,
+            status=JobStatus.completed,
+            progress=100,
+            completed_at=dt.datetime.now(dt.UTC),
+            catalog_asset_id=asset.id,
+        )
+        session.add(job)
+        await session.commit()
+        await session.refresh(job, attribute_names=["artifacts"])
+        publish_stage(job.id, JobStatus.completed, 100)
+        return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
+    await lock_download_admission(session)
     job = Job(
         job_token=secrets.token_urlsafe(24),
         owner_subject=owner.subject,
@@ -615,6 +654,7 @@ async def list_jobs(
     limit = max(1, min(limit, 200))
     stmt = (
         select(Job)
+        .where(Job.owner_subject != PILOT_OWNER)
         .order_by(Job.created_at.desc(), Job.id.desc())
         .limit(limit)
         .options(selectinload(Job.artifacts))
@@ -702,7 +742,7 @@ async def clear_failed_jobs(
     shadowed by the path-parameter ones."""
     stmt = (
         select(Job)
-        .where(Job.status == JobStatus.failed)
+        .where(Job.status == JobStatus.failed, Job.owner_subject != PILOT_OWNER)
         .options(selectinload(Job.artifacts))
     )
     if owner.state not in {AuthState.trusted_lan, AuthState.machine_bearer}:
@@ -957,6 +997,42 @@ def _wants_json(request: Request) -> bool:
     return "application/json" in accept and "text/html" not in accept
 
 
+async def _playback_jobs(
+    session: AsyncSession, token: str, owner: Owner | None,
+) -> tuple[Job, Job, bool]:
+    """Return the Stage job, export job and whether Clerk playback is required."""
+    asset_id = catalog_asset_id(token)
+    job = None
+    if asset_id is None:
+        job = await session.scalar(
+            select(Job).where(Job.job_token == token).options(selectinload(Job.artifacts))
+        )
+        if job is None or job.owner_subject == PILOT_OWNER:
+            raise HTTPException(404, "job not found")
+        asset_id = job.catalog_asset_id
+        if asset_id is None:
+            return job, job, False
+
+    if owner is None or owner.state != AuthState.clerk_user:
+        raise HTTPException(401, "Clerk sign-in required")
+    if job is not None and owner.subject != job.owner_subject:
+        raise HTTPException(404, "job not found")
+    asset = await session.scalar(
+        ready_assets()
+        .where(CatalogAsset.id == asset_id)
+        .options(joinedload(CatalogAsset.job).selectinload(Job.artifacts))
+    )
+    if asset is None:
+        raise HTTPException(404, "recording not available")
+    return job or asset.job, asset.job, True
+
+
+def _playback_exports(settings: Settings, job: Job, protected: bool) -> _PathLib:
+    if protected:
+        return pilot_job_root(settings.artifact_root, job.job_token) / "exports"
+    return _PathLib(settings.artifact_root) / job.job_token / "exports"
+
+
 @router.get("/share/{job_token}", tags=["share"])
 async def share_page(
     job_token: str,
@@ -971,25 +1047,14 @@ async def share_page(
     Browsers load the shared Stage player at this URL. JSON clients receive
     the same SharePayload as the player.
     """
-    job = await session.scalar(
-        select(Job)
-        .where(Job.job_token == job_token)
-        .options(selectinload(Job.artifacts))
-    )
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-
-    holds_unlisted_token = True
-    is_owner = owner is not None and _can_owner_view(owner, job)
-    is_lan = is_trusted_lan_request(request, settings)
-    if not (holds_unlisted_token or is_owner or is_lan):  # pragma: no cover
-        raise HTTPException(status_code=404, detail="job not found")
-
-    headers = {"Vary": "Accept", "Cache-Control": "no-cache"}
+    job, export_job, protected = await _playback_jobs(session, job_token, owner)
+    if protected and not _wants_json(request):
+        raise HTTPException(404, "recording has no public share link")
+    headers = {"Vary": "Accept", "Cache-Control": "private, no-store" if protected else "no-cache"}
     if _wants_json(request):
         response.headers.update(headers)
         return SharePayload(
-            job_token=job.job_token,
+            job_token=job_token,
             title=job.title,
             artist=job.artist,
             track=job.track,
@@ -1004,10 +1069,10 @@ async def share_page(
             artifacts=[
                 ArtifactOut(
                     kind=a.kind,
-                    relative_path=a.relative_path,
+                    relative_path=_PathLib(a.relative_path).name if protected else a.relative_path,
                     content_type=a.content_type,
                 )
-                for a in job.artifacts
+                for a in export_job.artifacts
             ],
         )
 
@@ -1210,22 +1275,20 @@ async def share_lyrics(
     ``source`` comes from ``metadata.json``'s ``lyrics_source`` when present,
     otherwise it is inferred from which artifacts exist.
     """
-    job = await session.scalar(select(Job).where(Job.job_token == job_token))
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-
-    holds_unlisted_token = True
-    is_owner = owner is not None and _can_owner_view(owner, job)
-    is_lan = is_trusted_lan_request(request, settings)
-    if not (holds_unlisted_token or is_owner or is_lan):  # pragma: no cover
-        raise HTTPException(status_code=404, detail="job not found")
-
+    job, export_job, protected = await _playback_jobs(session, job_token, owner)
     response.headers["Cache-Control"] = "private, no-store"
-    return _lyrics_payload(job, settings, can_review=is_owner)
+    return _lyrics_payload(
+        job, settings,
+        can_review=not protected and owner is not None and _can_owner_view(owner, job),
+        exports_dir=_playback_exports(settings, export_job, protected),
+    )
 
 
-def _lyrics_payload(job: Job, settings: Settings, *, can_review: bool = False) -> LyricsPayload:
-    exports_dir = _PathLib(settings.artifact_root) / job.job_token / "exports"
+def _lyrics_payload(
+    job: Job, settings: Settings, *, can_review: bool = False,
+    exports_dir: _PathLib | None = None,
+) -> LyricsPayload:
+    exports_dir = exports_dir or _playback_exports(settings, job, False)
     files = snapshot(exports_dir)
     try:
         meta = json.loads(files["metadata.json"] or b"{}")
@@ -1274,6 +1337,8 @@ async def review_lyrics(
     job = await session.scalar(select(Job).where(Job.id == job_id).with_for_update())
     if job is None or not _can_owner_view(owner, job):
         raise HTTPException(404, "job not found")
+    if job.catalog_asset_id is not None:
+        raise HTTPException(409, "Catalog lyrics are read only")
     if job.status != JobStatus.completed:
         raise HTTPException(409, "Wait for audio processing to finish before reviewing lyrics")
     if body.confirm is not True:
@@ -1294,6 +1359,8 @@ class LyricsReferenceRequest(BaseModel):
 
 
 def _start_lyrics_rebuild(job: Job, settings: Settings, owner: Owner, text: str | None) -> None:
+    if job.catalog_asset_id is not None:
+        raise HTTPException(409, "Catalog lyrics are read only")
     if not _use_runpod(settings):
         raise HTTPException(409, "Lyrics-only runs need the RunPod GPU backend")
     try:
@@ -1375,19 +1442,9 @@ async def share_artifact(
     if artifact_name not in _ALLOWED_ARTIFACTS:
         raise HTTPException(status_code=404, detail="artifact not found")
 
-    job = await session.scalar(select(Job).where(Job.job_token == job_token))
-    if job is None:
-        raise HTTPException(status_code=404, detail="job not found")
-
-    holds_unlisted_token = True
-    is_owner = owner is not None and _can_owner_view(owner, job)
-    is_lan = is_trusted_lan_request(request, settings)
-    if not (holds_unlisted_token or is_owner or is_lan):  # pragma: no cover
-        raise HTTPException(status_code=404, detail="job not found")
-
+    _, export_job, protected = await _playback_jobs(session, job_token, owner)
     rel, ctype = _ALLOWED_ARTIFACTS[artifact_name]
-    artifact_root = _PathLib(settings.artifact_root)
-    file_path = artifact_root / job_token / "exports" / rel
+    file_path = _playback_exports(settings, export_job, protected) / rel
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="artifact not yet ready")
 
@@ -1395,6 +1452,7 @@ async def share_artifact(
         path=str(file_path),
         media_type=ctype,
         filename=rel,
+        headers={"Cache-Control": "private, no-store"} if protected else None,
     )
 
 
@@ -1409,6 +1467,8 @@ async def share_artifact(
 
 def _can_owner_view(owner: Owner, job: Job) -> bool:
     """Owner is allowed to see jobs they own, plus trusted-LAN/machine bypass."""
+    if job.owner_subject == PILOT_OWNER:
+        return False
     if owner.state in {AuthState.trusted_lan, AuthState.machine_bearer}:
         return True
     return owner.subject == job.owner_subject

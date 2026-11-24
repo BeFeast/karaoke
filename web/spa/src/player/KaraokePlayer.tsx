@@ -328,6 +328,7 @@ function SetlistModule({ player, lines, reducedMotion }: { player: KaraokePlayer
 export interface KaraokePlayerProps {
   /** Same-origin instrumental URL (master + waveform). */
   instrumentalUrl: string;
+  fetchStem?: (url: string, signal?: AbortSignal) => Promise<Response>;
   /** Same-origin vocals URL, or null when only the instrumental exists. */
   vocalsUrl: string | null;
   /**
@@ -352,7 +353,7 @@ export interface KaraokePlayerProps {
   onToggleTheme: () => void;
 }
 
-export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, view, lines, theme, title, artist, plainLyrics, onToggleTheme }: KaraokePlayerProps) {
+export function KaraokePlayer({ instrumentalUrl, vocalsUrl, fetchStem, onTime, seekRef, view, lines, theme, title, artist, plainLyrics, onToggleTheme }: KaraokePlayerProps) {
   const rootRef = useRef<HTMLElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [container, setContainer] = useState<HTMLElement | null>(null);
@@ -387,6 +388,7 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, onTime, seekRef, vie
   const player = useKaraokePlayer({
     instrumentalUrl,
     vocalsUrl,
+    fetchStem,
     container,
     colors,
     reducedMotion,

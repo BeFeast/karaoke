@@ -9,7 +9,7 @@ import { SonereliMark } from "./components/marks";
 import { SettingsPage } from "./components/SettingsPage";
 import { Stage } from "./components/Stage";
 import { SignInScreen, UserAvatar } from "./components/SignInWall";
-import { navigate, settingsHash, useRoute } from "./router";
+import { clerkStageToken, navigate, settingsHash, useRoute } from "./router";
 // Self-hosted Marquee webfonts (#152) — latin subsets only, no external
 // font <link>. Geist = UI, Geist Mono = mono, Bricolage Grotesque = display,
 // Bungee = signage. Weights cover the 400–650 range the stylesheet asks for.
@@ -33,15 +33,16 @@ import "./styles.css";
 // context so owner-scoped reads carry the Clerk bearer when signed in; on the
 // LAN they work without auth too. The stage room takes no auth chrome — its
 // header is the design's share-page bar (#154).
-function Routed({ config, authControl }: { config: RuntimeConfig; authControl?: React.ReactNode }) {
+function Routed({ config, authControl, catalogEnabled = false }: { config: RuntimeConfig; authControl?: React.ReactNode; catalogEnabled?: boolean }) {
   const route = useRoute();
   if (route.name === "item") {
-    return <Stage token={route.token} publicBaseUrl={config.public_base_url} />;
+    return <Stage key={route.token} token={route.token} publicBaseUrl={config.public_base_url} />;
   }
   if (route.name === "settings") {
     return <SettingsPage authControl={authControl} />;
   }
-  return <App config={config} authControl={authControl} />;
+  return <App config={config} authControl={authControl} catalogEnabled={catalogEnabled}
+    mySongs={route.name === "my-songs"} shelf={route.name === "catalog" ? route.shelf : undefined} />;
 }
 
 function Boot({ children }: { children: React.ReactNode }) {
@@ -104,8 +105,8 @@ function SignInGate() {
 // route keeps the SignedOut → sign-in wall gate.
 function ClerkRouted({ config }: { config: RuntimeConfig }) {
   const route = useRoute();
-  if (route.name === "item") {
-    return <Stage token={route.token} publicBaseUrl={config.public_base_url} />;
+  if (route.name === "item" && !clerkStageToken(route.token)) {
+    return <Stage key={route.token} token={route.token} publicBaseUrl={config.public_base_url} />;
   }
   return (
     <>
@@ -113,7 +114,7 @@ function ClerkRouted({ config }: { config: RuntimeConfig }) {
         <SignInGate />
       </SignedOut>
       <SignedIn>
-        <Routed config={config} authControl={<ClerkAvatar />} />
+        <Routed config={config} authControl={<ClerkAvatar />} catalogEnabled />
       </SignedIn>
     </>
   );
@@ -137,6 +138,7 @@ function LanShell({ config }: { config: RuntimeConfig }) {
       authControl={
         <span className="m-chip" style={{ textTransform: "uppercase", letterSpacing: "0.05em", fontSize: 10 }}>
           trusted lan
+          {config.clerk_enabled && <a href="?sign-in=1"> · Sign in</a>}
         </span>
       }
     />
@@ -175,12 +177,17 @@ async function bootstrap() {
     return;
   }
 
-  // Trusted-LAN clients stay anonymous (LanShell) even when Clerk is enabled;
-  // only untrusted (public) clients get the Clerk sign-in wall.
+  // Preserve the LAN Booth, with an explicit route into Clerk on trusted networks.
+  const useClerkShell = config.clerk_enabled && (
+    !config.trusted_client
+    || new URLSearchParams(window.location.search).has("sign-in")
+    || /(?:^|;\s*)__session=/.test(document.cookie)
+    || /^#\/job\/(?:cat|clerk)\./.test(window.location.hash)
+  );
   root.render(
     <StrictMode>
       <FeedbackProvider baseUrl={config.feedback_base_url}>
-        {config.clerk_enabled && !config.trusted_client ? (
+        {useClerkShell ? (
           <ClerkShell config={config} />
         ) : (
           <LanShell config={config} />

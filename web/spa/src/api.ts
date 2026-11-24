@@ -37,7 +37,7 @@ export interface JobOut {
   progress: number;
   stage_note: string | null;
   error: string | null;
-  share_url: string;
+  share_url: string | null;
   owner_subject: string;
   // GPU bookkeeping, runtime-neutral names — the ORM columns keep their
   // legacy `vast_*` names but the RunPod path writes them too.
@@ -363,4 +363,36 @@ export function saveLyricsReview(jobId: number, lrc: string, revision: string): 
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ lrc, expected_revision: revision, confirm: true }),
   });
+}
+
+export interface CatalogSong {
+  id: number;
+  title: string;
+  artist: string;
+  version: string;
+  language: string;
+  genres: string[];
+  genres_uncertain: boolean;
+  collections: string[];
+  decade: number | null;
+  popularity: Record<string, number>;
+  source_url: string;
+  thumbnail_url: string | null;
+  stage_token: string | null;
+}
+
+export interface CatalogPage {
+  songs: CatalogSong[];
+  facets: Record<"language" | "genre" | "collection" | "decade", Record<string, number>>;
+}
+
+export function getCatalog(query: string, axis?: string, value?: string, signal?: AbortSignal): Promise<CatalogPage> {
+  const params = new URLSearchParams();
+  if (query) params.set("q", query);
+  if (axis && value) params.set(axis, value);
+  return request<CatalogPage>(`/catalog?${params}`, { signal });
+}
+
+export async function fetchProtectedArtifact(path: string, signal?: AbortSignal): Promise<Response> {
+  return fetch(path, { headers: await authHeaders(), signal, redirect: "error" });
 }

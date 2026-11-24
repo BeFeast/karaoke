@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 from karaoke import __version__
+from karaoke.api.catalog import router as catalog_router
 from karaoke.api.routes import router
 from karaoke.api.spa_static import SpaStaticFiles, register_root_icons
 from karaoke.api.tokens import router as tokens_router
@@ -83,6 +84,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.include_router(router)
+    app.include_router(catalog_router)
     app.include_router(tokens_router)
     app.include_router(ws_router)
 

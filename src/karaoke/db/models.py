@@ -5,6 +5,7 @@ import datetime as dt
 import enum
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     DateTime,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -92,6 +94,11 @@ class Job(Base):
         nullable=True,
     )
 
+    catalog_asset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("catalog_assets.id", name="fk_jobs_catalog_asset_id", use_alter=True),
+        index=True,
+    )
+
     artifacts: Mapped[list[Artifact]] = relationship(
         back_populates="job",
         cascade="all, delete-orphan",
@@ -143,3 +150,66 @@ class ExtensionToken(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+
+
+class CatalogTrack(Base):
+    __tablename__ = "catalog_tracks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(Text)
+    artist: Mapped[str] = mapped_column(Text)
+    aliases: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+
+class CatalogRecording(Base):
+    __tablename__ = "catalog_recordings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    track_id: Mapped[int] = mapped_column(ForeignKey("catalog_tracks.id"))
+    version: Mapped[str] = mapped_column(String(16))
+    language: Mapped[str] = mapped_column(String(12))
+    genres: Mapped[list[str]] = mapped_column(JSON, default=list)
+    genres_uncertain: Mapped[bool] = mapped_column(Boolean, default=False)
+    collections: Mapped[list[str]] = mapped_column(JSON, default=list)
+    decade: Mapped[int | None] = mapped_column(Integer)
+    track: Mapped[CatalogTrack] = relationship()
+
+
+class CatalogSource(Base):
+    __tablename__ = "catalog_sources"
+    __table_args__ = (UniqueConstraint("provider", "external_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    recording_id: Mapped[int] = mapped_column(ForeignKey("catalog_recordings.id"))
+    provider: Mapped[str] = mapped_column(String(32))
+    external_id: Mapped[str] = mapped_column(String(128))
+    provenance: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    available: Mapped[bool] = mapped_column(Boolean, default=True)
+    metadata_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
+    playback_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
+    recording: Mapped[CatalogRecording] = relationship()
+
+
+class CatalogAsset(Base):
+    __tablename__ = "catalog_assets"
+    __table_args__ = (UniqueConstraint("source_id", "pipeline_version"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("catalog_sources.id"))
+    pipeline_version: Mapped[str] = mapped_column(String(32))
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), unique=True)
+    lyric_revision: Mapped[str | None] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(20))
+    download_started_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    reserved_micros: Mapped[int] = mapped_column(BigInteger)
+    charged_micros: Mapped[int | None] = mapped_column(BigInteger)
+    source: Mapped[CatalogSource] = relationship()
+    job: Mapped[Job] = relationship(foreign_keys=[job_id])
+
+
+class CatalogPilotState(Base):
+    __tablename__ = "catalog_pilot_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    paused: Mapped[bool] = mapped_column(Boolean, default=False)

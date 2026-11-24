@@ -12,14 +12,15 @@
 // board), so these are responsive adaptations with existing tokens/recipes
 // only; the desktop branches are the untouched port.
 
+import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 import { FeedbackButton } from "../feedback/Feedback";
-import { type CSSProperties, type ReactNode, useRef, useState } from "react";
 import type { JobOut, JobStatus } from "../api";
 import { canRetryJob, type JobFilter, statusMeta } from "../jobStatus";
 import { costDollars, fmtDuration, formatRelativeTime, type JobSort } from "../lib/jobListUtils";
 import { usePhoneLayout } from "../lib/layout";
 import { sourceDisplay } from "../lib/source";
-import { itemHash } from "../router";
+import { catalogHash, type CatalogShelf, itemHash, mySongsHash, navigate } from "../router";
+import { CatalogBrowser } from "./Catalog";
 import { MBulbs, MDuetWave, SonereliMark, MWipe } from "./marks";
 
 export interface JobActions {
@@ -272,6 +273,9 @@ export function BoothScreen({
   actions,
   onClearFailed,
   authControl,
+  catalogEnabled,
+  mySongs,
+  shelf,
   children,
 }: {
   /** Filtered + sorted rows to render. */
@@ -300,6 +304,9 @@ export function BoothScreen({
   actions: JobActions;
   onClearFailed: () => void;
   authControl?: ReactNode;
+  catalogEnabled: boolean;
+  mySongs: boolean;
+  shelf: CatalogShelf | null;
   /** Overlays (ConfirmDialog) rendered inside the booth's token scope. */
   children?: ReactNode;
 }) {
@@ -308,6 +315,16 @@ export function BoothScreen({
   // re-lays-out. The desktop row keeps its single-line layout.
   const phone = usePhoneLayout();
   const [url, setUrl] = useState("");
+  const [catalogQuery, setCatalogQuery] = useState("");
+  const [focusPaste, setFocusPaste] = useState(false);
+  const urlRef = useRef<HTMLInputElement>(null);
+  const inCatalog = catalogEnabled && !mySongs;
+  useEffect(() => {
+    if (mySongs && focusPaste) {
+      urlRef.current?.focus();
+      setFocusPaste(false);
+    }
+  }, [mySongs, focusPaste]);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -342,7 +359,7 @@ export function BoothScreen({
   // on phone it drops flex: 1 (a column child stretches full width instead)
   // and the primary action grows to fill its row.
   const urlInput = (
-    <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste a song link…"
+    <input ref={urlRef} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste a song link…"
       onKeyDown={(e) => e.key === "Enter" && doSubmit()}
       disabled={busy || uploading} autoComplete="off" spellCheck={false} aria-label="Song link"
       style={{ flex: phone ? undefined : 1, minWidth: 0, padding: "10px 13px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg)", color: "var(--fg)", fontSize: 14, fontFamily: "var(--font-mono)", outline: "none" }}></input>
@@ -370,88 +387,110 @@ export function BoothScreen({
       <MarqueeTopBar authControl={authControl} />
 
       <div style={{ flex: 1, padding: "24px 24px 16px", maxWidth: 780, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", minHeight: 0 }}>
-        <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)", padding: 16 }}>
-          <h1 style={{ margin: "0 0 16px", fontFamily: "var(--font-display)", fontSize: 24, lineHeight: "32px", textWrap: "balance" }}>Choose a song and sing</h1>
-          {phone ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {urlInput}
-              <div style={{ display: "flex", gap: 10 }}>
-                {submitAction}
-                {uploadAction}
-              </div>
-              {filePicker}
-            </div>
-          ) : (
-            <div style={{ display: "flex", gap: 10 }}>
-              {urlInput}
-              {submitAction}
-              {uploadAction}
-              {filePicker}
-            </div>
-          )}
-          <div className="m-mono" style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11, color: "var(--muted)", alignItems: "center", flexWrap: "wrap" }}>
-            <span className="m-stem vox">vocals</span>
-            <span className="m-stem inst">instrumental</span>
-            <span style={{ color: "var(--fg-soft)" }}>synced lyrics</span>
-          </div>
-          {submitError && (
-            <div className="m-mono" style={{ marginTop: 8, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>{submitError}</div>
-          )}
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "20px 0 11px", flexWrap: "wrap" }}>
-          {FILTERS.map((f) => {
-            const on = filter === f.key;
-            return (
-              <button key={f.key} type="button" className="m-btn sm" onClick={() => onFilter(f.key)} style={{
-                border: "1px solid " + (on ? "var(--accent)" : "transparent"),
-                background: on ? "var(--accent-soft)" : "transparent",
-                color: on ? "var(--accent)" : "var(--fg-soft)", fontWeight: on ? 650 : 500,
-              }}>{f.label} <span className="m-mono" style={{ fontSize: 10.5, opacity: 0.75 }}>{counts[f.key]}</span></button>
-            );
-          })}
-          <span style={{ flex: 1 }}></span>
-          {counts.failed > 0 && (
-            <button className="m-btn sm ghost" type="button" onClick={onClearFailed}>Clear failed</button>
-          )}
-        </div>
-
-        <div style={{ display: "flex", gap: 8, marginBottom: 11 }}>
-          <input type="search" value={query} onChange={(e) => onQuery(e.target.value)}
-            placeholder="Search songs…" aria-label="Search songs by title, artist, or URL"
-            style={{ flex: 1, minWidth: 0, padding: "7px 11px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", outline: "none" }} />
-          <select value={sort} onChange={(e) => onSort(e.target.value as JobSort)} aria-label="Sort jobs" style={{
-            appearance: "none", padding: "7px 28px 7px 11px", border: "1px solid var(--border)", borderRadius: "var(--radius)",
-            background: "var(--bg-card)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", cursor: "pointer",
-            backgroundImage: "linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%)",
-            backgroundPosition: "calc(100% - 14px) 55%, calc(100% - 9px) 55%", backgroundSize: "5px 5px", backgroundRepeat: "no-repeat",
-          }}>
-            <option value="newest">Newest first</option>
-            <option value="oldest">Oldest first</option>
-            <option value="title">Title A–Z</option>
-          </select>
-        </div>
-
-        {listError && (
-          <div className="m-mono" style={{ marginBottom: 10, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>Couldn’t load jobs: {listError}</div>
+        {inCatalog && (
+          <input className="catalog-search" type="search" value={catalogQuery} maxLength={200}
+            onChange={(event) => setCatalogQuery(event.target.value)}
+            aria-label="Поиск по каталогу" placeholder="Название или исполнитель" />
         )}
-        {actionError && (
-          <div className="m-mono" style={{ marginBottom: 10, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>Action failed: {actionError}</div>
+        {catalogEnabled && (
+          <nav className="catalog-tabs" aria-label="Выбор библиотеки">
+            <a className="m-btn" href={catalogHash()} aria-current={inCatalog ? "page" : undefined}
+              onClick={() => setCatalogQuery("")}>Каталог</a>
+            <a className="m-btn" href={mySongsHash} aria-current={mySongs ? "page" : undefined}>Мои песни</a>
+          </nav>
         )}
-
-        {!loaded && jobs.length === 0 ? (
-          <BoothSkeleton />
-        ) : jobs.length === 0 ? (
-          <BoothEmpty title={emptyTitle} sub={emptySub} />
+        {inCatalog ? (
+          <CatalogBrowser query={catalogQuery} shelf={shelf} prepare={onCreate} pasteUrl={() => {
+            setFocusPaste(true);
+            navigate(mySongsHash);
+          }} />
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {jobs.map((j) =>
-              statusMeta(j.status).active ? (
-                <PRunningCard key={j.id} job={j} wsOpen={wsOpen} actions={actions} />
+          <div data-my-songs>
+            <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)", padding: 16 }}>
+              <h1 style={{ margin: "0 0 16px", fontFamily: "var(--font-display)", fontSize: 24, lineHeight: "32px", textWrap: "balance" }}>Choose a song and sing</h1>
+              {phone ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {urlInput}
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {submitAction}
+                    {uploadAction}
+                  </div>
+                  {filePicker}
+                </div>
               ) : (
-                <CompactRow key={j.id} job={j} actions={actions} />
-              ),
+                <div style={{ display: "flex", gap: 10 }}>
+                  {urlInput}
+                  {submitAction}
+                  {uploadAction}
+                  {filePicker}
+                </div>
+              )}
+              <div className="m-mono" style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11, color: "var(--muted)", alignItems: "center", flexWrap: "wrap" }}>
+                <span className="m-stem vox">vocals</span>
+                <span className="m-stem inst">instrumental</span>
+                <span style={{ color: "var(--fg-soft)" }}>synced lyrics</span>
+              </div>
+              {submitError && (
+                <div className="m-mono" style={{ marginTop: 8, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>{submitError}</div>
+              )}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "20px 0 11px", flexWrap: "wrap" }}>
+              {FILTERS.map((f) => {
+                const on = filter === f.key;
+                return (
+                  <button key={f.key} type="button" className="m-btn sm" onClick={() => onFilter(f.key)} style={{
+                    border: "1px solid " + (on ? "var(--accent)" : "transparent"),
+                    background: on ? "var(--accent-soft)" : "transparent",
+                    color: on ? "var(--accent)" : "var(--fg-soft)", fontWeight: on ? 650 : 500,
+                  }}>{f.label} <span className="m-mono" style={{ fontSize: 10.5, opacity: 0.75 }}>{counts[f.key]}</span></button>
+                );
+              })}
+              <span style={{ flex: 1 }}></span>
+              {counts.failed > 0 && (
+                <button className="m-btn sm ghost" type="button" onClick={onClearFailed}>Clear failed</button>
+              )}
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginBottom: 11 }}>
+              <input type="search" value={query} onChange={(e) => onQuery(e.target.value)}
+                placeholder="Search songs…" aria-label="Search songs by title, artist, or URL"
+                style={{ flex: 1, minWidth: 0, padding: "7px 11px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", outline: "none" }} />
+              <select value={sort} onChange={(e) => onSort(e.target.value as JobSort)} aria-label="Sort jobs" style={{
+                appearance: "none", padding: "7px 28px 7px 11px", border: "1px solid var(--border)", borderRadius: "var(--radius)",
+                background: "var(--bg-card)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", cursor: "pointer",
+                backgroundImage: "linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%)",
+                backgroundPosition: "calc(100% - 14px) 55%, calc(100% - 9px) 55%", backgroundSize: "5px 5px", backgroundRepeat: "no-repeat",
+              }}>
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="title">Title A–Z</option>
+              </select>
+            </div>
+
+            {listError && (
+              <div className="m-mono" style={{ marginBottom: 10, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>Couldn’t load jobs: {listError}</div>
             )}
+            {actionError && (
+              <div className="m-mono" style={{ marginBottom: 10, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>Action failed: {actionError}</div>
+            )}
+
+            {!loaded && jobs.length === 0 ? (
+              <BoothSkeleton />
+            ) : jobs.length === 0 ? (
+              <BoothEmpty title={emptyTitle} sub={emptySub} />
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {jobs.map((j) =>
+                  statusMeta(j.status).active ? (
+                    <PRunningCard key={j.id} job={j} wsOpen={wsOpen} actions={actions} />
+                  ) : (
+                    <CompactRow key={j.id} job={j} actions={actions} />
+                  ),
+                )}
+          </div>
+        )}
+
           </div>
         )}
 

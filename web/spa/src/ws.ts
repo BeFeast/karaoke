@@ -10,10 +10,9 @@
 // Auth mirrors api.ts: when the Clerk shell has wired a token getter, the
 // bearer token goes out as the first frame after connect (the browser
 // WebSocket API can't set an Authorization header, and a query string would
-// leak the JWT into access logs); in LAN mode nothing is sent and the
-// server's trusted-LAN bypass authorises the caller. The server ignores
-// frames it doesn't recognise, so this stays forward-compatible if/when
-// /ws starts enforcing the handshake.
+// leak the JWT into access logs). The server uses the Clerk subject
+// to deliver protected catalog jobs. Ordinary jobs keep the same feed in
+// LAN mode and for clients without an auth frame.
 
 import { getAuthToken, type JobStatus } from "./api";
 
