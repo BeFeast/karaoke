@@ -2,10 +2,10 @@ name: ios-app
 
 on:
   pull_request:
-    paths: ["mobile/ios/**", "acceptance/ios-*.yaml", "scripts/verify", ".forgejo/workflows/ios-app.yml"]
+    paths: ["mobile/ios/**", "acceptance/ios-*.yaml", "scripts/verify", ".github/workflows/ios-app.yml"]
   push:
     branches: [main]
-    paths: ["mobile/ios/**", "acceptance/ios-*.yaml", "scripts/verify", ".forgejo/workflows/ios-app.yml"]
+    paths: ["mobile/ios/**", "acceptance/ios-*.yaml", "scripts/verify", ".github/workflows/ios-app.yml"]
   workflow_dispatch:
 
 concurrency:
@@ -16,7 +16,7 @@ jobs:
   simulator:
     # The corporate M4 runner is retired. The T3 lane runs the same command
     # until a macOS runner is registered and enabled for this repository.
-    if: vars.SONERELI_MACOS_RUNNER == 'enabled'
+    if: github.server_url == 'https://git.oklabs.uk' && vars.SONERELI_MACOS_RUNNER == 'enabled'
     runs-on: macos
     timeout-minutes: 40
     env:

@@ -3,9 +3,11 @@ import Foundation
 struct SharedVideo: Codable, Identifiable, Equatable {
     let id: UUID
     let url: URL
+    let createdAt: Date
 
     init(url: URL) {
         id = UUID()
+        createdAt = Date()
         self.url = url
     }
 
@@ -56,19 +58,17 @@ enum ShareInbox {
     static func pending() -> SharedVideo? {
         guard let folder = try? directory(),
               let files = try? FileManager.default.contentsOfDirectory(
-                at: folder, includingPropertiesForKeys: [.creationDateKey], options: .skipsHiddenFiles
+                at: folder, includingPropertiesForKeys: nil, options: .skipsHiddenFiles
               ) else { return nil }
-        return files.filter { $0.pathExtension == "json" }.sorted {
-            let first = (try? $0.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
-            let second = (try? $1.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
-            return first == second ? $0.lastPathComponent < $1.lastPathComponent : first < second
-        }.lazy.compactMap { file in
+        return files.lazy.filter { $0.pathExtension == "json" }.compactMap { file in
             guard let data = try? Data(contentsOf: file),
                   let video = try? JSONDecoder().decode(SharedVideo.self, from: data),
                   file.deletingPathExtension().lastPathComponent == video.id.uuidString,
                   SharedVideo.validatedURL(from: video.url.absoluteString) == video.url else { return nil }
             return video
-        }.first
+        }.min {
+            $0.createdAt == $1.createdAt ? $0.id.uuidString < $1.id.uuidString : $0.createdAt < $1.createdAt
+        }
     }
 
     #if DEBUG
