@@ -17,6 +17,7 @@ import { FeedbackButton } from "./feedback/Feedback";
 import { t } from "./i18n";
 import { canRetryJob } from "./jobStatus";
 import { forgetSong, loadLastPlayed } from "./lib/library";
+import { useCurrentSong } from "./player/PlayerProvider";
 import { addHash, type CatalogShelf, itemHash, navigate } from "./router";
 import { connectJobSocket, isTerminal, type JobEvent } from "./ws";
 
@@ -44,7 +45,9 @@ export function App(props: {
   const [catalogQuery, setCatalogQuery] = useState("");
   const [readyToast, setReadyToast] = useState<{ token: string; title: string } | null>(null);
   // Re-read on every visit to My songs: the Stage writes it while singing.
-  const last = view === "my-songs" ? loadLastPlayed() : null;
+  // The mini-player replaces the Continue card while a song is open (step 8).
+  const playing = useCurrentSong();
+  const last = view === "my-songs" && !playing ? loadLastPlayed() : null;
   // Mirror of `jobs` for the WS handler — reading state there would force
   // the socket effect to re-run (and reconnect) on every list change.
   const jobsRef = useRef<JobOut[]>([]);

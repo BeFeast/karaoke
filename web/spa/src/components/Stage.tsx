@@ -7,14 +7,15 @@
 // without owner items. A job that was not ready when opened shows Processing
 // until the singer taps Start singing (step 3).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cancelJob, createJob, fetchProtectedArtifact, getLyrics, getShare, type JobOut, listJobs, type LyricsPayload, type SharePayload } from "../api";
 import { useOpenFeedback } from "../feedback/Feedback";
 import { t } from "../i18n";
 import { artifactHref, artifactView, canRetryJob, statusMeta } from "../jobStatus";
-import { coverUrl, saveLastPlayed } from "../lib/library";
+import { coverUrl } from "../lib/library";
 import { sourceDisplay } from "../lib/source";
-import { useKaraokePlayer } from "../player/useKaraokePlayer";
+import { usePlayerSession } from "../player/PlayerProvider";
+import type { KaraokePlayerApi } from "../player/useKaraokePlayer";
 import { addHash, clerkStageToken, closeModalRoute, itemHash, navigate, publicShareUrl, replaceHash } from "../router";
 import { connectJobSocket, isTerminal, type WsJobStatus } from "../ws";
 import { Icon } from "./Icon";
@@ -31,6 +32,15 @@ import { parseLrc, sungLines } from "./SyncedLyrics";
 import { Toast } from "./Toast";
 
 const POLL_MS = 3000;
+
+const noop = () => undefined;
+/** Stands in until the app player has switched to this Stage's song. */
+const IDLE_PLAYER: KaraokePlayerApi = {
+  ready: false, playing: false, duration: 0, currentTime: 0, rate: 1, vocalLevel: 0, loop: false,
+  region: { a: null, b: null }, hasVocals: true, ended: false, error: null,
+  playPause: noop, seek: noop, skip: noop, setRate: noop, setVocalLevel: noop, setMix: noop, toggleLoop: noop,
+  markA: noop, markB: noop, clearRegion: noop, subscribeTime: () => noop,
+};
 
 export function Stage({ token, publicBaseUrl, shared = false, startAt }: {
   token: string;
@@ -254,7 +264,8 @@ function StageTop({ shared, title, artist, onMore }: {
       {shared ? (
         <span className="sn-stage-brand"><SonereliMark size={26} /></span>
       ) : (
-        <button type="button" className="sn-iconbtn" onClick={closeModalRoute} aria-label={t("stage.minimize")}>
+        <button type="button" className="sn-iconbtn" onClick={closeModalRoute} aria-label={t("stage.minimize")}
+          data-sn-minimize="">
           <Icon name="down" size={28} />
         </button>
       )}
@@ -293,14 +304,21 @@ function StageBody({ payload, token, shared, protectedStage, lyrics, onLyricsSav
   const vocals = audio.find((v) => v.kind === "vocals") ?? audio.find((v) => v.name.startsWith("vocals")) ?? null;
   const lyricsFile = views.find((v) => v.kind === "lyrics") ?? null;
 
-  const player = useKaraokePlayer({
-    instrumentalUrl: instrumental?.href ?? null,
-    vocalsUrl: vocals?.href ?? null,
-    fetchStem: protectedStage ? fetchProtectedArtifact : undefined,
-  });
-
   const lines = useMemo(() => (lyrics?.lrc ? parseLrc(lyrics.lrc) : []), [lyrics?.lrc]);
   const sung = useMemo(() => sungLines(lines), [lines]);
+
+  // The song plays in the app-level player (step 8): opening the Stage starts
+  // (or rejoins) its session; minimizing keeps it playing.
+  const { session, player: sessionPlayer, open, vocalPct, setVocalPct, toggleVocals } = usePlayerSession();
+  useLayoutEffect(() => {
+    if (!instrumental) return;
+    open({
+      token, title, artist: payload.artist, sourceUrl: payload.source_url, duration: payload.duration,
+      instrumentalUrl: instrumental.href, vocalsUrl: vocals?.href ?? null, protectedStage, shared, lines: sung,
+    });
+  }, [open, token, title, payload.artist, payload.source_url, payload.duration, instrumental?.href, vocals?.href,
+    protectedStage, shared, sung]);
+  const player = session?.token === token ? sessionPlayer : IDLE_PLAYER;
   const timed = useMemo(() => timeLines(sung, payload.duration), [sung, payload.duration]);
   const reducedMotion = useMemo(
     () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
@@ -317,18 +335,6 @@ function StageBody({ payload, token, shared, protectedStage, lyrics, onLyricsSav
   const moreRef = useRef<HTMLButtonElement | null>(null);
   const openFeedback = useOpenFeedback();
   const canFix = !shared && !!lyrics && lyrics.review_job_id != null && !!lyrics.revision;
-
-  // Continue singing (step 4): remember the song and position while singing.
-  const savedAt = useRef(-10);
-  useEffect(() => {
-    const time = player.currentTime;
-    if (shared || time <= 0 || Math.abs(time - savedAt.current) < 1) return;
-    savedAt.current = time;
-    saveLastPlayed({
-      token, title, artist: payload.artist, sourceUrl: payload.source_url,
-      position: time, duration: payload.duration, at: Date.now(),
-    });
-  }, [player.currentTime, shared, token, title, payload.artist, payload.source_url, payload.duration]);
 
   // Resume where the singer stopped, once, when the stems are ready.
   const resumed = useRef(false);
@@ -381,14 +387,16 @@ function StageBody({ payload, token, shared, protectedStage, lyrics, onLyricsSav
       } else if (e.key === "ArrowRight" && !el?.closest("[role=slider]")) {
         e.preventDefault();
         player.skip(5);
+      } else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !el?.closest("[role=slider]")) {
+        e.preventDefault();
+        setVocalPct(vocalPct + (e.key === "ArrowUp" ? 5 : -5));
+      } else if (e.key === "m" || e.key === "M") {
+        toggleVocals();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [player, sheet, perf]);
-
-  const vocalPct = Math.round(player.vocalLevel * 100);
-  const onVocals = useCallback((pct: number) => player.setVocalLevel(pct / 100), [player.setVocalLevel]);
+  }, [player, sheet, perf, vocalPct, setVocalPct, toggleVocals]);
 
   const onMore = (button: HTMLButtonElement) => {
     moreRef.current = button;
@@ -467,7 +475,7 @@ function StageBody({ payload, token, shared, protectedStage, lyrics, onLyricsSav
         )}
       </div>
       {instrumental && (
-        <StageDock player={player} lines={sung} vocalPct={vocalPct} onVocals={onVocals}>
+        <StageDock player={player} lines={sung} vocalPct={vocalPct} onVocals={setVocalPct} onToggleVocals={toggleVocals}>
           {player.error ? (
             <p className="sn-stage-status sn-err" role="alert">
               {t("stage.audioError")}

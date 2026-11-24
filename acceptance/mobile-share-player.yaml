@@ -10,6 +10,12 @@ action:
       lyric_font_size: {inactive_px: 16, active_px: 20}
       no_horizontal_scroll: true
       controls_reachable: true
+      # UI/UX v1 step 9: Original vocals starts at 25% (-22.5 dB on the vocal
+      # stem, backing at full gain), the mic toggles 0 and back, and a scrub
+      # release within 0.6 s of a line start lands on it.
+      vocals_default_pct: 25
+      vocals_mute_toggle: true
+      scrub_snaps_to_line: 0.6
   - open: public_share
     assert:
       <<: *player

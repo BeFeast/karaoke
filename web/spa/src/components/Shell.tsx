@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { t } from "../i18n";
 import { addHash, catalogHash, mySongsHash, settingsHash } from "../router";
 import { Icon, type IconName } from "./Icon";
+import { MiniPlayer } from "./MiniPlayer";
 
 export type ShellTab = "my-songs" | "catalog" | "settings";
 
@@ -42,6 +43,7 @@ export function Shell({ tab, title, actions, catalogEnabled, children }: {
       </header>
       <main className="sn-screen">{children}</main>
       <div className="sn-dock">
+        <MiniPlayer />
         {showAdd && (
           <div className="sn-addbar">
             <a className="sn-btn sn-btn-primary sn-block sn-add-song" href={addHash}>

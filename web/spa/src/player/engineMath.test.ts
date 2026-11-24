@@ -2,38 +2,26 @@ import { describe, expect, test } from "bun:test";
 import { computePeaks, gainsForLevel, loopSeekTarget, positionAt, railPct, type PlaySegment } from "./engineMath";
 
 describe("gainsForLevel", () => {
-  test("level 1 is a TRUE vocals solo: instrumental gain exactly 0", () => {
-    const g = gainsForLevel(1);
-    expect(g.inst).toBe(0);
-    expect(g.voc).toBe(1);
+  test("the backing track always plays at full gain", () => {
+    for (const l of [0, 0.25, 0.5, 1]) expect(gainsForLevel(l).inst).toBe(1);
   });
-
-  test("level 0 is a true instrumental solo: vocal gain exactly 0", () => {
-    const g = gainsForLevel(0);
-    expect(g.inst).toBe(1);
-    expect(g.voc).toBe(0);
+  test("0 mutes the vocals exactly, 100% is the original level", () => {
+    expect(gainsForLevel(0).voc).toBe(0);
+    expect(gainsForLevel(1).voc).toBeCloseTo(1, 10);
   });
-
-  test("equal-power: inst² + voc² ≈ 1 across the range", () => {
-    for (const l of [0, 0.25, 0.5, 0.75, 1]) {
-      const g = gainsForLevel(l);
-      expect(Math.abs(g.inst ** 2 + g.voc ** 2 - 1)).toBeLessThanOrEqual(0.01);
-    }
+  test("perceptual curve: 25% is -22.5 dB, 50% is -15 dB", () => {
+    expect(20 * Math.log10(gainsForLevel(0.25).voc)).toBeCloseTo(-22.5, 6);
+    expect(20 * Math.log10(gainsForLevel(0.5).voc)).toBeCloseTo(-15, 6);
   });
-
-  test("inst monotonically non-increasing, voc non-decreasing over [0,1]", () => {
-    let prev = gainsForLevel(0);
-    for (let l = 0.05; l <= 1.0001; l += 0.05) {
-      const g = gainsForLevel(l);
-      expect(g.inst).toBeLessThanOrEqual(prev.inst);
-      expect(g.voc).toBeGreaterThanOrEqual(prev.voc);
+  test("monotonic and clamped", () => {
+    let prev = -1;
+    for (let l = 0; l <= 1.0001; l += 0.05) {
+      const g = gainsForLevel(l).voc;
+      expect(g).toBeGreaterThan(prev);
       prev = g;
     }
-  });
-
-  test("out-of-range levels clamp to the endpoints", () => {
     expect(gainsForLevel(-0.5)).toEqual({ inst: 1, voc: 0 });
-    expect(gainsForLevel(1.5)).toEqual({ inst: 0, voc: 1 });
+    expect(gainsForLevel(1.5).voc).toBeCloseTo(1, 10);
   });
 });
 

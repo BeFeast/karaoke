@@ -7,6 +7,7 @@ import { FeedbackButton, FeedbackProvider } from "./feedback/Feedback";
 import { startFeedbackLog } from "./feedback/diagnostics";
 import { getConfig, type RuntimeConfig, setTokenGetter } from "./api";
 import { SonereliMark } from "./components/marks";
+import { PlayerProvider } from "./player/PlayerProvider";
 import { SettingsPage } from "./components/SettingsPage";
 import { Stage } from "./components/Stage";
 import { SignInScreen, UserAvatar } from "./components/SignInWall";
@@ -159,7 +160,9 @@ async function bootstrap() {
     root.render(
       <StrictMode>
         <FeedbackProvider>
-          <Stage token={decodeURIComponent(share[1])} publicBaseUrl={window.location.origin} shared />
+          <PlayerProvider>
+            <Stage token={decodeURIComponent(share[1])} publicBaseUrl={window.location.origin} shared />
+          </PlayerProvider>
         </FeedbackProvider>
       </StrictMode>,
     );
@@ -194,11 +197,14 @@ async function bootstrap() {
   root.render(
     <StrictMode>
       <FeedbackProvider baseUrl={config.feedback_base_url}>
-        {useClerkShell ? (
-          <ClerkShell config={config} />
-        ) : (
-          <LanShell config={config} />
-        )}
+        {/* One player for the whole app: the song survives route changes (step 8). */}
+        <PlayerProvider>
+          {useClerkShell ? (
+            <ClerkShell config={config} />
+          ) : (
+            <LanShell config={config} />
+          )}
+        </PlayerProvider>
       </FeedbackProvider>
     </StrictMode>,
   );
