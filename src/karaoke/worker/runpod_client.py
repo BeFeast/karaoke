@@ -237,7 +237,7 @@ class RunpodClient:
         through verbatim; the handler ignores keys it predates, so each is
         safe against an old image (we just get the old behavior).
         """
-        api_key = self.settings.runpod_api_key.strip()
+        api_key = self.settings.runpod_api_key.get_secret_value().strip()
         endpoint_id = self.settings.runpod_endpoint_id.strip()
         if not api_key:
             raise RunpodError("KARAOKE_RUNPOD_API_KEY is not set")
@@ -437,8 +437,8 @@ class RunpodClient:
         return bool(
             self.settings.r2_endpoint_url.strip()
             and self.settings.r2_bucket.strip()
-            and self.settings.r2_access_key_id.strip()
-            and self.settings.r2_secret_access_key.strip()
+            and self.settings.r2_access_key_id.get_secret_value().strip()
+            and self.settings.r2_secret_access_key.get_secret_value().strip()
         )
 
     def _upload_to_r2(self, mix_wav: Path) -> tuple[str, dict[str, str]]:
@@ -472,16 +472,16 @@ class RunpodClient:
             endpoint_url=self.settings.r2_endpoint_url,
             bucket=self.settings.r2_bucket,
             key=input_key,
-            access_key_id=self.settings.r2_access_key_id,
-            secret_access_key=self.settings.r2_secret_access_key,
+            access_key_id=self.settings.r2_access_key_id.get_secret_value(),
+            secret_access_key=self.settings.r2_secret_access_key.get_secret_value(),
             content_type="audio/wav",
         )
         audio_url = presign_get(
             endpoint_url=self.settings.r2_endpoint_url,
             bucket=self.settings.r2_bucket,
             key=input_key,
-            access_key_id=self.settings.r2_access_key_id,
-            secret_access_key=self.settings.r2_secret_access_key,
+            access_key_id=self.settings.r2_access_key_id.get_secret_value(),
+            secret_access_key=self.settings.r2_secret_access_key.get_secret_value(),
             expires_in=int(self.settings.r2_presign_ttl_s or 600),
         )
         self._r2_put_urls = {
@@ -489,8 +489,8 @@ class RunpodClient:
                 endpoint_url=self.settings.r2_endpoint_url,
                 bucket=self.settings.r2_bucket,
                 key=k,
-                access_key_id=self.settings.r2_access_key_id,
-                secret_access_key=self.settings.r2_secret_access_key,
+                access_key_id=self.settings.r2_access_key_id.get_secret_value(),
+                secret_access_key=self.settings.r2_secret_access_key.get_secret_value(),
                 expires_in=int(self.settings.r2_presign_ttl_s or 600),
             )
             for kind, k in output_keys.items()
@@ -531,8 +531,8 @@ class RunpodClient:
                     endpoint_url=self.settings.r2_endpoint_url,
                     bucket=self.settings.r2_bucket,
                     key=key,
-                    access_key_id=self.settings.r2_access_key_id,
-                    secret_access_key=self.settings.r2_secret_access_key,
+                    access_key_id=self.settings.r2_access_key_id.get_secret_value(),
+                    secret_access_key=self.settings.r2_secret_access_key.get_secret_value(),
                     expires_in=int(self.settings.r2_presign_ttl_s or 600),
                 )
                 with urllib.request.urlopen(url, timeout=300) as resp:

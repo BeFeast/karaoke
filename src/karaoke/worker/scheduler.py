@@ -23,7 +23,7 @@ from karaoke.config import Settings
 
 def _has_runpod(settings: Settings) -> bool:
     return bool(
-        settings.runpod_api_key.strip() and settings.runpod_endpoint_id.strip()
+        settings.runpod_api_key.get_secret_value().strip() and settings.runpod_endpoint_id.strip()
     )
 
 
@@ -32,7 +32,7 @@ def _use_mock(settings: Settings) -> bool:
     if mode == "mock":
         return True
     if mode == "auto":
-        return not (settings.vast_api_key.strip() or _has_runpod(settings))
+        return not (settings.vast_api_key.get_secret_value().strip() or _has_runpod(settings))
     return False
 
 
@@ -43,7 +43,7 @@ def _use_runpod(settings: Settings) -> bool:
     if mode == "auto":
         # Prefer runpod when only runpod is configured. If both vast and
         # runpod are configured, vast wins (explicit override required).
-        return _has_runpod(settings) and not settings.vast_api_key.strip()
+        return _has_runpod(settings) and not settings.vast_api_key.get_secret_value().strip()
     return False
 
 

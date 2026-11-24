@@ -7,6 +7,7 @@ starts; we never read Infisical inline.
 """
 from __future__ import annotations
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,10 +19,12 @@ class Settings(BaseSettings):
         env_file=".env",
         extra="ignore",
         case_sensitive=False,
+        hide_input_in_errors=True,
+        validate_assignment=True,
     )
 
     # Database
-    database_url: str = "sqlite+aiosqlite:///./karaoke.db"
+    database_url: SecretStr = SecretStr("sqlite+aiosqlite:///./karaoke.db")
 
     # HTTP / CORS
     cors_origins: str = ""  # comma-separated; empty = none
@@ -30,7 +33,7 @@ class Settings(BaseSettings):
     public_base_url: str = "http://localhost:13140"
 
     # ---- Auth: machine bearer ----
-    service_token: str = ""  # KARAOKE_SERVICE_TOKEN; empty disables.
+    service_token: SecretStr = SecretStr("")  # KARAOKE_SERVICE_TOKEN; empty disables.
 
     # ---- Auth: trusted LAN ----
     trusted_cidrs: str = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8"
@@ -39,7 +42,7 @@ class Settings(BaseSettings):
     clerk_issuer: str = ""
     clerk_jwks_url: str = ""
     clerk_jwks_json: str = ""  # inline JWKS (tests / offline)
-    clerk_secret_key: str = ""  # for Clerk Backend API user lookup
+    clerk_secret_key: SecretStr = SecretStr("")  # for Clerk Backend API user lookup
     clerk_backend_api_url: str = "https://api.clerk.com"
     auth_allowed_emails: str = ""  # comma-separated; empty = no allowlist
 
@@ -92,7 +95,7 @@ class Settings(BaseSettings):
     #   - "mock"      → always the in-process mock worker.
     device_mode: str = "auto"  # auto | vast | cpu-local | mock
 
-    vast_api_key: str = ""  # KARAOKE_VAST_API_KEY; empty + auto → mock path.
+    vast_api_key: SecretStr = SecretStr("")  # KARAOKE_VAST_API_KEY; empty + auto → mock path.
     vast_image: str = "ghcr.io/befeast/karaoke-vast:cuda12.4"
 
     # ---- yt-dlp anti-bot: bgutil PO-token provider (issue #68) ----
@@ -154,7 +157,7 @@ class Settings(BaseSettings):
     vast_daily_cost_cap: float = 5.0
 
     # ---- RunPod Serverless (alternative GPU runtime; see issue #33) ----
-    runpod_api_key: str = ""  # KARAOKE_RUNPOD_API_KEY; empty disables.
+    runpod_api_key: SecretStr = SecretStr("")  # KARAOKE_RUNPOD_API_KEY; empty disables.
     runpod_endpoint_id: str = ""  # KARAOKE_RUNPOD_ENDPOINT_ID; created by scripts/runpod_provision.py.
     runpod_max_job_cost: float = 0.50  # per-job USD ceiling; cancel + raise beyond.
     runpod_daily_cost_cap: float = 5.0  # rolling 24h cap (shares Job.vast_cost_micros bookkeeping).
@@ -181,8 +184,8 @@ class Settings(BaseSettings):
     # ---- R2 (Cloudflare) for audio upload (RunPod /run has ~10MB body cap) ----
     r2_endpoint_url: str = ""  # KARAOKE_R2_ENDPOINT_URL
     r2_bucket: str = ""  # KARAOKE_R2_BUCKET
-    r2_access_key_id: str = ""  # KARAOKE_R2_ACCESS_KEY_ID
-    r2_secret_access_key: str = ""  # KARAOKE_R2_SECRET_ACCESS_KEY
+    r2_access_key_id: SecretStr = SecretStr("")  # KARAOKE_R2_ACCESS_KEY_ID
+    r2_secret_access_key: SecretStr = SecretStr("")  # KARAOKE_R2_SECRET_ACCESS_KEY
     r2_presign_ttl_s: int = 1800  # presigned-URL TTL — must outlive the wall_ceiling backstop (1200s) so the URL is valid when the worker finally runs.
 
     # ---- Audio-file upload (POST /jobs/upload, #172) ----
@@ -218,7 +221,7 @@ class Settings(BaseSettings):
     # CLIProxyAPI). Empty URL or key disables; any gateway failure keeps the
     # raw transcript. Only for the languages benchmarked (comma-separated).
     llm_url: str = ""  # KARAOKE_LLM_URL, e.g. http://<gateway>:23020/v1
-    llm_api_key: str = ""  # KARAOKE_LLM_API_KEY
+    llm_api_key: SecretStr = SecretStr("")  # KARAOKE_LLM_API_KEY
     llm_corrector_model: str = "gpt-6.1-sol"  # KARAOKE_LLM_CORRECTOR_MODEL
     llm_corrector_languages: str = "he"  # KARAOKE_LLM_CORRECTOR_LANGUAGES
     llm_timeout_s: float = 240.0  # KARAOKE_LLM_TIMEOUT_S

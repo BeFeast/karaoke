@@ -37,6 +37,9 @@ uv run --no-sync karaoke-catalog-pilot --auto-check ASSET_ID
 
 # Read-only JSONL input for the evening review gallery.
 uv run --no-sync karaoke-catalog-pilot --gallery
+
+# Read-only JSON ledger of attempts, reservations and budget usage.
+uv run --no-sync karaoke catalog ledger
 ```
 
 `--wait` waits for foreground downloads and the cooldown between starts.

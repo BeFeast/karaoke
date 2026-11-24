@@ -631,7 +631,7 @@ class VastClient:
         runtime — RunPod is the alignment-capable path.
         """
         _ = (align_text, align_lang, whisper_lang)  # accepted, unused on vast
-        api_key = self.settings.vast_api_key.strip()
+        api_key = self.settings.vast_api_key.get_secret_value().strip()
         if not api_key:
             raise VastError("KARAOKE_VAST_API_KEY is not set")
 

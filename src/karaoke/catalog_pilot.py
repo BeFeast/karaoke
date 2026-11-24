@@ -151,6 +151,21 @@ def _utc(value: dt.datetime) -> dt.datetime:
     return value.replace(tzinfo=dt.UTC) if value.tzinfo is None else value.astimezone(dt.UTC)
 
 
+def ledger_spend(attempts, utc_day: dt.date) -> tuple[int, int]:
+    total = day = 0
+    for attempt in attempts:
+        charge = attempt.charged_micros
+        if charge is None:
+            charge = attempt.reserved_micros
+        total += charge
+        # A job crossing UTC midnight counts against both days.
+        start = _utc(attempt.download_started_at).date()
+        end = _utc(attempt.finished_at).date() if attempt.finished_at else utc_day
+        if start <= utc_day <= end:
+            day += charge
+    return total, day
+
+
 def admission(
     *, now: dt.datetime, attempts: list[CatalogAsset], foreground: bool,
     paused: bool, reserve: int,
@@ -165,17 +180,7 @@ def admission(
         return "waiting_for_cooldown"
     if len({a.source_id for a in attempts if a.state != "retired"}) >= MAX_SONGS:
         return "song_limit"
-    total = day = 0
-    for attempt in attempts:
-        charge = attempt.charged_micros
-        if charge is None:
-            charge = attempt.reserved_micros
-        total += charge
-        # A job crossing UTC midnight counts against both touched days.
-        if _utc(attempt.download_started_at).date() <= now.date() <= _utc(
-            attempt.finished_at or now
-        ).date():
-            day += charge
+    total, day = ledger_spend(attempts, now.date())
     if reserve <= 0 or total + reserve > TOTAL_MICROS or day + reserve > DAILY_MICROS:
         return "waiting_for_budget"
     return "eligible"
@@ -288,7 +293,7 @@ async def _recover(session, state, settings, rate):
             remote = job.vast_instance_id.removeprefix("runpod-")
             url = f"{RUNPOD_REST}/{settings.runpod_endpoint_id}/status/{remote}"
             async with httpx.AsyncClient(timeout=15) as http:
-                resp = await http.get(url, headers={"Authorization": f"Bearer {settings.runpod_api_key}"})
+                resp = await http.get(url, headers={"Authorization": f"Bearer {settings.runpod_api_key.get_secret_value()}"})
                 if resp.is_success:
                     terminal = resp.json().get("status") in TERMINAL_STATES | {"COMPLETED"}
                 elif resp.status_code == 404:

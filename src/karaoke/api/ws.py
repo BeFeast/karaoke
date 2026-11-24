@@ -404,7 +404,7 @@ async def _clerk_subject(token: str | None) -> str | None:
     if not token or len(token) > 8192 or not token.isascii() or token.count(".") != 2:
         return None
     settings = get_settings()
-    if secrets.compare_digest(token.encode(), settings.service_token.strip().encode()):
+    if secrets.compare_digest(token.encode(), settings.service_token.get_secret_value().strip().encode()):
         return None
     # This signature also works in the previous release. This identity is
     # used solely for Clerk catalog scopes, which have no email allowlist.
