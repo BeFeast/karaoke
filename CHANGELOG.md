@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.45.1] - 2026-11-24
+
+_Bump: patch_
+
+- Wrap long synced lyrics at readable sizes on the share page, Stage, and Performance. Keep timed word highlights across wrapped rows, including right-to-left lyrics.
+
 ## [v0.45.0] - 2026-11-23
 
 _Bump: minor_
