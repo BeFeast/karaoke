@@ -4,25 +4,29 @@ import {
   clearFailedJobs,
   createJob,
   deleteJob,
-  getHealth,
   type JobOut,
   listJobs,
   type RuntimeConfig,
   uploadJob,
 } from "./api";
+import { AddSong } from "./components/AddSong";
 import { BoothScreen, type JobActions } from "./components/Booth";
+import { CatalogBrowser } from "./components/Catalog";
 import { ConfirmDialog, type ConfirmState } from "./components/ConfirmDialog";
+import { Shell } from "./components/Shell";
+import { FeedbackButton } from "./feedback/Feedback";
+import { t } from "./i18n";
 import { canRetryJob, jobCounts, type JobFilter, jobMatchesFilter } from "./jobStatus";
-import { filterJobs, type JobSort, sortJobs, todaySpendMicros } from "./lib/jobListUtils";
-import { type CatalogShelf, mySongsHash, navigate } from "./router";
+import { filterJobs, type JobSort, sortJobs } from "./lib/jobListUtils";
+import { addHash, type CatalogShelf, navigate } from "./router";
 import { connectJobSocket, isTerminal, type JobEvent } from "./ws";
 
 const POLL_MS = 3000;
 
 const EMPTY_COPY: Record<JobFilter, { title: string; sub: string }> = {
   all: {
-    title: "No jobs yet",
-    sub: "Paste a URL above to split vocals and transcribe the lyrics.",
+    title: "No songs yet",
+    sub: "Tap Add song to prepare your first one.",
   },
   active: { title: "Nothing in flight", sub: "Submitted jobs will show their progress here." },
   completed: { title: "No completed jobs", sub: "Finished jobs and their players land here." },
@@ -36,10 +40,12 @@ export function App(props: {
   // The auth-control node from the boot shell: a LAN chip, or the Clerk avatar.
   authControl?: ReactNode;
   catalogEnabled?: boolean;
-  mySongs?: boolean;
+  view: "my-songs" | "catalog" | "add";
   shelf?: CatalogShelf;
+  /** #/add?url=… prefill (iOS Shortcut, share target). */
+  addUrl?: string;
 }) {
-  const { authControl, catalogEnabled = false, mySongs = true, shelf } = props;
+  const { authControl, catalogEnabled = false, view, shelf, addUrl = "" } = props;
   const [jobs, setJobs] = useState<JobOut[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
@@ -49,7 +55,7 @@ export function App(props: {
   const [sort, setSort] = useState<JobSort>("newest");
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const [wsOpen, setWsOpen] = useState(false);
-  const [version, setVersion] = useState<string | null>(null);
+  const [catalogQuery, setCatalogQuery] = useState("");
   // Mirror of `jobs` for the WS handler — reading state there would force
   // the socket effect to re-run (and reconnect) on every list change.
   const jobsRef = useRef<JobOut[]>([]);
@@ -73,13 +79,6 @@ export function App(props: {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  // Deploy-truth version for the infra strip (GET /health).
-  useEffect(() => {
-    getHealth()
-      .then((h) => setVersion(h.version))
-      .catch(() => setVersion(null));
-  }, []);
 
   // Merge one WS frame into the list in place. Frames carry only
   // status/progress/stage_note/error — never the full row — so unknown jobs
@@ -155,21 +154,22 @@ export function App(props: {
 
   const onCreate = useCallback(
     async (url: string) => {
-      await createJob({ url });
-      if (catalogEnabled) navigate(mySongsHash);
+      const job = await createJob({ url });
       setFilter("all"); // make the freshly-queued job visible regardless of current filter
-      await refresh();
+      void refresh();
+      return job;
     },
-    [refresh, catalogEnabled],
+    [refresh],
   );
 
   // Audio-file upload (#173) — same receipt path as onCreate: the queued row
   // arrives via refresh and then updates over the WS flow, no new plumbing.
   const onUpload = useCallback(
     async (file: File) => {
-      await uploadJob(file);
+      const job = await uploadJob(file);
       setFilter("all");
-      await refresh();
+      void refresh();
+      return job;
     },
     [refresh],
   );
@@ -221,7 +221,6 @@ export function App(props: {
     [jobs, filter, query, sort],
   );
   const counts = useMemo(() => jobCounts(jobs), [jobs]);
-  const todaySpend = useMemo(() => todaySpendMicros(jobs), [jobs]);
 
   // A non-blank search that matches nothing gets its own empty copy — the
   // status-filter copy ("No jobs yet") would be misleading there.
@@ -230,36 +229,55 @@ export function App(props: {
     ? { title: "No matching jobs", sub: "Try a different search, or clear the query." }
     : EMPTY_COPY[filter];
 
+  if (view === "add") {
+    return <AddSong key={addUrl} initialUrl={addUrl} catalogEnabled={catalogEnabled} onCreate={onCreate} onUpload={onUpload} />;
+  }
+
+  const actionsBar = (
+    <>
+      <FeedbackButton />
+      {authControl}
+    </>
+  );
+  // Catalog prepare (one tap, no confirmation — Oleg 2026-11-24): the new job
+  // shows up in My songs.
+  const prepare = async (url: string) => {
+    await onCreate(url);
+    navigate("#/my-songs");
+  };
+
   return (
-    <div style={{ height: "100%", overflow: "auto" }}>
-      <BoothScreen
-        jobs={visible}
-        counts={counts}
-        filter={filter}
-        onFilter={setFilter}
-        query={query}
-        onQuery={setQuery}
-        sort={sort}
-        onSort={setSort}
-        loaded={loaded}
-        listError={listError}
-        actionError={actionError}
-        emptyTitle={copy.title}
-        emptySub={copy.sub}
-        wsOpen={wsOpen}
-        version={version}
-        todaySpend={todaySpend}
-        onCreate={onCreate}
-        onUpload={onUpload}
-        actions={actions}
-        onClearFailed={onClearFailed}
-        authControl={authControl}
-        catalogEnabled={catalogEnabled}
-        mySongs={mySongs}
-        shelf={shelf ?? null}
-      >
-        <ConfirmDialog state={confirmState} onClose={() => setConfirmState(null)} />
-      </BoothScreen>
-    </div>
+    <Shell tab={view} title={view === "catalog" ? t("tab.catalog") : t("tab.mySongs")} actions={actionsBar}
+      catalogEnabled={catalogEnabled}>
+      {view === "catalog" ? (
+        <div className="m-booth sn-legacy">
+          <label className="sn-search">
+            <span className="sn-visually-hidden">{t("catalog.search")}</span>
+            <input className="catalog-search" type="search" value={catalogQuery} maxLength={200} dir="auto"
+              onChange={(event) => setCatalogQuery(event.target.value)} placeholder={t("catalog.placeholder")} />
+          </label>
+          <CatalogBrowser query={catalogQuery} shelf={shelf ?? null} prepare={prepare} pasteUrl={() => navigate(addHash)} />
+        </div>
+      ) : (
+        <BoothScreen
+          jobs={visible}
+          counts={counts}
+          filter={filter}
+          onFilter={setFilter}
+          query={query}
+          onQuery={setQuery}
+          sort={sort}
+          onSort={setSort}
+          loaded={loaded}
+          listError={listError}
+          actionError={actionError}
+          emptyTitle={copy.title}
+          emptySub={copy.sub}
+          actions={actions}
+          onClearFailed={onClearFailed}
+        />
+      )}
+      <ConfirmDialog state={confirmState} onClose={() => setConfirmState(null)} />
+    </Shell>
   );
 }

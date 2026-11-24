@@ -22,8 +22,9 @@ import {
 } from "../api";
 import { formatRelativeTime } from "../lib/jobListUtils";
 import { usePhoneLayout } from "../lib/layout";
-import { goDashboard } from "../router";
-import { MarqueeTopBar } from "./Booth";
+import { FeedbackButton } from "../feedback/Feedback";
+import { t as i18n } from "../i18n";
+import { Shell } from "./Shell";
 import { ConfirmDialog, type ConfirmState } from "./ConfirmDialog";
 import { Toast } from "./Toast";
 
@@ -86,7 +87,7 @@ function PassesSkeleton() {
   );
 }
 
-export function SettingsPage({ authControl }: { authControl?: ReactNode }) {
+export function SettingsPage({ authControl, catalogEnabled = false }: { authControl?: ReactNode; catalogEnabled?: boolean }) {
   // Phone (#187): responsive adaptation of the shipped structure — the mint
   // row stacks (input full width, button below) and the container's side
   // padding tightens to 16. Desktop branch renders identical DOM (undefined
@@ -184,13 +185,10 @@ export function SettingsPage({ authControl }: { authControl?: ReactNode }) {
   const active = tokens.filter((t) => !t.disabled).length;
 
   return (
-    <div style={{ height: "100%", overflow: "auto" }}>
-      <div className="m-booth" style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}>
-        <MarqueeTopBar authControl={authControl} />
-
-        <div style={{ flex: 1, padding: phone ? "24px 16px 20px" : "24px 24px 20px", maxWidth: 720, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column" }}>
-          <button className="m-btn sm ghost" type="button" onClick={goDashboard} style={{ alignSelf: "flex-start", marginLeft: -9 }}>← back to the booth</button>
-          <h1 style={{ margin: "10px 0 2px", fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 26, letterSpacing: "-0.015em" }}>Settings</h1>
+    <Shell tab="settings" title={i18n("tab.settings")} catalogEnabled={catalogEnabled}
+      actions={<><FeedbackButton />{authControl}</>}>
+      <div className="m-booth sn-legacy" style={{ display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", flexDirection: "column" }}>
           <div className="m-mono" style={{ fontSize: 11.5, color: "var(--muted)" }}>{active} active stage pass{active === 1 ? "" : "es"}</div>
 
           <SettingsSection title="stage passes — extension tokens">
@@ -250,6 +248,6 @@ export function SettingsPage({ authControl }: { authControl?: ReactNode }) {
         <ConfirmDialog state={confirmState} onClose={() => setConfirmState(null)} />
         <Toast message={toast} onDone={() => setToast(null)} />
       </div>
-    </div>
+    </Shell>
   );
 }

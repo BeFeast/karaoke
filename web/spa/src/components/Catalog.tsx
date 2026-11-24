@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { type CatalogPage, type CatalogSong, getCatalog } from "../api";
+import { t } from "../i18n";
 import { catalogHash, type CatalogShelf, itemHash } from "../router";
 
 const PRIMARY = ["Hebrew hits", "English hits"];
@@ -90,7 +91,7 @@ export function CatalogBrowser({ query, shelf, prepare, pasteUrl }: {
       ) : !page.songs.length ? (
         <div className="catalog-empty">
           <p>{search ? "Песни не найдены" : "Здесь пока нет песен"}</p>
-          <button type="button" className="m-btn sm" onClick={pasteUrl}>Вставить ссылку</button>
+          <button type="button" className="m-btn sm" onClick={pasteUrl}>{t("action.add")}</button>
         </div>
       ) : search || shelf ? (
         <section>

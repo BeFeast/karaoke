@@ -6,8 +6,12 @@ action:
     assert:
       viewport: [390, 844]
       my_songs_selected: true
-      song_link_visible: true
+      # Visible without scrolling in the bottom 220 px and hit-testable.
+      add_song_pinned: true
+      # One tap opens #/add with focus in the Song link field.
+      add_song_focuses_link: true
   - open: catalog_tab
     assert:
-      add_song_button_visible: true
+      add_song_pinned: true
       add_song_focuses_link: true
+      close_returns_to_tab: true

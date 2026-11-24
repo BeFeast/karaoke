@@ -24,12 +24,13 @@ action:
       lyric_highlight_sync: 0.5
       no_horizontal_scroll: true
       controls_reachable: true
-  - submit: equivalent_youtube_url_for_ready_recording
+  - submit: equivalent_youtube_url_for_ready_recording_in_add_song
     assert:
-      sing_action_visible: true
+      start_singing_offered: true
       processing_progress_shown: false
       new_downloads: 0
       new_gpu_jobs: 0
-      my_songs_selected: true
-  - open: booth_sing_link
+      stage_opened: true
+      library_entry_created: true
+  - open: start_singing_stage
     assert: *player
