@@ -339,7 +339,7 @@ async def inspect_long_lines(tab, evidence, scope, checks, lyrics, performance):
     if not words or not start < end < float("inf"):
         raise VerifyError("The longest lyric fixture must have a bounded interval and word timing")
     await wait_for(lambda: tab.js(
-        'karaokeVerify.snapshot().ready && document.querySelector(".synced-lyrics-list") !== null'
+        'document.querySelector(".synced-lyrics-list") !== null && window.karaokeVerify?.snapshot().ready'
     ), 40, "Player or lyrics never became ready")
     await tab.js("document.fonts.ready.then(() => true)")
     if performance:
