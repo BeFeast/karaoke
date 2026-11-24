@@ -570,7 +570,8 @@ async def run_feedback(args, evidence, profile, job, checks, version, *, live=Fa
                     await tab.call("Page.reload")
                     await wait_for(lambda: tab.js("window.karaokeVerifyFeedback?.length === 0"),
                                    15, "Share page did not reload")
-                await wait_for(lambda: tab.js("!!document.querySelector('.shared-stage-song h1')"),
+                # v0.51+: Report a problem sits in the Stage ⋯ menu, rendered with the song.
+                await wait_for(lambda: tab.js("!!document.querySelector('[data-sn-more], .shared-stage .feedback-trigger')"),
                                25, "Public share song did not load")
                 await tab.js("document.fonts.ready.then(() => true)")
                 if await tab.js(f"!!document.querySelector({json.dumps(MORE_MENU)})"):
