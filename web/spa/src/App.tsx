@@ -132,6 +132,11 @@ export function App(props: {
     return () => window.clearInterval(id);
   }, [wsOpen, refresh]);
 
+  // Opening a shelf (See all, All shelves) starts from that shelf, not the
+  // last search.
+  const shelfKey = shelf ? `${shelf.axis}/${shelf.value}` : "";
+  useEffect(() => setCatalogQuery(""), [shelfKey]);
+
   useEffect(() => {
     if (!readyToast) return;
     const id = window.setTimeout(() => setReadyToast(null), 8000);
@@ -205,25 +210,27 @@ export function App(props: {
       {authControl}
     </>
   );
-  // Catalog prepare (one tap, no confirmation — Oleg 2026-11-24): the new job
-  // shows up in My songs.
-  const prepare = async (url: string) => {
-    await onCreate(url);
-    navigate("#/my-songs");
-  };
 
   return (
     <Shell tab={view} title={view === "catalog" ? t("tab.catalog") : t("tab.mySongs")} actions={actionsBar}
       catalogEnabled={catalogEnabled}>
       {view === "catalog" ? (
-        <div className="m-booth sn-legacy">
-          <label className="sn-search">
+        <>
+          <label className="sn-search-inline sn-catalog-search">
+            <Icon name="search" />
             <span className="sn-visually-hidden">{t("catalog.search")}</span>
             <input className="catalog-search" type="search" value={catalogQuery} maxLength={200} dir="auto"
-              onChange={(event) => setCatalogQuery(event.target.value)} placeholder={t("catalog.placeholder")} />
+              autoComplete="off" onChange={(event) => setCatalogQuery(event.target.value)} placeholder={t("catalog.placeholder")} />
+            {catalogQuery && (
+              <button type="button" className="sn-iconbtn" aria-label={t("catalog.clear")} onClick={() => setCatalogQuery("")}>
+                <Icon name="x" size={20} />
+              </button>
+            )}
           </label>
-          <CatalogBrowser query={catalogQuery} shelf={shelf ?? null} prepare={prepare} pasteUrl={() => navigate(addHash)} />
-        </div>
+          {/* Prepare is one tap (Oleg, 2026-11-24): the card turns into Preparing. */}
+          <CatalogBrowser query={catalogQuery} shelf={shelf ?? null} jobs={jobs} prepare={onCreate}
+            onAdd={() => navigate(addHash)} />
+        </>
       ) : (
         <MySongs jobs={jobs} loaded={loaded} listError={listError} actionError={actionError} last={last}
           catalogEnabled={catalogEnabled} onReload={() => void refresh()} onRetry={onRetry} onRemove={onRemove} />

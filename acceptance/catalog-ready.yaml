@@ -11,6 +11,8 @@ action:
       shelves_scroll_independently: true
       viewport: [390, 844]
       full_shelf_link_works: true
+      search_dir_auto: true
+      add_song_pinned: true
   - search: partial_artist_or_title_in_each_language
     assert:
       matching_recording_visible: true
