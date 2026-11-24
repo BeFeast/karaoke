@@ -6,9 +6,9 @@ import asyncio
 import datetime as dt
 import json
 import math
-import re
 import secrets
 import shutil
+from contextlib import suppress
 from pathlib import Path
 from typing import Literal
 
@@ -27,6 +27,7 @@ from karaoke.catalog import (
     pilot_job_root,
     youtube_url,
 )
+from karaoke.catalog_auto_check import Thresholds, measure
 from karaoke.catalog_identity import PILOT_OWNER
 from karaoke.config import Settings, get_settings
 from karaoke.db.models import (
@@ -45,13 +46,16 @@ from karaoke.worker.scheduler import _has_runpod, _use_runpod
 
 MAX_SONGS = 30
 TOTAL_MICROS = 1_000_000
-DAILY_MICROS = 350_000
+DAILY_MICROS = 1_000_000
 COOLDOWN = dt.timedelta(minutes=5, seconds=1)
 EXECUTION_SECONDS = 480
-# Flex startup and billing rounding are included in each reservation.
-BILLING_SECONDS = EXECUTION_SECONDS + 120
+BILLING_OVERHEAD_SECONDS = 120
+MIN_EXECUTION_SECONDS = 30
+RESERVATION_FLOOR_MICROS = 50_000
 RUNNER_LOCK = 0x534F4E4552454C49
 DEFAULT_MANIFEST = Path("catalog/pilot-2026-11-24.json")
+DEFAULT_THRESHOLDS = Path("catalog/auto-check.json")
+PILOT_LANGUAGES = ("en", "he")
 
 
 class Appearance(BaseModel):
@@ -90,6 +94,8 @@ def read_seeds(path: Path) -> list[SeedSong]:
 def unique_seeds(manifest: SeedManifest) -> list[SeedSong]:
     songs: dict[str, SeedSong] = {}
     for song in manifest.songs:
+        if song.language not in PILOT_LANGUAGES:
+            raise ValueError(f"{song.video_id}: catalog language must be English or Hebrew")
         if not {a.playlist for a in song.appearances} <= manifest.playlists.keys():
             raise ValueError(f"{song.video_id}: unknown provenance playlist")
         previous = songs.get(song.video_id)
@@ -157,7 +163,7 @@ def admission(
         return "waiting_for_foreground"
     if any(now - _utc(a.finished_at or a.download_started_at) < COOLDOWN for a in attempts):
         return "waiting_for_cooldown"
-    if len({a.source_id for a in attempts}) >= MAX_SONGS:
+    if len({a.source_id for a in attempts if a.state != "retired"}) >= MAX_SONGS:
         return "song_limit"
     total = day = 0
     for attempt in attempts:
@@ -175,30 +181,81 @@ def admission(
     return "eligible"
 
 
-def _checked_exports(settings: Settings, job: Job) -> str | None:
+def _charge(seconds: int, rate: float) -> int:
+    return math.ceil(seconds * rate / 3600 * 1_000_000)
+
+
+def reservation(attempts: list[CatalogAsset], rate: float) -> int:
+    observed = max((
+        a.charged_micros for a in attempts
+        if a.charged_micros is not None
+        and a.job.status == JobStatus.completed and a.job.vast_cost_micros is not None
+    ), default=0)
+    return max(
+        RESERVATION_FLOOR_MICROS, (observed * 3 + 1) // 2,
+        _charge(BILLING_OVERHEAD_SECONDS + MIN_EXECUTION_SECONDS, rate),
+    )
+
+
+def _check_payload(settings: Settings, asset: CatalogAsset, thresholds: Thresholds) -> tuple[str, str, str]:
+    job = asset.job
     exports = pilot_job_root(settings.artifact_root, job.job_token) / "exports"
-    for name in ("vocals.mp3", "karaoke.mp3"):
-        file = exports / name
-        if not file.is_file() or not file.stat().st_size:
-            return None
     files = snapshot(exports)
-    lrc = files["lyrics.lrc"]
-    if not lrc:
-        return None
-    lines = re.findall(rb"(?m)^\[\d+:\d+(?:[.:]\d+)?\][^\r\n]+", lrc)
-    return revision(files) if len(lines) >= 2 else None
+    checked_revision = revision(files)
+    # The exact duration measured during source probing can be fractional.
+    metadata = json.loads(files["metadata.json"] or b"{}")
+    duration = metadata.get("duration") if isinstance(metadata, dict) else None
+    if type(duration) not in (int, float) or not math.isfinite(duration):
+        duration = job.duration
+    report = measure(exports, duration, files["lyrics.lrc"], thresholds)
+    report.check("unchanged_lyric_revision", not asset.lyric_revision or asset.lyric_revision == checked_revision)
+    report.check("stable_exports", revision(snapshot(exports)) == checked_revision)
+    result = "review" if report.reasons else "ready"
+    audit = json.dumps({
+        "who": "auto-check", "asset_id": asset.id, "video_id": asset.source.external_id,
+        "at": dt.datetime.now(dt.UTC).isoformat(), "result": result,
+        **report.model_dump(),
+    }, allow_nan=False)
+    return result, audit, checked_revision
 
 
-async def settle(session: AsyncSession, asset: CatalogAsset, state: CatalogPilotState, settings: Settings) -> None:
+async def auto_check(session: AsyncSession, asset: CatalogAsset, settings: Settings, thresholds: Thresholds) -> None:
+    job = asset.job
+    if asset.state != "review" or job.status != JobStatus.completed or job.owner_subject != PILOT_OWNER:
+        raise ValueError("auto-check requires a completed pilot asset in review")
+    try:
+        result, audit, checked_revision = await asyncio.to_thread(_check_payload, settings, asset, thresholds)
+    except (OSError, ValueError):
+        result, checked_revision = "review", None
+        audit = json.dumps({
+            "who": "auto-check", "asset_id": asset.id, "video_id": asset.source.external_id,
+            "at": dt.datetime.now(dt.UTC).isoformat(), "result": result,
+            "values": {}, "thresholds": thresholds.model_dump(), "reasons": ["unreadable_exports"],
+        })
+    if result == "ready":
+        asset.lyric_revision = checked_revision
+    asset.state = result
+    job.stage_note = audit
+    # Commit the audit and visibility together. Jobs owned by the pilot are
+    # hidden by the existing API. Owner links only get their own stage_note.
+    await session.commit()
+    print(audit, flush=True)
+    if result == "ready":
+        await asyncio.to_thread(
+            shutil.rmtree, pilot_job_root(settings.artifact_root, job.job_token) / "work",
+            ignore_errors=True,
+        )
+
+
+async def settle(session: AsyncSession, asset: CatalogAsset, state: CatalogPilotState, rate: float) -> None:
     job = asset.job
     asset.finished_at = dt.datetime.now(dt.UTC)
     if job.status == JobStatus.completed:
         asset.charged_micros = (
-            job.vast_cost_micros + math.ceil(asset.reserved_micros * 120 / BILLING_SECONDS)
+            job.vast_cost_micros + _charge(BILLING_OVERHEAD_SECONDS, rate)
             if job.vast_cost_micros is not None else asset.reserved_micros
         )
-        asset.lyric_revision = _checked_exports(settings, job)
-        asset.state = "review" if asset.lyric_revision else "failed"
+        asset.state = "review"
         if asset.charged_micros > asset.reserved_micros:
             state.paused = True
     else:
@@ -212,7 +269,7 @@ async def settle(session: AsyncSession, asset: CatalogAsset, state: CatalogPilot
     await session.commit()
 
 
-async def _recover(session, state, settings):
+async def _recover(session, state, settings, rate):
     active = await session.scalars(
         select(CatalogAsset).where(CatalogAsset.state == "processing").options(joinedload(CatalogAsset.job))
     )
@@ -221,7 +278,7 @@ async def _recover(session, state, settings):
         if job.status == JobStatus.completed or (
             job.progress < 75 and job.status in {JobStatus.failed, JobStatus.cancelled}
         ):
-            await settle(session, asset, state, settings)
+            await settle(session, asset, state, rate)
             continue
         # A received ID must be checked after a restart. With no ID, allow
         # the provider TTL, the download timeout and an ambiguity margin to
@@ -243,7 +300,7 @@ async def _recover(session, state, settings):
         job.status = JobStatus.failed
         if not job.error:
             job.error = "Catalog pilot interrupted before exports were finalized"
-        await settle(session, asset, state, settings)
+        await settle(session, asset, state, rate)
     return True
 
 
@@ -254,9 +311,62 @@ async def _record_runpod_id(factory, job_id: int, remote: str) -> None:
         await session.commit()
 
 
+def _reviews():
+    return (
+        select(CatalogAsset).join(CatalogAsset.source).join(CatalogSource.recording)
+        .where(
+            CatalogAsset.state == "review", CatalogSource.provider == "youtube",
+            CatalogSource.available.is_(True), CatalogSource.metadata_allowed.is_(True),
+            CatalogSource.playback_allowed.is_(True), CatalogRecording.language.in_(PILOT_LANGUAGES),
+        )
+        .options(joinedload(CatalogAsset.job), joinedload(CatalogAsset.source))
+        .order_by(CatalogAsset.id)
+    )
+
+
+def _has_audit(job: Job) -> bool:
+    return (job.stage_note or "").startswith('{"who": "auto-check",')
+
+
+async def _gallery(factory) -> None:
+    async with factory() as session:
+        for asset in await session.scalars(_reviews()):
+            print(json.dumps({
+                "asset_id": asset.id, "video_id": asset.source.external_id,
+                "title": asset.job.title, "artist": asset.job.artist,
+                "auto_check": json.loads(asset.job.stage_note) if _has_audit(asset.job) else None,
+            }, ensure_ascii=False), flush=True)
+
+
+async def _retire_out_of_scope(session: AsyncSession, settings: Settings) -> None:
+    sources = list(await session.scalars(
+        select(CatalogSource).join(CatalogSource.recording)
+        .where(CatalogRecording.language.not_in(PILOT_LANGUAGES))
+    ))
+    for source in sources:
+        source.available = source.metadata_allowed = source.playback_allowed = False
+    retired = list(await session.scalars(
+        select(CatalogAsset).where(
+            CatalogAsset.source_id.in_([source.id for source in sources]),
+            CatalogAsset.state != "processing",
+        ).options(joinedload(CatalogAsset.job))
+    ))
+    for asset in retired:
+        asset.state = "retired"
+    await session.commit()
+    for asset in retired:
+        if asset.job.owner_subject == PILOT_OWNER:
+            root = pilot_job_root(settings.artifact_root, asset.job.job_token)
+            with suppress(FileNotFoundError):
+                await asyncio.to_thread(shutil.rmtree, root)
+
+
 async def execute(args: argparse.Namespace, manifest: SeedManifest, settings: Settings) -> None:
     engine, factory = create_engine_and_sessionmaker(settings.database_url)
     try:
+        if args.gallery:
+            await _gallery(factory)
+            return
         async with engine.connect() as lock:
             if lock.dialect.name != "postgresql":
                 raise ValueError("catalog pilot writes require coordinator Postgres")
@@ -275,70 +385,38 @@ async def execute(args: argparse.Namespace, manifest: SeedManifest, settings: Se
 async def _execute_locked(args, manifest, settings, factory) -> None:
     loop = asyncio.get_running_loop()
     async with factory() as session:
+        thresholds = getattr(args, "thresholds", None) or Thresholds()
+        if (asset_id := getattr(args, "auto_check", None)) is not None:
+            asset = await session.scalar(_reviews().where(CatalogAsset.id == asset_id))
+            if asset is None:
+                raise ValueError("asset is not eligible for auto-check")
+            await auto_check(session, asset, settings, thresholds)
+            return
         state = await session.get(CatalogPilotState, 1)
         if state is None:
             state = CatalogPilotState(id=1, paused=False)
             session.add(state)
         sources = await import_seeds(session, manifest)
-        await session.commit()
+        await _retire_out_of_scope(session, settings)
         if args.import_only:
             print(f"imported {len(sources)} catalog records")
-            return
-        if args.publish:
-            asset = await session.scalar(
-                select(CatalogAsset)
-                .join(CatalogAsset.source)
-                .where(
-                    CatalogSource.external_id == args.publish,
-                    CatalogSource.available.is_(True),
-                    CatalogSource.metadata_allowed.is_(True),
-                    CatalogSource.playback_allowed.is_(True),
-                    CatalogAsset.state.in_(("review", "ready")),
-                )
-                .options(joinedload(CatalogAsset.job))
-                .order_by(CatalogAsset.id.desc())
-            )
-            if asset is None or not asset.lyric_revision or _checked_exports(settings, asset.job) != asset.lyric_revision:
-                raise ValueError("publication requires reviewed stems and an unchanged synced lyric revision")
-            asset.state = "ready"
-            await session.commit()
-            await asyncio.to_thread(
-                shutil.rmtree, pilot_job_root(settings.artifact_root, asset.job.job_token) / "work",
-                ignore_errors=True,
-            )
-            print(
-                f"published {args.publish}, GPU estimate ${(asset.job.vast_cost_micros or 0) / 1_000_000:.6f}, "
-                f"budget charge ${asset.charged_micros / 1_000_000:.6f}"
-            )
             return
         if not _use_runpod(settings) or not _has_runpod(settings):
             raise ValueError("catalog processing requires the configured coordinator RunPod endpoint")
         rate = args.usd_per_hour_ceiling
         if not math.isfinite(rate) or rate <= 0 or rate < settings.runpod_hourly_rate_estimate:
             raise ValueError("--usd-per-hour-ceiling must cover the endpoint's billed hourly rate")
-        reserve = math.ceil(rate * BILLING_SECONDS / 3600 * 1_000_000)
-        if reserve > DAILY_MICROS:
-            raise ValueError("one reservation would exceed the daily pilot budget")
-        if not await _recover(session, state, settings):
+        if not await _recover(session, state, settings, rate):
             print("waiting_for_active")
             return
+        await _retire_out_of_scope(session, settings)
+        for asset in await session.scalars(_reviews()):
+            if not _has_audit(asset.job):
+                await auto_check(session, asset, settings, thresholds)
         if args.resume:
             state.paused = False
             await session.commit()
 
-        if settings.runpod_max_job_cost > 0:
-            max_seconds = math.floor(settings.runpod_max_job_cost * 3600 / rate) - 120
-        else:
-            max_seconds = EXECUTION_SECONDS
-        execution_seconds = min(EXECUTION_SECONDS, max_seconds)
-        if execution_seconds < 30:
-            raise ValueError("the configured GPU job cap is too small for the pilot")
-        pilot_settings = settings.model_copy(update={
-            "runpod_max_job_cost": min(settings.runpod_max_job_cost, reserve / 1_000_000)
-            if settings.runpod_max_job_cost > 0 else reserve / 1_000_000,
-            "runpod_wall_ceiling_s": min(settings.runpod_wall_ceiling_s, execution_seconds),
-            "runpod_hourly_rate_estimate": rate,
-        })
         dispatched = 0
         for source in sources:
             if dispatched >= args.limit:
@@ -346,7 +424,7 @@ async def _execute_locked(args, manifest, settings, factory) -> None:
             if not (source.available and source.metadata_allowed and source.playback_allowed):
                 continue
             while True:
-                attempts = list(await session.scalars(select(CatalogAsset)))
+                attempts = list(await session.scalars(select(CatalogAsset).options(joinedload(CatalogAsset.job))))
                 if any(a.source_id == source.id for a in attempts):
                     break
                 await lock_download_admission(session)
@@ -357,6 +435,7 @@ async def _execute_locked(args, manifest, settings, factory) -> None:
                     ).limit(1)
                 )
                 now = dt.datetime.now(dt.UTC)
+                reserve = reservation(attempts, rate)
                 reason = admission(
                     now=now, attempts=attempts, foreground=foreground is not None,
                     paused=state.paused, reserve=reserve,
@@ -369,6 +448,18 @@ async def _execute_locked(args, manifest, settings, factory) -> None:
                         await asyncio.sleep(15)
                         continue
                     return
+                cap = min(settings.runpod_max_job_cost or 1.0, reserve / 1_000_000)
+                execution_seconds = min(
+                    EXECUTION_SECONDS, math.floor(settings.runpod_wall_ceiling_s),
+                    math.floor(cap * 3600 / rate) - BILLING_OVERHEAD_SECONDS,
+                )
+                if execution_seconds < MIN_EXECUTION_SECONDS:
+                    raise ValueError("the configured GPU job cap is too small for the pilot")
+                pilot_settings = settings.model_copy(update={
+                    "runpod_max_job_cost": cap,
+                    "runpod_wall_ceiling_s": execution_seconds,
+                    "runpod_hourly_rate_estimate": rate,
+                })
                 track = source.recording.track
                 job = Job(
                     job_token=secrets.token_urlsafe(24), owner_subject=PILOT_OWNER,
@@ -399,10 +490,12 @@ async def _execute_locked(args, manifest, settings, factory) -> None:
                 )
                 await session.refresh(job)
                 if job.status == JobStatus.completed or job.progress < 75:
-                    await settle(session, asset, state, settings)
-                elif not await _recover(session, state, settings):
+                    await settle(session, asset, state, rate)
+                elif not await _recover(session, state, settings, rate):
                     print("waiting_for_active", flush=True)
                     return
+                if asset.state == "review":
+                    await auto_check(session, asset, settings, thresholds)
                 print(
                     f"{source.external_id} {asset.state} ${asset.charged_micros / 1_000_000:.6f}",
                     flush=True,
@@ -421,7 +514,9 @@ def main() -> None:
     modes.add_argument("--dry-run", action="store_true")
     modes.add_argument("--import-only", action="store_true")
     modes.add_argument("--run", action="store_true")
-    modes.add_argument("--publish", metavar="VIDEO_ID", help="Publish after reviewing the intro and chorus")
+    modes.add_argument("--auto-check", type=int, metavar="ASSET_ID", help="Check a review asset and publish on pass")
+    modes.add_argument("--gallery", action="store_true", help="Print unpublished review assets and their measurements")
+    parser.add_argument("--check-config", type=Path, default=DEFAULT_THRESHOLDS)
     parser.add_argument("--limit", type=int, choices=range(1, MAX_SONGS + 1), default=MAX_SONGS)
     parser.add_argument("--usd-per-hour-ceiling", type=float, default=0)
     parser.add_argument("--wait", action="store_true", help="Wait for cooldown and foreground downloads")
@@ -429,16 +524,19 @@ def main() -> None:
     args = parser.parse_args()
     manifest = SeedManifest.model_validate_json(args.manifest.read_text(encoding="utf-8"))
     seeds = unique_seeds(manifest)
-    if not (args.run or args.publish or args.import_only):
+    if not (args.run or args.auto_check is not None or args.import_only or args.gallery):
         print(json.dumps({
             "unique": len(seeds), "eligible": sum(s.available and s.metadata_allowed and bool((s.playback_basis or "").strip()) for s in seeds),
-            "total_usd": 1.0, "utc_day_usd": 0.35, "cooldown_seconds": 300,
+            "total_usd": TOTAL_MICROS / 1_000_000, "utc_day_usd": DAILY_MICROS / 1_000_000,
+            "cooldown_seconds": int(COOLDOWN.total_seconds()),
             "sources": [s.video_id for s in seeds],
         }, ensure_ascii=False))
     else:
         try:
+            if args.run or args.auto_check is not None:
+                args.thresholds = Thresholds.model_validate_json(args.check_config.read_bytes())
             asyncio.run(execute(args, manifest, get_settings()))
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             parser.error(str(exc))
 
 

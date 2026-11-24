@@ -2,6 +2,7 @@ state:
   authenticated_owner: clerk_user
   catalog_fixture: ready_recording_with_synced_lyrics
   profiles: [iphone, android]
+  search_languages: [he, en]
 action:
   - open: booth
     assert:
@@ -10,12 +11,12 @@ action:
       shelves_scroll_independently: true
       viewport: [390, 844]
       full_shelf_link_works: true
-  - search: partial_artist_or_title
+  - search: partial_artist_or_title_in_each_language
     assert:
       matching_recording_visible: true
       recording_version_visible: true
       shelves_replaced_by_results: true
-      sing_action_visible: true
+      action_matches_readiness: true
   - open: catalog_sing_link
     assert: &player
       playback_advances: 0.75

@@ -1,0 +1,13 @@
+{
+  "duration_tolerance_s": 2,
+  "rms_floor": 0.015,
+  "vocal_active_floor": 0.003,
+  "vocal_active_relative": 0.18,
+  "leakage_gain_max": 0.12,
+  "leakage_correlation_max": 0.20,
+  "lyrics_coverage_min": 0.80,
+  "lyric_gap_max_s": 5,
+  "lyric_line_window_s": 8,
+  "onset_rise_ratio": 1.55,
+  "onset_offset_max_s": 0.50
+}

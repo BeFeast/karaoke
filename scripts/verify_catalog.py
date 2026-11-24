@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -33,18 +34,30 @@ async def run_pilot_checks(evidence, scenario, root):
         (["test_priority_cooldown_and_reservations"], {"pilot_state": "waiting_for_cooldown", "new_pilot_downloads": 0}),
         (["test_priority_cooldown_and_reservations"], {"pilot_state": "waiting_for_budget", "new_gpu_jobs": 0}),
         (
+            ["test_reservation_uses_observed_charges_and_stays_within_caps"],
+            {"reservation_micros": 118532, "uncertain_charge_influences_reservation": False},
+        ),
+        (
             ["test_yt_dlp_gate_stops_and_pauses_without_gpu", "test_pilot_ytdlp_never_retries"],
             {"pilot_state": "paused", "new_gpu_jobs": 0, "automatic_retries": 0},
+        ),
+        (
+            ["test_auto_check_publishes_only_on_all_checks"],
+            {"all_checks_pass": "ready", "any_check_fails": "review", "audit_actor": "auto-check"},
+        ),
+        (
+            ["test_import_retires_excluded_assets_without_erasing_the_ledger"],
+            {"excluded_asset_hidden": True, "excluded_asset_charge_retained": True},
         ),
     ]
     for index, (step, (tests, observations)) in enumerate(zip(scenario["action"], cases, strict=True), 1):
         scope = f"pilot.{index}"
         result = await asyncio.to_thread(
             subprocess.run,
-            [sys.executable, "-m", "pytest", "-q", *[f"tests/test_catalog_pilot.py::{test}" for test in tests]],
+            [sys.executable, "-m", "pytest", "-q", "-rs", *[f"tests/test_catalog_pilot.py::{test}" for test in tests]],
             cwd=root, capture_output=True, text=True, timeout=60, check=False,
         )
-        if result.returncode:
+        if result.returncode or "SKIPPED" in result.stdout:
             evidence.skip(scope, step["assert"], result.stdout[-800:])
         else:
             check(evidence, scope, step, **observations)
@@ -126,7 +139,7 @@ async def type_into(tab, selector, text):
     field = f"document.querySelector({json.dumps(selector)})"
     point = await wait_for(lambda: tab.element_point(field), 15, "Search or submit field not visible")
     await tab.tap(point)
-    await tab.js(f"{field}.focus()")
+    await tab.js(f"{field}.select()")
     await tab.call("Input.insertText", {"text": text})
 
 
@@ -136,7 +149,7 @@ async def ready_fixture(tab, language=None):
         raise VerifyError("The signed-in account cannot read the catalog")
     ready = [song for song in catalog["body"]["songs"] if song["stage_token"]]
     if not ready:
-        raise VerifyError("No reviewed ready catalog recording is published")
+        raise VerifyError("No auto-checked catalog recording is published")
     return next((song for song in ready if song["language"] == language), ready[0])
 
 
@@ -168,7 +181,7 @@ async def verify_ready(args, api, evidence, scenario, script, inspect_player):
         job = None
         async with clerk_tab(args, evidence, profile, script) as (tab, subject):
             scope = f"{profile}.catalog"
-            song = await ready_fixture(tab, "he" if profile == "iphone" else "ru")
+            song = await ready_fixture(tab, "he" if profile == "iphone" else "en")
             card = f'.catalog-card[data-catalog-song="{song["id"]}"]'
             try:
                 await wait_for(lambda: tab.js("!!document.querySelector('.catalog-shelf-scroll')"), 15, "No catalog shelves")
@@ -190,19 +203,16 @@ async def verify_ready(args, api, evidence, scenario, script, inspect_player):
                 await evidence.capture(tab, scope, "full-shelf")
                 check(evidence, scope, booth,
                       ready_recording_visible=layout["ready"],
-                      primary_shelves_visible={"Хиты на иврите", "Русские хиты"} <= set(layout["names"]),
+                      primary_shelves_visible={"Hebrew hits", "English hits"} <= set(layout["names"]),
                       shelves_scroll_independently=layout["noPageScroll"] and layout["shelfScroll"],
                       viewport=layout["viewport"], full_shelf_link_works=opened)
-                term = next((word for word in song["title"].split() if len(word) >= 4), song["title"])
-                await type_into(tab, ".catalog-search", term[:max(2, min(5, len(term) - 1))])
-                await wait_for(lambda card=card: tab.js(f"!!document.querySelector({json.dumps(card)})"), 15, "Partial search did not match ready fixture")
-                details = await tab.js(f"document.querySelector({json.dumps(card)})?.textContent")
-                check(evidence, f"{scope}.search", search,
-                      matching_recording_visible=song["title"] in details,
-                      recording_version_visible=song["version"] in details,
-                      shelves_replaced_by_results=await tab.js("!document.querySelector('.catalog-shelf')"),
-                      sing_action_visible="Sing" in details)
-                await evidence.capture(tab, scope, "search")
+                catalog = (await clerk_api(tab, "/catalog"))["body"]["songs"]
+                for language in scenario["state"]["search_languages"]:
+                    match = song if song["language"] == language else next(
+                        row for row in catalog if row["language"] == language
+                    )
+                    await check_search(tab, match, evidence, scope, search)
+                await type_into(tab, ".catalog-search", search_term(song))
                 lyrics = (await clerk_api(tab, f"/share/{song['stage_token']}/lyrics"))["body"]
                 await click(tab, stage_link(song["stage_token"]))
                 await inspect_player(tab, evidence, f"{scope}.sing", start["assert"], lyrics)
@@ -228,6 +238,28 @@ async def verify_ready(args, api, evidence, scenario, script, inspect_player):
                 await inspect_player(tab, evidence, f"{scope}.my-songs-sing", personal_stage["assert"], lyrics)
             finally:
                 await cleanup(api, job, args, evidence, scope, linked=True)
+
+
+def search_term(song):
+    pattern = r"[א-ת]{3,}" if song["language"] == "he" else r"[A-Za-z]{3,}"
+    word = re.search(pattern, f"{song['title']} {song['artist']}")
+    if not word:
+        raise VerifyError(f"Catalog search fixture lacks {song['language']} text")
+    return word[0][:min(5, len(word[0]) - 1)]
+
+
+async def check_search(tab, song, evidence, scope, step):
+    language = song["language"]
+    card = f'.catalog-grid [data-catalog-song="{song["id"]}"]'
+    await type_into(tab, ".catalog-search", search_term(song))
+    details = await wait_for(lambda: tab.js(f"document.querySelector({json.dumps(card)})?.textContent"),
+                             15, f"Partial {language} search did not match its catalog recording")
+    check(evidence, f"{scope}.search-{language}", step,
+          matching_recording_visible=song["title"] in details,
+          recording_version_visible=song["version"] in details,
+          shelves_replaced_by_results=await tab.js("!document.querySelector('.catalog-shelf')"),
+          action_matches_readiness=("Sing" if song["stage_token"] else "Prepare") in details)
+    await evidence.capture(tab, scope, f"search-{language}")
 
 
 async def verify_miss(args, api, evidence, scenario, script, inspect_player):

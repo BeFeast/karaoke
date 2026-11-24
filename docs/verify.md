@@ -83,9 +83,9 @@ signs in through the deployed Clerk SDK. Use two distinct testing accounts
 with permission to submit private jobs. Tickets and job tokens are
 redacted from output. Never commit the ticket executable's credentials.
 
-Publish at least one reviewed pilot recording first, using
+Run the pilot until auto-check publishes an eligible recording, using
 [`catalog/README.md`](../catalog/README.md). The ready scenario checks both
-mobile profiles, shelves and full shelf links, search, one-tap Stage, and
+mobile profiles, shelves and full shelf links, Hebrew and English search, one-tap Stage, and
 the owner link created by submitting an equivalent URL. The shared scenario
 checks two Clerk owners and verifies that a guest receives neither exports
 nor a public share. The private miss scenario creates one real GPU job and
@@ -94,5 +94,7 @@ deletes it on exit. To override the default private source, set
 catalog that is suitable for processing and has audible lyrics.
 
 `catalog-pilot` exercises the actual import, admission and pause logic in
-an isolated database with a fixed clock and stub providers. It starts no
-live precompute jobs.
+an isolated database with a fixed clock and stub providers. It also checks
+retirement, the observed-cost reservation and FFmpeg-based auto-check with
+local audio fixtures. Install FFmpeg on the verifier host. It starts no live
+precompute jobs.
