@@ -17,7 +17,7 @@ final class PlayerSession {
     /// Mic toggle memory: the level to restore after muting.
     private(set) var lastAudibleVocals = Prefs.defaultVocalPct
 
-    @ObservationIgnored private let prefs: Prefs
+    private let prefs: Prefs
     @ObservationIgnored private var assets: SongAssets?
     @ObservationIgnored private var loading: Task<Void, Never>?
     @ObservationIgnored private var lastSaved = Date.distantPast

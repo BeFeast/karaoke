@@ -24,7 +24,7 @@ final class Prefs {
     /// slider or in Settings (Oleg 2026-11-24; web #380). Mute never changes it.
     static let defaultVocalPct = 50
 
-    @ObservationIgnored private let store: UserDefaults
+    private let store: UserDefaults
 
     var lyricsSize: LyricsSize { didSet { store.set(lyricsSize.rawValue, forKey: "lyricsSize") } }
     var vocalsDefault: Int { didSet { store.set(vocalsDefault, forKey: "vocalsDefault") } }

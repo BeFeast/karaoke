@@ -233,7 +233,8 @@ private enum CardState: Equatable {
     case ready, prepare, preparing(job: Int?, pct: Int)
 }
 
-private struct CardModel {
+@MainActor
+private enum CardModel {
     static func state(of song: CatalogSong, library: LibraryStore, actions: CatalogActions) -> CardState {
         if song.stageToken != nil { return .ready }
         let id = YouTube.id(of: song.sourceUrl)

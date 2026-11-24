@@ -229,9 +229,14 @@ final class StemPlayer {
             guard let result = try? await URLSession.shared.data(from: coverURL),
                   let image = UIImage(data: result.0) else { return }
             guard let self, !self.remoteTargets.isEmpty else { return }
-            self.artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+            self.artwork = Self.makeArtwork(image)
             self.updateNowPlaying()
         }
+    }
+
+    /// Built outside the main actor: MediaPlayer calls the handler on its own queue.
+    private nonisolated static func makeArtwork(_ image: UIImage) -> MPMediaItemArtwork {
+        MPMediaItemArtwork(boundsSize: image.size) { _ in image }
     }
 
     private func installAudioObservers() {
