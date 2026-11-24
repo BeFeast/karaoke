@@ -16,7 +16,13 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import yaml
-from verify_catalog import run_pilot_checks, verify_add_song, verify_miss, verify_ready, verify_shared
+from verify_catalog import (
+    run_pilot_checks,
+    verify_add_song,
+    verify_miss,
+    verify_ready,
+    verify_shared,
+)
 from verify_cdp import VerifyError, open_tab, origin, wait_for
 from ytdlp_canary import _split_urls
 
