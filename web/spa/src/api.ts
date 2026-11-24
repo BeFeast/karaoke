@@ -63,6 +63,7 @@ export interface RuntimeConfig {
   // keep anonymous LAN mode even when Clerk is enabled for public clients.
   trusted_client: boolean;
   public_base_url: string;
+  feedback_base_url?: string;
 }
 
 // One output file of a job (server `ArtifactOut`).
@@ -158,6 +159,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export interface HealthOut {
   status: string;
   version: string;
+  build?: string;
 }
 
 // /health is public — fetched by the sign-in wall (pre-auth) and the booth

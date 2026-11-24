@@ -10,6 +10,7 @@
         "@fontsource/bungee": "^5.2.7",
         "@fontsource/geist": "^5.2.9",
         "@fontsource/geist-mono": "^5.2.8",
+        "html2canvas-pro": "2.6.4",
         "react": "^18.3.1",
         "react-dom": "^18.3.1",
         "wavesurfer.js": "^7.12.7",
@@ -233,6 +234,8 @@
     "gensync": ["gensync@1.0.0-beta.2", "", {}, "sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg=="],
 
     "glob-to-regexp": ["glob-to-regexp@0.4.1", "", {}, "sha512-lkX1HJXwyMcprw/5YUZc2s7DrpAiHB21/V+E1rHUrVNokkvB6bqMzT0VfV6/86ZNabt1k14YOIaT7nDvOX3Iiw=="],
+
+    "html2canvas-pro": ["html2canvas-pro@2.6.4", "", {}, "sha512-1SMOfXwMACgQPt1wcKOtuRnBxkcREiJQdOyVpgp6a4/z9Rb/v7QPcvyu5GlxdDDiMznLwKxX5KwvtSlNlZJ7Wg=="],
 
     "js-cookie": ["js-cookie@3.0.7", "", {}, "sha512-z/wZZgDrkNV1eA0ULjM/F9/50Ya8fbzgKneSpoPsXSGd0KnpdtHfOZWK+GcwLk+EZbS4F9RBhU+K2RgzuDaItw=="],
 

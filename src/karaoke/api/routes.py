@@ -332,6 +332,7 @@ class ConfigOut(BaseModel):
     clerk_enabled: bool
     trusted_client: bool
     public_base_url: str
+    feedback_base_url: str
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +371,7 @@ async def runtime_config(
         clerk_enabled=enabled,
         trusted_client=is_trusted_lan_request(request, settings),
         public_base_url=settings.public_base_url,
+        feedback_base_url=settings.feedback_base_url,
     )
 
 

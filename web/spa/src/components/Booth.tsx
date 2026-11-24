@@ -12,6 +12,7 @@
 // board), so these are responsive adaptations with existing tokens/recipes
 // only; the desktop branches are the untouched port.
 
+import { FeedbackButton } from "../feedback/Feedback";
 import { type CSSProperties, type ReactNode, useRef, useState } from "react";
 import type { JobOut, JobStatus } from "../api";
 import { canRetryJob, type JobFilter, statusMeta } from "../jobStatus";
@@ -43,6 +44,7 @@ export function MarqueeTopBar({ authControl }: { authControl?: ReactNode }) {
       <SonereliMark size={24} />
       <span style={{ fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 17, letterSpacing: "-0.01em" }}>Sonereli</span>
       <span style={{ flex: 1 }}></span>
+      <FeedbackButton />
       {authControl}
     </div>
   );

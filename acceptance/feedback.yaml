@@ -1,0 +1,17 @@
+state:
+  completed_song: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+  profiles: [iphone, android, desktop]
+action:
+  - open: public_share
+  - tap: Feedback
+  - tap: Send
+    assert:
+      success: true
+      text: ""
+      kind: bug
+      version_from_health: true
+      screenshot_png: true
+      stable_install_id: true
+      no_identity: true
+      no_share_token: true
+      private_log_by_default: true

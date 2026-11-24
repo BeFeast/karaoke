@@ -22,6 +22,7 @@ from ytdlp_canary import _split_urls
 ROOT = Path(__file__).resolve().parents[1]
 PROD = "https://karaoke.oklabs.uk"
 SCRIPT = (ROOT / "scripts/verify_browser.js").read_text()
+FEEDBACK_SCRIPT = (ROOT / "scripts/verify_feedback.js").read_text()
 TERMINAL = {"completed", "failed", "cancelled"}
 EXPORTS = ("karaoke.mp3", "vocals.mp3", "lyrics.txt", "lyrics.lrc")
 TOKEN_PATTERN = re.compile(r"((?:/share/|#/job/))[\w-]+")
@@ -455,6 +456,76 @@ async def run_player(args, evidence, profile, job, lyrics, step):
             evidence.console(tab, scope)
 
 
+async def run_feedback(args, evidence, profile, job, checks, version, *, live=False):
+    scope = f"{profile}.{'live-feedback' if live else 'feedback'}"
+    script = f"window.karaokeVerifyLiveFeedback = {json.dumps(live)};\n" + FEEDBACK_SCRIPT
+    checked = set()
+
+    def check(name, observed, passed=None):
+        checked.add(name)
+        expected = checks[name]
+        evidence.check(scope, name, expected, observed, observed == expected if passed is None else passed)
+
+    async with open_tab(args.cdp, profile, args.target, script) as tab:
+        async def tap(selector):
+            element = f"document.querySelector({json.dumps(selector)})"
+            point = await wait_for(lambda: tab.element_point(element), 12, f"Unavailable: {selector}")
+            await tab.tap(point)
+
+        try:
+            await tab.navigate(f"{args.target}{route(job)}")
+            count = 1 if live else 2
+            selector = json.dumps(".feedback-sheet[open] [role=status] a")
+            reports = []
+            for attempt in range(count):
+                if attempt:
+                    await tab.call("Page.reload")
+                    await wait_for(lambda: tab.js("window.karaokeVerifyFeedback?.length === 0"),
+                                   15, "Share page did not reload")
+                await wait_for(lambda: tab.js("!!document.querySelector('.shared-stage-song h1')"),
+                               25, "Public share song did not load")
+                await tab.js("document.fonts.ready.then(() => true)")
+                await tap(".shared-stage .feedback-trigger")
+                await tap(".feedback-sheet[open] button[type=submit]")
+                receipt = await wait_for(
+                    lambda: tab.js(f"document.querySelector({selector})?.textContent?.trim()"),
+                    50 if live else 12, "Feedback success receipt did not appear",
+                )
+                expected = r"Issue #[1-9]\d*" if live else "Issue #9001"
+                if not re.fullmatch(expected, receipt):
+                    raise VerifyError(f"Unexpected issue receipt: {receipt}")
+                if live:
+                    print(f"Live feedback: {receipt}", flush=True)
+                if attempt == 0:
+                    await evidence.capture(tab, scope, "sent")
+                submissions = await tab.js("window.karaokeVerifyFeedback")
+                if len(submissions) != 1:
+                    raise VerifyError(f"Expected one feedback POST, received {len(submissions)}")
+                reports.extend(submissions)
+            check("success", True)
+            for key in ("text", "kind"):
+                observed = [report[key] for report in reports]
+                check(key, observed, all(value == checks[key] for value in observed))
+            versions = [report["version"] for report in reports]
+            check("version_from_health", versions, bool(version) and all(value == version for value in versions))
+            check("screenshot_png", all(report["screenshot"] for report in reports))
+            check("private_log_by_default", all(report["privateLog"] for report in reports))
+            check("no_share_token", all(report["noShareToken"] for report in reports))
+            check("no_identity", all(report["noIdentity"] for report in reports))
+            if not live:
+                install_id = reports[0]["installId"] or ""
+                stable = bool(re.fullmatch(
+                    r"[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}", install_id,
+                )) and reports[1]["installId"] == install_id
+                check("stable_install_id", stable)
+        except Exception as exc:
+            evidence.skip(scope, {key: value for key, value in checks.items() if key not in checked}, str(exc))
+            with suppress(Exception):
+                await evidence.capture(tab, scope, "error")
+        finally:
+            evidence.console(tab, scope)
+
+
 async def submit(args, api, evidence, scenario, profile, bearer):
     submit_step, player_step, cleanup_step = scenario["action"]
     checks = submit_step["assert"]
@@ -614,9 +685,19 @@ async def run(args, directory):
                     job, lyrics = await api.fixture(state, args.reuse_job)
                     job_id = job["id"]
                     print(f"{name}: retained job #{job_id}", flush=True)
-                    for profile in state["profiles"]:
-                        for step in scenario["action"]:
-                            await run_player(args, evidence, profile, job, lyrics, step)
+                    if name == "feedback":
+                        checks = scenario["action"][-1]["assert"]
+                        health = await api.request("GET", "/health", private=False)
+                        version = health.json().get("version")
+                        for profile in state["profiles"]:
+                            await run_feedback(args, evidence, profile, job, checks, version)
+                        if args.live_feedback and all(row["passed"] for row in evidence.rows):
+                            live_checks = {key: value for key, value in checks.items() if key != "stable_install_id"}
+                            await run_feedback(args, evidence, "android", job, live_checks, version, live=True)
+                    else:
+                        for profile in state["profiles"]:
+                            for step in scenario["action"]:
+                                await run_player(args, evidence, profile, job, lyrics, step)
             except Exception as exc:
                 evidence.check(name, "scenario_setup", "ready", str(exc), False)
             finally:
@@ -640,7 +721,11 @@ def main():
     parser.add_argument("scenario")
     parser.add_argument("--target", default="prod", metavar="prod|URL")
     parser.add_argument("--reuse-job", type=int, metavar="ID")
+    parser.add_argument("--live-feedback", action="store_true",
+                        help="After mocked feedback passes, send one real report from the Android phone profile")
     args = parser.parse_args()
+    if args.live_feedback and args.scenario != "feedback":
+        parser.error("--live-feedback requires the feedback scenario")
     args.target = PROD if args.target == "prod" else args.target.rstrip("/")
     args.cdp = os.getenv("KARAOKE_VERIFY_CDP_URL", "").rstrip("/")
     for label, value in (("--target", args.target), ("KARAOKE_VERIFY_CDP_URL", args.cdp)):

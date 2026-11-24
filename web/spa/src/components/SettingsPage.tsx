@@ -204,7 +204,7 @@ export function SettingsPage({ authControl }: { authControl?: ReactNode }) {
                 <button className="m-btn primary" type="button" onClick={() => void mint()} disabled={minting || !mintName.trim()} style={{ justifyContent: phone ? "center" : undefined }}>{minting ? "Minting…" : "Mint pass"}</button>
               </div>
               {fresh && (
-                <div className="m-mono" role="status" style={{ marginTop: 10, padding: "8px 11px", borderRadius: 7, background: "var(--accent-soft)", color: "var(--accent)", fontSize: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <div data-feedback-private className="m-mono" role="status" style={{ marginTop: 10, padding: "8px 11px", borderRadius: 7, background: "var(--accent-soft)", color: "var(--accent)", fontSize: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ fontWeight: 700, minWidth: 0, overflowWrap: "anywhere" }}>{fresh.token}</span>
                   <span style={{ color: "var(--fg-soft)" }}>— copy it now; it's shown exactly once</span>
                   <button className="m-btn sm" type="button" style={{ marginLeft: "auto" }} onClick={() => void copyFresh()}>⧉ Copy</button>

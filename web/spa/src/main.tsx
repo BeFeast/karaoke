@@ -2,6 +2,8 @@ import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { ClerkProvider, SignedIn, SignedOut, useAuth, useClerk, useUser } from "@clerk/clerk-react";
 import { App } from "./App";
+import { FeedbackButton, FeedbackProvider } from "./feedback/Feedback";
+import { startFeedbackLog } from "./feedback/diagnostics";
 import { getConfig, type RuntimeConfig, setTokenGetter } from "./api";
 import { SonereliMark } from "./components/marks";
 import { SettingsPage } from "./components/SettingsPage";
@@ -147,7 +149,9 @@ async function bootstrap() {
   if (share) {
     root.render(
       <StrictMode>
-        <Stage token={decodeURIComponent(share[1])} publicBaseUrl={window.location.origin} shared />
+        <FeedbackProvider>
+          <Stage token={decodeURIComponent(share[1])} publicBaseUrl={window.location.origin} shared />
+        </FeedbackProvider>
       </StrictMode>,
     );
     return;
@@ -158,12 +162,15 @@ async function bootstrap() {
     config = await getConfig();
   } catch (err) {
     root.render(
-      <Boot>
-        <h1>Sonereli</h1>
-        <p className="error">
-          Failed to load runtime config: {err instanceof Error ? err.message : String(err)}
-        </p>
-      </Boot>,
+      <FeedbackProvider>
+        <Boot>
+          <h1>Sonereli</h1>
+          <p className="error">
+            Failed to load runtime config: {err instanceof Error ? err.message : String(err)}
+          </p>
+          <FeedbackButton />
+        </Boot>
+      </FeedbackProvider>,
     );
     return;
   }
@@ -172,13 +179,16 @@ async function bootstrap() {
   // only untrusted (public) clients get the Clerk sign-in wall.
   root.render(
     <StrictMode>
-      {config.clerk_enabled && !config.trusted_client ? (
-        <ClerkShell config={config} />
-      ) : (
-        <LanShell config={config} />
-      )}
+      <FeedbackProvider baseUrl={config.feedback_base_url}>
+        {config.clerk_enabled && !config.trusted_client ? (
+          <ClerkShell config={config} />
+        ) : (
+          <LanShell config={config} />
+        )}
+      </FeedbackProvider>
     </StrictMode>,
   );
 }
 
+startFeedbackLog();
 void bootstrap();

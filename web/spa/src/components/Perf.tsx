@@ -29,7 +29,9 @@
 //     thumb shadow (m-perf.jsx:46) → var(--shadow-sm).
 //   * prefers-reduced-motion: the 3 s idle fade is disabled (controls stay
 //     visible) and the wipe doesn't sweep — the current line fills whole.
+
 import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { FeedbackButton } from "../feedback/Feedback";
 import { usePhoneLayout } from "../lib/layout";
 import { railPct } from "../player/engineMath";
 import type { KaraokePlayerApi } from "../player/useKaraokePlayer";
@@ -82,7 +84,7 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
   useEffect(() => {
     poke();
     const esc = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onExit();
+      if (e.key === "Escape" && !document.querySelector(".feedback-sheet[open]")) onExit();
     };
     window.addEventListener("keydown", esc);
     return () => {
@@ -162,6 +164,10 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
         <button className="m-btn sm ghost" type="button" onClick={onExit} aria-label="Exit performance mode">
           {phone ? "✕" : "esc ✕"}
         </button>
+      </div>
+
+      <div className="feedback-performance">
+        <FeedbackButton />
       </div>
 
       {/* Quality remains visible when the transport controls fade. */}

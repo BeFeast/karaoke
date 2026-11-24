@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     # container. Mounted at ``/app`` by ``create_app`` only when present, so
     # dev/test runs without a build still boot.
     spa_dist_path: str = "/app/web/spa/dist"
+    feedback_base_url: str = "https://pomoi.co"  # KARAOKE_FEEDBACK_BASE_URL
 
     # ---- Worker / vast.ai ----
     # The coordinator (devbox) downloads + normalizes locally, then ships the
