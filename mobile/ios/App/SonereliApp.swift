@@ -8,7 +8,9 @@ struct SonereliApp: App {
         SongAssets.clearPreviousRun()
         #if DEBUG
         ShareInbox.resetFixture()
-        if ProcessInfo.processInfo.arguments.contains("--ui-test-share"),
+        if LiveVerification.active, let video = LiveVerification.video {
+            try? ShareInbox.push(SharedVideo(url: video))
+        } else if ProcessInfo.processInfo.arguments.contains("--ui-test-share"),
            ProcessInfo.processInfo.arguments.contains("--ui-test-fixture"),
            let url = SharedVideo.validatedURL(from: FixtureCoordinator.youtube.absoluteString) {
             try? ShareInbox.push(SharedVideo(url: url))
@@ -97,21 +99,64 @@ private struct RootView: View {
 private struct ClerkGate: View {
     @Environment(Clerk.self) private var clerk
     @State private var showingSignIn = false
+    #if DEBUG
+    @State private var liveSignInFailed = false
+    #endif
+
+    private var signedIn: Bool {
+        #if DEBUG
+        if LiveVerification.active, clerk.user?.id != LiveVerification.subject { return false }
+        #endif
+        return clerk.isAuthFlowComplete
+    }
 
     var body: some View {
-        if clerk.isAuthFlowComplete, let user = clerk.user {
+        if signedIn, let user = clerk.user {
             SongsView(api: Coordinator(), signOut: { try await clerk.auth.signOut() })
                 .id(user.id)
         } else {
             signInCover {
-                Button("Войти") { showingSignIn = true }
-                    .buttonStyle(.borderedProminent)
+                #if DEBUG
+                if LiveVerification.active {
+                    if liveSignInFailed { Text("Не удалось войти в тестовый аккаунт.") }
+                    Button("Войти") { Task { await signInWithTestTicket() } }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("auth.liveSignIn")
+                } else {
+                    signInButton
+                }
+                #else
+                signInButton
+                #endif
             }
             .sheet(isPresented: $showingSignIn) {
                 AuthView(mode: .signIn)
             }
         }
     }
+
+    private var signInButton: some View {
+        Button("Войти") { showingSignIn = true }.buttonStyle(.borderedProminent)
+    }
+
+    #if DEBUG
+    private func signInWithTestTicket() async {
+        guard LiveVerification.active, let ticket = LiveVerification.ticket, clerk.session == nil else {
+            liveSignInFailed = true
+            return
+        }
+        do {
+            let attempt = try await clerk.auth.signInWithTicket(ticket)
+            guard let sessionId = attempt.createdSessionId, attempt.status == .complete else {
+                liveSignInFailed = true
+                return
+            }
+            try await clerk.auth.setActive(sessionId: sessionId)
+        } catch {
+            liveSignInFailed = true
+        }
+    }
+    #endif
 }
 
 @MainActor

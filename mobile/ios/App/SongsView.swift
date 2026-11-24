@@ -270,6 +270,16 @@ private struct JobView: View {
     @State private var showingStage = false
     @State private var usingPolling = false
     @State private var errorMessage: String?
+    #if DEBUG
+    @State private var completedOnSocket = false
+    #endif
+
+    private var singIdentifier: String {
+        #if DEBUG
+        if LiveVerification.active && completedOnSocket { return "job.sing.websocket" }
+        #endif
+        return "job.sing"
+    }
 
     init(job: SongJob, api: any SongsAPI, onUpdate: @escaping (SongJob) -> Void) {
         _job = State(initialValue: job)
@@ -285,7 +295,7 @@ private struct JobView: View {
                 Button("Sing", systemImage: "mic") { showingStage = true }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .accessibilityIdentifier("job.sing")
+                    .accessibilityIdentifier(singIdentifier)
             } else if job.status.isTerminal {
                 Text(job.status.title).font(.headline)
                 if let error = job.error { Text(error).foregroundStyle(.secondary) }
@@ -322,6 +332,9 @@ private struct JobView: View {
                 }
                 try Task.checkCancellation()
                 if job.status.isTerminal {
+                    #if DEBUG
+                    completedOnSocket = job.status == .completed
+                    #endif
                     // WS is the progress source; the full owner projection carries final metadata.
                     if let current = try? await api.status(job.id), current.status.isTerminal {
                         job = current

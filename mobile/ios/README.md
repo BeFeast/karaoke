@@ -72,3 +72,13 @@ completion and play both stems in the Stage. On the phone, test play/pause
 on the Lock Screen, seek, return to the active Hebrew lyric and check an
 audio route change. Leave the verification job in place until the worker is
 terminal, then delete only that job and verify its export URLs are gone.
+
+For an authorized live QA run, provide a one-use Clerk ticket in a private
+temporary file through `SONERELI_QA_TICKET_FILE`, the corresponding tester ID
+in `SONERELI_QA_SUBJECT`, and the authorized YouTube URL in
+`SONERELI_QA_YOUTUBE_URL`. Run `scripts/verify ios-live` on a simulator with
+no other Sonereli account signed in. This scenario creates one paid job.
+It uses native ClerkKit and the live coordinator, and checks completion on
+the WebSocket before playing both stems. Record and clean up the created
+job once terminal. This scenario does not drive the YouTube app or verify
+the physical Lock Screen.

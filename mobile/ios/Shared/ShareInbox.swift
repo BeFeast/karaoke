@@ -73,9 +73,13 @@ enum ShareInbox {
 
     #if DEBUG
     static func resetFixture() {
-        guard ProcessInfo.processInfo.arguments.contains("--ui-test-fixture"),
-              let folder = try? directory() else { return }
+        guard usesVerificationInbox, let folder = try? directory() else { return }
         try? FileManager.default.removeItem(at: folder)
+    }
+
+    private static var usesVerificationInbox: Bool {
+        let args = ProcessInfo.processInfo.arguments
+        return args.contains("--ui-test-fixture") || args.contains("--ui-test-live")
     }
     #endif
 
@@ -88,8 +92,8 @@ enum ShareInbox {
 
     private static func directory() throws -> URL {
         #if DEBUG
-        if ProcessInfo.processInfo.arguments.contains("--ui-test-fixture") {
-            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("FixtureShareInbox", isDirectory: true)
+        if usesVerificationInbox {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("VerificationShareInbox", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             return folder
         }

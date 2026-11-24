@@ -1,0 +1,19 @@
+target: ios
+test: testClerkOwnerSubmitsARealJobAndPlaysBothStems
+state:
+  authenticated_owner: clerk_user
+  share_inbox: authorized_youtube_url
+action:
+  - open: confirm
+    assert:
+      clerk_owner_authenticated: true
+  - submit: authorized_youtube_url
+    assert:
+      websocket_completed: true
+  - open: stage
+    assert:
+      both_stems_loaded: true
+      playback_advances: true
+evidence:
+  - ios-live-completed
+  - ios-live-stage

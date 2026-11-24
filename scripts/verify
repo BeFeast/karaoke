@@ -3,6 +3,6 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "${1:-}" in
   ios) shift; exec "$repo/mobile/ios/scripts/ci-simulator.sh" all "$@" ;;
-  ios-stage|ios-share) exec "$repo/mobile/ios/scripts/ci-simulator.sh" "$@" ;;
+  ios-stage|ios-share|ios-live) exec "$repo/mobile/ios/scripts/ci-simulator.sh" "$@" ;;
 esac
 exec uv run --project "$repo" --frozen python "$repo/scripts/verify.py" "$@"

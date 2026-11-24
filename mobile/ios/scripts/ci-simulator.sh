@@ -12,8 +12,8 @@ out="${SONERELI_IOS_EVIDENCE:-$ios_dir/.build-ci}"
 derived="${SONERELI_IOS_DERIVED_DATA:-$ios_dir/.build-xcode}"
 action="${1:-all}"
 case "$action" in
-  generate|build|test|all|ios-stage|ios-share) ;;
-  *) printf 'Usage: %s [generate|build|test|all|ios-stage|ios-share]\n' "$0" >&2; exit 2 ;;
+  generate|build|test|all|ios-stage|ios-share|ios-live) ;;
+  *) printf 'Usage: %s [generate|build|test|all|ios-stage|ios-share|ios-live]\n' "$0" >&2; exit 2 ;;
 esac
 
 [[ "$(uname -s)" == Darwin ]] || { echo "iOS verification requires macOS with Xcode." >&2; exit 1; }
@@ -54,8 +54,18 @@ if [[ "$action" == all || "$action" == build ]]; then
 fi
 if [[ "$action" == build ]]; then exit 0; fi
 
-selection=()
+live_test=SonereliUITests/SonereliLiveUITests
+selection=(-skip-testing:"$live_test")
 case "$action" in
+  ios-live)
+    : "${SONERELI_QA_TICKET_FILE:?Set the path to a one-use Clerk QA ticket file}"
+    : "${SONERELI_QA_SUBJECT:?Set the Clerk QA user ID}"
+    : "${SONERELI_QA_YOUTUBE_URL:?Set an authorized source for the one live job}"
+    export TEST_RUNNER_SONERELI_QA_TICKET="$(cat "$SONERELI_QA_TICKET_FILE")"
+    export TEST_RUNNER_SONERELI_QA_SUBJECT="$SONERELI_QA_SUBJECT"
+    export TEST_RUNNER_SONERELI_QA_YOUTUBE_URL="$SONERELI_QA_YOUTUBE_URL"
+    selection=(-only-testing:"$live_test")
+    ;;
   ios-stage) selection=(-only-testing:SonereliUITests/SonereliUITests/testStagePlaybackAndHebrewLyrics) ;;
   ios-share) selection=(-only-testing:SonereliUITests/SonereliUITests/testShareConfirmationProgressAndSing) ;;
 esac
