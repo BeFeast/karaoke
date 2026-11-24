@@ -1,0 +1,5 @@
+Sonereli.xcodeproj/
+.build-ci/
+.build-xcode/
+.build-release/
+.tools/

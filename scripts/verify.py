@@ -662,9 +662,12 @@ def scenarios(selection):
     files = sorted((ROOT / "acceptance").glob("*.yaml"))
     if selection != "all":
         files = [file for file in files if file.stem == selection]
-    if not files:
-        raise VerifyError(f"Unknown scenario {selection}")
-    return {file.stem: yaml.safe_load(file.read_text()) for file in files}
+    documents = {file.stem: yaml.safe_load(file.read_text()) for file in files}
+    browser = {name: scenario for name, scenario in documents.items()
+               if scenario.get("target") != "ios"}
+    if not browser:
+        raise VerifyError(f"Unknown browser scenario {selection}")
+    return browser
 
 
 async def run(args, directory):
