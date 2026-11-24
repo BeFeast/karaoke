@@ -1,0 +1,18 @@
+state:
+  authenticated_owner: clerk_user
+  catalog_fixture: ready_recording_with_synced_lyrics
+  profiles: [iphone]
+action:
+  - open: catalog_stage_and_sing
+    assert:
+      # The Stage remembers the song and position (within 1.5 s of the stop).
+      position_saved: true
+  - open: my_songs
+    assert:
+      continue_singing_visible: true
+      add_song_pinned: true
+  - open: continue_singing
+    assert:
+      stage_opened: true
+      # Resume starts at the saved position ±1 s.
+      resumed_within_s: 1

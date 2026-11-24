@@ -20,6 +20,7 @@ from verify_catalog import (
     run_pilot_checks,
     verify_add_song,
     verify_miss,
+    verify_my_songs,
     verify_ready,
     verify_shared,
 )
@@ -60,6 +61,29 @@ def video_id(url):
     if parts.hostname == "youtu.be":
         return parts.path.strip("/")
     return parse_qs(parts.query).get("v", [url])[0]
+
+
+PROCESSING_ORDER = {"queued": -1, "downloading": 0, "separating": 1, "transcribing": 2,
+                    "finalizing": 3, "ready": 4}
+PROCESSING_STATE = """(() => {
+    const screen = document.querySelector(".sn-processing");
+    if (!screen) return null;
+    const now = screen.querySelector(".sn-step.is-now");
+    return now ? now.dataset.stage : screen.dataset.phase;
+})()"""
+
+
+def stages_in_order(seen):
+    ranks = [PROCESSING_ORDER.get(state, 99) for state in seen]
+    return bool(ranks) and ranks == sorted(ranks) and seen[-1] == "ready" and max(ranks) < 99
+
+
+async def watch_processing(tab, evidence, scope, seen):
+    """Record each new Processing stage once, with a screenshot."""
+    state = await tab.js(PROCESSING_STATE)
+    if state and (not seen or seen[-1] != state):
+        seen.append(state)
+        await evidence.capture(tab, scope, f"processing-{len(seen)}-{state}")
 
 
 def route(job):
@@ -598,13 +622,19 @@ async def submit(args, api, evidence, scenario, profile, bearer):
                 check("job_submitted", {"id": job["id"], "status": job["status"]},
                       job["status"] == checks["job_submitted"])
                 await evidence.capture(tab, scope, "submitted")
+                processing_hash = json.dumps(f"#/job/{job['job_token']}")
+                await wait_for(lambda: tab.js(f"location.hash === {processing_hash}"
+                                              " && !!document.querySelector('.sn-processing')"),
+                               15, "Add song did not open the Processing screen")
+                seen = []
 
                 async def terminal_frame():
+                    await watch_processing(tab, evidence, scope, seen)
                     frames = tab.stages.get(job["id"], [])
                     return next((frame for frame in reversed(frames) if frame["status"] in TERMINAL), None)
 
                 frame = await wait_for(terminal_frame, args.job_timeout,
-                                       "No terminal progress frame on the Booth WebSocket")
+                                       "No terminal progress frame on the Processing WebSocket")
                 frames = tab.stages[job["id"]]
                 check("websocket_completed", frames,
                       frame["status"] == "completed" and frame["progress"] == checks["websocket_completed"])
@@ -621,12 +651,18 @@ async def submit(args, api, evidence, scenario, profile, bearer):
                 count = sum(not line.get("speech") for line in lyrics.get("lines") or [])
                 check("synced_lyrics", {"synced": lyrics["synced"], "sung_lines": count},
                       lyrics["synced"] == checks["synced_lyrics"] and count >= 2)
-                href = json.dumps(f"#/job/{job['job_token']}")
+                async def ready_state():
+                    await watch_processing(tab, evidence, scope, seen)
+                    return seen and seen[-1] == "ready"
+
+                with suppress(VerifyError):
+                    await wait_for(ready_state, 20, "Processing never showed the ready state")
+                check("processing_stages_in_order", seen, stages_in_order(seen) == checks["processing_stages_in_order"])
                 sing_link = await wait_for(
-                    lambda: tab.element_point(
-                        f'[...document.querySelectorAll("a")].find(el => el.getAttribute("href") === {href})'
-                    ), 20, "Completed job has no visible Sing link in the Booth",
+                    lambda: tab.element_point('document.querySelector(".sn-start-singing")'),
+                    20, "Completed job has no visible Start singing action",
                 )
+                check("start_singing_visible", True, checks["start_singing_visible"])
                 await evidence.capture(tab, scope, "done")
                 await tab.tap(sing_link)
                 await inspect_player(tab, evidence, f"{profile}.booth_sing_link", player_step["assert"], lyrics)
@@ -702,6 +738,8 @@ async def run(args, directory):
                     await verify_shared(args, api, evidence, scenario, SCRIPT)
                 elif name == "mobile-add-song":
                     await verify_add_song(args, evidence, scenario, SCRIPT)
+                elif name == "mobile-my-songs":
+                    await verify_my_songs(args, evidence, scenario, SCRIPT)
                 elif "authenticated_owner" in state:
                     for profile in state["profiles"]:
                         await submit(args, api, evidence, scenario, profile, bearer)

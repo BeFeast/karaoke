@@ -1,7 +1,5 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import {
-  cancelJob,
-  clearFailedJobs,
   createJob,
   deleteJob,
   type JobOut,
@@ -10,28 +8,19 @@ import {
   uploadJob,
 } from "./api";
 import { AddSong } from "./components/AddSong";
-import { BoothScreen, type JobActions } from "./components/Booth";
 import { CatalogBrowser } from "./components/Catalog";
 import { ConfirmDialog, type ConfirmState } from "./components/ConfirmDialog";
+import { Icon } from "./components/Icon";
+import { MySongs } from "./components/MySongs";
 import { Shell } from "./components/Shell";
 import { FeedbackButton } from "./feedback/Feedback";
 import { t } from "./i18n";
-import { canRetryJob, jobCounts, type JobFilter, jobMatchesFilter } from "./jobStatus";
-import { filterJobs, type JobSort, sortJobs } from "./lib/jobListUtils";
-import { addHash, type CatalogShelf, navigate } from "./router";
+import { canRetryJob } from "./jobStatus";
+import { forgetSong, loadLastPlayed } from "./lib/library";
+import { addHash, type CatalogShelf, itemHash, navigate } from "./router";
 import { connectJobSocket, isTerminal, type JobEvent } from "./ws";
 
 const POLL_MS = 3000;
-
-const EMPTY_COPY: Record<JobFilter, { title: string; sub: string }> = {
-  all: {
-    title: "No songs yet",
-    sub: "Tap Add song to prepare your first one.",
-  },
-  active: { title: "Nothing in flight", sub: "Submitted jobs will show their progress here." },
-  completed: { title: "No completed jobs", sub: "Finished jobs and their players land here." },
-  failed: { title: "No failed jobs", sub: "Nothing has failed — that's the good kind of empty." },
-};
 
 export function App(props: {
   // config is still part of the boot contract (clerk_enabled is read in main.tsx);
@@ -50,19 +39,19 @@ export function App(props: {
   const [loaded, setLoaded] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<JobFilter>("all");
-  const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<JobSort>("newest");
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const [wsOpen, setWsOpen] = useState(false);
   const [catalogQuery, setCatalogQuery] = useState("");
+  const [readyToast, setReadyToast] = useState<{ token: string; title: string } | null>(null);
+  // Re-read on every visit to My songs: the Stage writes it while singing.
+  const last = view === "my-songs" ? loadLastPlayed() : null;
   // Mirror of `jobs` for the WS handler — reading state there would force
   // the socket effect to re-run (and reconnect) on every list change.
   const jobsRef = useRef<JobOut[]>([]);
 
   const refresh = useCallback(async () => {
     try {
-      const data = await listJobs();
+      const data = await listJobs(200);
       setJobs(data);
       setListError(null);
     } catch (err) {
@@ -109,6 +98,11 @@ export function App(props: {
         }),
       );
       if (event.type === "stage_change" && isTerminal(event.status)) {
+        // Web toast: the song is ready while the singer is elsewhere (step 3).
+        const was = jobsRef.current.find((j) => j.id === event.job_id);
+        if (event.status === "completed" && was && was.status !== "completed") {
+          setReadyToast({ token: was.job_token, title: was.title?.trim() || t("proc.toast") });
+        }
         void refresh();
       }
     },
@@ -138,6 +132,12 @@ export function App(props: {
     return () => window.clearInterval(id);
   }, [wsOpen, refresh]);
 
+  useEffect(() => {
+    if (!readyToast) return;
+    const id = window.setTimeout(() => setReadyToast(null), 8000);
+    return () => window.clearTimeout(id);
+  }, [readyToast]);
+
   const runAction = useCallback(
     async (fn: () => Promise<unknown>) => {
       setActionError(null);
@@ -155,79 +155,45 @@ export function App(props: {
   const onCreate = useCallback(
     async (url: string) => {
       const job = await createJob({ url });
-      setFilter("all"); // make the freshly-queued job visible regardless of current filter
       void refresh();
       return job;
     },
     [refresh],
   );
 
-  // Audio-file upload (#173) — same receipt path as onCreate: the queued row
-  // arrives via refresh and then updates over the WS flow, no new plumbing.
+  // Audio-file upload (#173) — same receipt path as onCreate.
   const onUpload = useCallback(
     async (file: File) => {
       const job = await uploadJob(file);
-      setFilter("all");
       void refresh();
       return job;
     },
     [refresh],
   );
 
-  const actions: JobActions = useMemo(
-    () => ({
-      onDelete: (job) => {
-        setConfirmState({
-          title: "Remove job",
-          message: `Remove job #${job.id} and its artifacts? This can’t be undone.`,
-          confirmLabel: "Remove",
-          danger: true,
-          onConfirm: () => {
-            setJobs((js) => js.filter((j) => j.id !== job.id)); // optimistic
-            void runAction(() => deleteJob(job.id));
-          },
-        });
-      },
-      onCancel: (job) => void runAction(() => cancelJob(job.id)),
-      onRetry: (job) => {
-        // The Booth hides Retry for upload:// jobs (no resubmittable URL —
-        // POST /jobs 422s the sentinel by design); guard here too so no
-        // caller can ever resubmit the sentinel (#173).
-        if (!canRetryJob(job)) return;
-        void runAction(async () => {
-          await createJob({ url: job.source_url, title: job.title ?? undefined });
-          setFilter("all");
-        });
-      },
-    }),
-    [runAction],
-  );
-
-  const onClearFailed = useCallback(() => {
-    const n = jobs.filter((j) => j.status === "failed").length;
-    if (n === 0) return;
+  const onRemove = useCallback((job: JobOut) => {
+    const title = job.title?.trim() || t("proc.toast");
     setConfirmState({
-      title: "Clear failed",
-      message: `Remove all ${n} failed job${n === 1 ? "" : "s"} and their artifacts?`,
-      confirmLabel: "Clear failed",
+      title: t("home.removeTitle"),
+      message: t("home.removeBody", { title }),
+      confirmLabel: t("action.remove"),
       danger: true,
-      onConfirm: () => void runAction(() => clearFailedJobs()),
+      onConfirm: () => {
+        setJobs((js) => js.filter((j) => j.id !== job.id)); // optimistic
+        forgetSong(job.job_token);
+        void runAction(() => deleteJob(job.id));
+      },
     });
-  }, [jobs, runAction]);
+  }, [runAction]);
 
-  // Status filter (chips) → text search → sort. All client-side, all pure.
-  const visible = useMemo(
-    () => sortJobs(filterJobs(jobs.filter((j) => jobMatchesFilter(j, filter)), query), sort),
-    [jobs, filter, query, sort],
-  );
-  const counts = useMemo(() => jobCounts(jobs), [jobs]);
-
-  // A non-blank search that matches nothing gets its own empty copy — the
-  // status-filter copy ("No jobs yet") would be misleading there.
-  const searching = query.trim().length > 0;
-  const copy = searching
-    ? { title: "No matching jobs", sub: "Try a different search, or clear the query." }
-    : EMPTY_COPY[filter];
+  const onRetry = useCallback((job: JobOut) => {
+    // Upload jobs have no resubmittable URL (#173).
+    if (!canRetryJob(job)) return;
+    void runAction(async () => {
+      const fresh = await createJob({ url: job.source_url, title: job.title ?? undefined });
+      navigate(itemHash(fresh.job_token));
+    });
+  }, [runAction]);
 
   if (view === "add") {
     return <AddSong key={addUrl} initialUrl={addUrl} catalogEnabled={catalogEnabled} onCreate={onCreate} onUpload={onUpload} />;
@@ -259,23 +225,17 @@ export function App(props: {
           <CatalogBrowser query={catalogQuery} shelf={shelf ?? null} prepare={prepare} pasteUrl={() => navigate(addHash)} />
         </div>
       ) : (
-        <BoothScreen
-          jobs={visible}
-          counts={counts}
-          filter={filter}
-          onFilter={setFilter}
-          query={query}
-          onQuery={setQuery}
-          sort={sort}
-          onSort={setSort}
-          loaded={loaded}
-          listError={listError}
-          actionError={actionError}
-          emptyTitle={copy.title}
-          emptySub={copy.sub}
-          actions={actions}
-          onClearFailed={onClearFailed}
-        />
+        <MySongs jobs={jobs} loaded={loaded} listError={listError} actionError={actionError} last={last}
+          catalogEnabled={catalogEnabled} onReload={() => void refresh()} onRetry={onRetry} onRemove={onRemove} />
+      )}
+      {readyToast && (
+        <div className="sn-toast" role="status">
+          <Icon name="check" size={20} />
+          <span className="sn-grow"><bdi className="sn-t1">{readyToast.title}</bdi><span className="sn-t2">{t("proc.toast")}</span></span>
+          <a className="sn-btn sn-btn-small sn-btn-primary" href={itemHash(readyToast.token)} onClick={() => setReadyToast(null)}>
+            {t("action.sing")}
+          </a>
+        </div>
       )}
       <ConfirmDialog state={confirmState} onClose={() => setConfirmState(null)} />
     </Shell>

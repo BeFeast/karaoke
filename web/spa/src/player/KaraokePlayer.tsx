@@ -346,9 +346,11 @@ export interface KaraokePlayerProps {
   artist: string | null;
   /** Plain lyrics for the perf overlay's no-synced-data fallback. */
   plainLyrics: string | null;
+  /** Resume position (Continue singing): seek once the stems are ready. */
+  startAt?: number;
 }
 
-export function KaraokePlayer({ instrumentalUrl, vocalsUrl, fetchStem, onTime, seekRef, view, lines, title, artist, plainLyrics }: KaraokePlayerProps) {
+export function KaraokePlayer({ instrumentalUrl, vocalsUrl, fetchStem, onTime, seekRef, view, lines, title, artist, plainLyrics, startAt }: KaraokePlayerProps) {
   const rootRef = useRef<HTMLElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [container, setContainer] = useState<HTMLElement | null>(null);
@@ -435,6 +437,15 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, fetchStem, onTime, s
       if (seekRef) seekRef.current = null;
     };
   }, [seekRef, player.seek]);
+
+  // Continue singing: start where the singer stopped, once, when ready.
+  const resumed = useRef(false);
+  useEffect(() => {
+    if (resumed.current || !player.ready || !startAt) return;
+    resumed.current = true;
+    player.seek(startAt);
+    onTimeRef.current?.(startAt, durationRef.current);
+  }, [player.ready, player.seek, startAt]);
 
   // ── DROP / hold-V ducking — pure UI over setVocalLevel ───────────────────
   // Press: remember the level, crossfade to instrumental-only; release:

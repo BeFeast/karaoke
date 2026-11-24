@@ -41,7 +41,7 @@ import "./styles.css";
 function Routed({ config, authControl, catalogEnabled = false }: { config: RuntimeConfig; authControl?: React.ReactNode; catalogEnabled?: boolean }) {
   const route = useRoute();
   if (route.name === "item") {
-    return <Stage key={route.token} token={route.token} publicBaseUrl={config.public_base_url} />;
+    return <Stage key={route.token} token={route.token} startAt={route.startAt} publicBaseUrl={config.public_base_url} />;
   }
   if (route.name === "settings") {
     return <SettingsPage authControl={authControl} catalogEnabled={catalogEnabled} />;
@@ -113,7 +113,7 @@ function SignInGate() {
 function ClerkRouted({ config }: { config: RuntimeConfig }) {
   const route = useRoute();
   if (route.name === "item" && !clerkStageToken(route.token)) {
-    return <Stage key={route.token} token={route.token} publicBaseUrl={config.public_base_url} />;
+    return <Stage key={route.token} token={route.token} startAt={route.startAt} publicBaseUrl={config.public_base_url} />;
   }
   return (
     <>
