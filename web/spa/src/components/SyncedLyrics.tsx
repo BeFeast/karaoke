@@ -1,6 +1,4 @@
-import { type CSSProperties, useLayoutEffect, useMemo, useRef } from "react";
-import { LyricText } from "./LyricText";
-import { timeLines } from "./stage-core";
+import type { CSSProperties } from "react";
 
 // ─── LRC parsing ────────────────────────────────────────────────────────────
 //
@@ -260,127 +258,6 @@ export function PlainLyrics({
   );
 }
 
-// ─── Component ───────────────────────────────────────────────────────────────
-
-export interface SyncedLyricsProps {
-  /** Raw LRC body from the structured lyrics payload, or null when unsynced. */
-  lrc: string | null;
-  /**
-   * Lyrics provenance from the structured payload (`lrclib_synced`,
-   * `whisper_asr_synced`, …) — drives the derived badge so approximate ASR
-   * timing isn't labelled as LRCLIB (#145).
-   */
-  source: string | null;
-  /** Plain-text lyrics, used for the fallback scroll box when no LRC exists. */
-  plainLyrics: string | null;
-  /** Live playhead in seconds; drives the active-line highlight. */
-  currentTime: number;
-  /** Seek the player to `time` seconds (click-to-seek). */
-  onSeek: (time: number) => void;
-  /** Skip the smooth-scroll work for reduced-motion users. */
-  reducedMotion?: boolean;
-}
-
-export function SyncedLyrics({
-  lrc,
-  source,
-  plainLyrics,
-  currentTime,
-  onSeek,
-  reducedMotion = false,
-}: SyncedLyricsProps) {
-  // Parse once per LRC body (not per frame).
-  const lines = useMemo(() => (lrc ? parseLrc(lrc) : []), [lrc]);
-  const timedLines = useMemo(() => timeLines(lines, null), [lines]);
-  const hasSynced = lines.length > 0;
-  const lyricsDirection = useMemo(() => detectLyricsDirection(lines), [lines]);
-
-  // Active index from the playhead. Cheap binary search; the render below only
-  // re-runs when React re-renders this component on a currentTime change.
-  const active = useMemo(
-    () => (hasSynced ? activeLineIndex(lines, currentTime) : -1),
-    [lines, currentTime, hasSynced],
-  );
-
-  const lineRefs = useRef<Array<HTMLLIElement | null>>([]);
-  const listRef = useRef<HTMLOListElement | null>(null);
-
-  // Keep scrolling local to the lyrics. If a seek jumps outside the visible
-  // area, bring the line into view before paint instead of animating a long jump.
-  useLayoutEffect(() => {
-    if (active < 0) return;
-    const el = lineRefs.current[active];
-    const list = listRef.current;
-    if (!el || !list) return;
-    const follow = (animate: boolean) => {
-      const top = el.offsetTop;
-      const bottom = top + el.offsetHeight;
-      const visible = top >= list.scrollTop && bottom <= list.scrollTop + list.clientHeight;
-      list.scrollTo({
-        top: el.offsetHeight > list.clientHeight ? top : (top + bottom - list.clientHeight) / 2,
-        behavior: animate && !reducedMotion && visible ? "smooth" : "instant",
-      });
-    };
-    follow(true);
-    const observer = new ResizeObserver(() => follow(false));
-    observer.observe(list);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [active, lines, reducedMotion]);
-
-  // ── Synced path ──────────────────────────────────────────────────────────
-  if (hasSynced) {
-    return (
-      <div className="synced-lyrics" data-synced="true">
-        {/* design's stage lyrics header (sections/stage.jsx:114) — the
-            provenance segment stays DERIVED from the payload, never hardcoded */}
-        <div className="synced-lyrics-prov">Lyrics · synced · {sourceLabel(source)}</div>
-        <ol
-          className="synced-lyrics-list"
-          ref={listRef}
-          aria-label="Synced lyrics"
-          dir={lyricsDirection}
-        >
-          {lines.map((line, i) => (
-            <li
-              key={`${line.t}-${i}`}
-              ref={(el) => {
-                lineRefs.current[i] = el;
-              }}
-              className={`synced-lyrics-line${
-                line.speech ? " is-speech" : i === active ? " is-active" : i < active ? " is-sung" : ""
-              }`}
-              aria-current={i === active && !line.speech ? "true" : undefined}
-            >
-              <button
-                type="button"
-                className="synced-lyrics-seek"
-                onClick={() => onSeek(line.t)}
-                title={`Seek to ${formatTimestamp(line.t)}`}
-                dir={detectTextDirection(line.text)}
-              >
-                {line.speech ? <bdi dir="ltr" className="synced-lyrics-speech-tag">[speech] </bdi> : null}
-                <LyricText line={timedLines[i]} reducedMotion={reducedMotion}
-                  currentTime={i === active && !line.speech && line.words ? currentTime : undefined} />
-              </button>
-            </li>
-          ))}
-        </ol>
-      </div>
-    );
-  }
-
-  // ── Plain fallback ─────────────────────────────────────────────────────────
-  if (plainLyrics) {
-    return <PlainLyrics text={plainLyrics} className="lyrics-text" />;
-  }
-  return (
-    <div style={{ textAlign: "center", padding: "32px 20px", color: "var(--muted)", fontSize: 12.5 }}>
-      No lyrics available for this job.
-    </div>
-  );
-}
-
 /**
  * Badge label for the sync provenance. Whisper-segment timing is approximate,
  * so it's flagged as such instead of being passed off as LRCLIB (#145);
@@ -398,12 +275,3 @@ export function sourceLabel(source: string | null): string {
     default: return "Unknown source";
   }
 }
-
-/** mm:ss for a line timestamp (provenance / tooltip only). */
-function formatTimestamp(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-export default SyncedLyrics;

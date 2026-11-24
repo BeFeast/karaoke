@@ -55,7 +55,7 @@
 :root, .m-booth, .m-stage {
   --font-ui: var(--sn-font-ui);
   --font-sans: var(--sn-font-ui);
-  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
   --font-display: var(--sn-font-ui);
   --font-sign: var(--sn-font-display);
 
@@ -292,20 +292,6 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   }
 }
 
-/* ─── Playback glyph (Performance view) ─── */
-.playback-icon {
-  width: 0.85em;
-  height: 0.85em;
-  background: currentColor;
-  clip-path: polygon(10% 0, 100% 50%, 10% 100%);
-}
-
-.playback-icon.is-playing {
-  background: none;
-  border-inline: 0.26em solid currentColor;
-  clip-path: none;
-}
-
 .lyrics-text {
   background: var(--bg-card);
   border: var(--rule);
@@ -323,86 +309,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   overflow-wrap: anywhere;
 }
 
-/* ─── Synced lyrics (LRC highlight + click-to-seek) — stage restyle ─────── */
-/* Lyric ladder colors come from the room's lyric tokens (sections/stage.jsx
-   lyrics list): upcoming = --lyric-dim, already sung = --lyric-prev, active =
-   accent, larger, in the display face. */
-.synced-lyrics {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  min-width: 0;
-  max-width: 100%;
-}
-.synced-lyrics-prov {
-  padding: 12px 16px 0;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--muted);
-  overflow-wrap: anywhere;
-}
-.synced-lyrics-list {
-  list-style: none;
-  margin: 0;
-  padding: 10px 0 14px;
-  max-height: 420px;
-  min-width: 0;
-  max-width: 100%;
-  overflow: auto;
-  overflow-x: hidden;
-  /* Anchor offsetParent here: the autoscroll centers lines via li.offsetTop,
-     which must be list-relative, not page-relative (#113). */
-  position: relative;
-}
-.synced-lyrics-line {
-  text-align: center;
-  min-width: 0;
-}
-.synced-lyrics-seek {
-  display: block;
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-  text-align: start;
-  unicode-bidi: plaintext;
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 4px 16px;
-  font-family: var(--font-display);
-  font-size: 16px;
-  font-weight: 500;
-  line-height: 1.5;
-  white-space: normal;
-  color: var(--fg-soft);
-}
-.synced-lyrics-line.is-sung .synced-lyrics-seek {
-  color: var(--lyric-next);
-}
-/* Non-sung speech (#283): dimmed, italic, never highlighted as singing. */
-.synced-lyrics-line.is-speech .synced-lyrics-seek {
-  color: var(--lyric-dim);
-  opacity: 0.6;
-  font-style: italic;
-}
-.synced-lyrics-speech-tag {
-  font-family: var(--font-mono, monospace);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  opacity: 0.8;
-}
-.synced-lyrics-line.is-active .synced-lyrics-seek {
-  color: var(--sn-pink);
-  font-size: 20px;
-  line-height: 1.4;
-  font-weight: 650;
-}
-
-/* Keep punctuation-delimited phrases together when they fit. A wider phrase
-   can wrap between words, with balanced rows inside and between phrases. */
+/* ─── Lyric text: phrases stay together when they fit ─── */
 .lyric-text {
   display: block;
   min-width: 0;
@@ -424,72 +331,6 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   scrollbar-width: none;
 }
 .lyric-token::-webkit-scrollbar { display: none; }
-.lyric-token-timed {
-  --lyric-sweep: to right;
-  color: transparent;
-  background-image: linear-gradient(var(--lyric-sweep),
-    var(--sn-pink) var(--lyric-progress), var(--fg) var(--lyric-progress));
-  background-clip: text;
-}
-.lyric-token-timed:dir(rtl) { --lyric-sweep: to left; }
-@media (forced-colors: active) {
-  .lyric-token-timed { color: Highlight; }
-}
-.stage-lyric-current,
-.stage-lyric-neighbor,
-.performance-lyrics {
-  font-family: var(--font-display);
-}
-.stage-lyric-current {
-  font-size: 20px;
-  font-weight: 650;
-  line-height: 1.4;
-  min-height: 28px;
-  min-width: 0;
-}
-.stage-lyric-neighbor { font-size: 16px; }
-@media (min-width: 641px) {
-  .stage-lyric-current,
-  .synced-lyrics-line.is-active .synced-lyrics-seek { font-size: 24px; }
-  .stage-lyric-neighbor,
-  .synced-lyrics-seek { font-size: 18px; }
-}
-.performance-lyrics {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  text-align: center;
-}
-.performance-current,
-.performance-neighbor {
-  min-height: 0;
-  min-width: 0;
-  overflow: auto;
-  scrollbar-width: thin;
-}
-.performance-current { font-weight: 700; }
-.performance-neighbor {
-  flex: 1 1 0;
-  font-weight: 500;
-  line-height: 1.3;
-}
-.performance-previous { align-content: safe end; }
-@media (hover: hover) {
-  .synced-lyrics-seek:hover {
-    color: var(--fg-soft);
-  }
-}
-.synced-lyrics-seek:focus-visible {
-  outline: none;
-  color: var(--fg);
-  box-shadow: inset 0 0 0 2px var(--sn-cyan);
-  border-radius: var(--radius-sm);
-}
-@media (prefers-reduced-motion: reduce) {
-  .synced-lyrics-list { scroll-behavior: auto; }
-  .synced-lyrics-seek { transition: none; }
-}
 
 /* Transient "Link copied" toast. */
 .toast {
@@ -1176,7 +1017,6 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 .sn-lyrics .synced-lyrics-speech-tag { font-family: var(--sn-font-ui); font-size: 13px; font-style: normal; }
 .sn-lyrics .lyric-text { text-wrap: pretty; }
 .sn-lyrics .lyric-token { overflow: visible; white-space: normal; }
-.sn-lyrics .lyric-token-timed { color: inherit; background: none; }
 .sn-lyrics .lyric-token[data-now] {
   text-decoration: underline 3px var(--sn-cyan); text-underline-offset: 7px; text-decoration-skip-ink: none;
 }
