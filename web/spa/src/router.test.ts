@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { itemHash, publicShareUrl } from "./router";
+import { itemHash, parseHash, publicShareUrl } from "./router";
 
 test("copying a Stage share uses the public host while the in-app link stays on the current origin", () => {
   const lanPage = "http://booth.test:13140/app/";
@@ -19,4 +19,13 @@ test("copying a Stage share honors either configured public hostname", () => {
   expect(publicShareUrl("https://karaoke.oklabs.uk", "unlisted_token")).toBe(
     "https://karaoke.oklabs.uk/share/unlisted_token",
   );
+});
+
+test("Add song is its own route and carries a prefilled link", () => {
+  expect(parseHash("#/add")).toEqual({ name: "add", url: "" });
+  expect(parseHash("#/add?url=https%3A%2F%2Fyoutu.be%2FdQw4w9WgXcQ")).toEqual({
+    name: "add", url: "https://youtu.be/dQw4w9WgXcQ",
+  });
+  expect(parseHash("#/")).toEqual({ name: "dashboard" });
+  expect(parseHash("#/catalog")).toEqual({ name: "catalog" });
 });

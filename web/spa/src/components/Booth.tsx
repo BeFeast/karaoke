@@ -12,43 +12,19 @@
 // board), so these are responsive adaptations with existing tokens/recipes
 // only; the desktop branches are the untouched port.
 
-import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
-import { FeedbackButton } from "../feedback/Feedback";
+import type { CSSProperties } from "react";
 import type { JobOut, JobStatus } from "../api";
 import { canRetryJob, type JobFilter, statusMeta } from "../jobStatus";
 import { costDollars, fmtDuration, formatRelativeTime, type JobSort } from "../lib/jobListUtils";
 import { usePhoneLayout } from "../lib/layout";
 import { sourceDisplay } from "../lib/source";
-import { catalogHash, type CatalogShelf, itemHash, mySongsHash, navigate } from "../router";
-import { CatalogBrowser } from "./Catalog";
-import { MBulbs, MDuetWave, SonereliMark, MWipe } from "./marks";
+import { itemHash } from "../router";
+import { MBulbs, MDuetWave, MWipe } from "./marks";
 
 export interface JobActions {
   onDelete: (job: JobOut) => void;
   onCancel: (job: JobOut) => void;
   onRetry: (job: JobOut) => void;
-}
-
-// Topbar composition shared by the booth and the item/settings shells
-// (booth.jsx:91-97): mark + wordmark · spacer · authControl. The auth control
-// is the LAN chip or the Clerk avatar menu, injected by the boot shell.
-export function MarqueeTopBar({ authControl }: { authControl?: ReactNode }) {
-  // Phone (#186): the row wraps instead of overflowing — same elements, same
-  // order, tighter side padding; the fixed height becomes a minHeight so a
-  // wrapped auth control stays visible. Shared with Settings (wave 4/4 gives
-  // that page its own pass). The desktop row keeps its single-line layout.
-  const phone = usePhoneLayout();
-  return (
-    <div style={phone
-      ? { display: "flex", alignItems: "center", gap: 12, padding: "8px 14px", minHeight: 56, borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap" }
-      : { display: "flex", alignItems: "center", gap: 12, padding: "0 24px", height: 56, borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-      <SonereliMark size={24} />
-      <span style={{ fontFamily: "var(--font-display)", fontWeight: 650, fontSize: 17, letterSpacing: "-0.01em" }}>Sonereli</span>
-      <span style={{ flex: 1 }}></span>
-      <FeedbackButton />
-      {authControl}
-    </div>
-  );
 }
 
 // The real pipeline, in stage order, mapped to the design's marquee stage
@@ -98,7 +74,7 @@ function PStageRow({ name, detail, state, pct }: { name: string; detail: string;
   );
 }
 
-function PRunningCard({ job, wsOpen, actions }: { job: JobOut; wsOpen: boolean; actions: JobActions }) {
+function PRunningCard({ job, actions }: { job: JobOut; actions: JobActions }) {
   const chip = jobChip(job);
   const stageIdx = PIPELINE.findIndex((s) => s.status === job.status);
   const pct = Math.max(0, Math.min(100, Math.round(job.progress)));
@@ -110,7 +86,6 @@ function PRunningCard({ job, wsOpen, actions }: { job: JobOut; wsOpen: boolean; 
         <span className={`m-chip ${chip.kind}`}><span className="m-dot"></span>{chip.label}</span>
         <span style={{ fontSize: 14, fontWeight: 650, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
         {cost && <span className="m-mono" style={{ fontSize: 12.5, color: "var(--accent)", fontWeight: 600 }}>{cost}</span>}
-        {wsOpen && <span className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)" }}>live</span>}
         <button className="m-btn sm ghost" type="button" onClick={() => actions.onCancel(job)}>Cancel</button>
       </div>
       <div style={{ margin: "10px 0 0" }}>
@@ -125,8 +100,6 @@ function PRunningCard({ job, wsOpen, actions }: { job: JobOut; wsOpen: boolean; 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border-soft)" }}>
         <div className="m-wipebar" style={{ "--wipe": pct + "%", flex: 1, maxWidth: 220 } as CSSProperties}><i></i></div>
         <span className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)" }}>{pct}%</span>
-        <span style={{ flex: 1 }}></span>
-        <span className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)" }}>instance dies when the song's done</span>
       </div>
     </div>
   );
@@ -207,21 +180,6 @@ function CompactRow({ job, actions }: { job: JobOut; actions: JobActions }) {
   );
 }
 
-// Extensions POST /jobs/upload accepts (mirror of the server allowlist).
-// Deliberately no `audio/*`: it would invite .opus/.aac/.webm picks the
-// server 415s anyway (#173).
-const UPLOAD_ACCEPT = ".mp3,.m4a,.wav,.flac,.ogg";
-
-// request() errors lead with the HTTP status ("413 …: <body>") — map the two
-// upload-specific rejections to short readable strings (the raw body may be
-// an HTML error page from the edge); everything else surfaces verbatim.
-function uploadErrorText(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
-  if (raw.startsWith("413")) return "File too large — the server rejected it (413).";
-  if (raw.startsWith("415")) return "Unsupported file type — use mp3, m4a, wav, flac or ogg (415).";
-  return raw;
-}
-
 // Loading placeholder shaped like the compact rows — marquee bulbs, no spinner.
 function BoothSkeleton() {
   return (
@@ -265,18 +223,8 @@ export function BoothScreen({
   actionError,
   emptyTitle,
   emptySub,
-  wsOpen,
-  version,
-  todaySpend,
-  onCreate,
-  onUpload,
   actions,
   onClearFailed,
-  authControl,
-  catalogEnabled,
-  mySongs,
-  shelf,
-  children,
 }: {
   /** Filtered + sorted rows to render. */
   jobs: JobOut[];
@@ -293,220 +241,68 @@ export function BoothScreen({
   actionError: string | null;
   emptyTitle: string;
   emptySub: string;
-  wsOpen: boolean;
-  /** Running version from GET /health, or null while loading. */
-  version: string | null;
-  /** Σ gpu_cost_micros over today's jobs (client-side). */
-  todaySpend: number;
-  onCreate: (url: string) => Promise<void>;
-  /** Upload a local audio file — same receipt path as onCreate (#173). */
-  onUpload: (file: File) => Promise<unknown>;
   actions: JobActions;
   onClearFailed: () => void;
-  authControl?: ReactNode;
-  catalogEnabled: boolean;
-  mySongs: boolean;
-  shelf: CatalogShelf | null;
-  /** Overlays (ConfirmDialog) rendered inside the booth's token scope. */
-  children?: ReactNode;
 }) {
-  // Phone (#186): the submit console stacks — input on its own full-width
-  // row, then the two actions side by side. Live matchMedia so rotation
-  // re-lays-out. The desktop row keeps its single-line layout.
-  const phone = usePhoneLayout();
-  const [url, setUrl] = useState("");
-  const [catalogQuery, setCatalogQuery] = useState("");
-  const [focusPaste, setFocusPaste] = useState(false);
-  const urlRef = useRef<HTMLInputElement>(null);
-  const inCatalog = catalogEnabled && !mySongs;
-  useEffect(() => {
-    if (mySongs && focusPaste) {
-      urlRef.current?.focus();
-      setFocusPaste(false);
-    }
-  }, [mySongs, focusPaste]);
-  const pasteUrl = () => {
-    setFocusPaste(true);
-    navigate(mySongsHash);
-  };
-  const [busy, setBusy] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const doSubmit = () => {
-    const trimmed = url.trim();
-    if (!trimmed || busy || uploading) return;
-    setBusy(true);
-    setSubmitError(null);
-    onCreate(trimmed)
-      .then(() => setUrl(""))
-      .catch((err) => setSubmitError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setBusy(false));
-  };
-  // One interaction: picking a file uploads it immediately. Indeterminate
-  // busy state on purpose — fetch exposes no upload-progress events.
-  const doUpload = (file: File) => {
-    if (busy || uploading) return;
-    setUploading(true);
-    setSubmitError(null);
-    onUpload(file)
-      .catch((err) => setSubmitError(uploadErrorText(err)))
-      .finally(() => {
-        // Always clear the picker so re-selecting the same file fires onChange.
-        if (fileRef.current) fileRef.current.value = "";
-        setUploading(false);
-      });
-  };
-
-  // Submit-console controls, shared by both layouts so they can't drift.
-  // The input keeps the ported var(--font-mono) / 10px 13px / 14px verbatim;
-  // on phone it drops flex: 1 (a column child stretches full width instead)
-  // and the primary action grows to fill its row.
-  const urlInput = (
-    <input ref={urlRef} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste a song link…"
-      onKeyDown={(e) => e.key === "Enter" && doSubmit()}
-      disabled={busy || uploading} autoComplete="off" spellCheck={false} aria-label="Song link"
-      style={{ flex: phone ? undefined : 1, minWidth: 0, padding: "10px 13px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg)", color: "var(--fg)", fontSize: 14, fontFamily: "var(--font-mono)", outline: "none" }}></input>
-  );
-  const submitAction = (
-    <button className="m-btn primary" type="button" onClick={doSubmit} disabled={busy || uploading || !url.trim()} style={{ fontSize: 14, padding: "8px 18px", flex: phone ? 1 : undefined }}>
-      {busy ? "Staging…" : "Prepare song"}
-    </button>
-  );
-  const uploadAction = (
-    <button className="m-btn ghost" type="button" onClick={() => fileRef.current?.click()} disabled={busy || uploading} style={{ fontSize: 14, padding: "8px 14px", whiteSpace: "nowrap" }}>
-      {uploading ? "Uploading…" : "Upload audio"}
-    </button>
-  );
-  const filePicker = (
-    <input ref={fileRef} type="file" accept={UPLOAD_ACCEPT} style={{ display: "none" }}
-      onChange={(e) => {
-        const file = e.currentTarget.files?.[0];
-        if (file) doUpload(file);
-      }} />
-  );
-
+  // My songs list (Sonereli UI/UX v1 step 1). Song submission moved to the
+  // pinned Add song action (#/add); the list restyle lands in step 4.
   return (
-    <div className="m-booth" style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}>
-      <MarqueeTopBar authControl={authControl} />
-
-      <div style={{ flex: 1, padding: "24px 24px 16px", maxWidth: 780, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", minHeight: 0 }}>
-        {inCatalog && (
-          <input className="catalog-search" type="search" value={catalogQuery} maxLength={200}
-            onChange={(event) => setCatalogQuery(event.target.value)}
-            aria-label="Поиск по каталогу" placeholder="Название или исполнитель" />
+    <div className="m-booth sn-legacy" data-my-songs>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "4px 0 11px", flexWrap: "wrap" }}>
+        {FILTERS.map((f) => {
+          const on = filter === f.key;
+          return (
+            <button key={f.key} type="button" className="m-btn sm" onClick={() => onFilter(f.key)} style={{
+              border: "1px solid " + (on ? "var(--accent)" : "transparent"),
+              background: on ? "var(--accent-soft)" : "transparent",
+              color: on ? "var(--accent)" : "var(--fg-soft)", fontWeight: on ? 650 : 500,
+            }}>{f.label} <span className="m-mono" style={{ fontSize: 10.5, opacity: 0.75 }}>{counts[f.key]}</span></button>
+          );
+        })}
+        <span style={{ flex: 1 }}></span>
+        {counts.failed > 0 && (
+          <button className="m-btn sm ghost" type="button" onClick={onClearFailed}>Clear failed</button>
         )}
-        {catalogEnabled && (
-          <nav className="catalog-tabs" aria-label="Выбор библиотеки">
-            <a className="m-btn" href={catalogHash()} aria-current={inCatalog ? "page" : undefined}
-              onClick={() => setCatalogQuery("")}>Каталог</a>
-            <a className="m-btn" href={mySongsHash} aria-current={mySongs ? "page" : undefined}>Мои песни</a>
-          </nav>
-        )}
-        {inCatalog ? (
-          <>
-            <button className="m-btn primary catalog-add-song" type="button" onClick={pasteUrl}>
-              + Добавить свою песню
-            </button>
-            <CatalogBrowser query={catalogQuery} shelf={shelf} prepare={onCreate} pasteUrl={pasteUrl} />
-          </>
-        ) : (
-          <div data-my-songs>
-            <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)", padding: 16 }}>
-              <h1 style={{ margin: "0 0 16px", fontFamily: "var(--font-display)", fontSize: 24, lineHeight: "32px", textWrap: "balance" }}>Choose a song and sing</h1>
-              {phone ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {urlInput}
-                  <div style={{ display: "flex", gap: 10 }}>
-                    {submitAction}
-                    {uploadAction}
-                  </div>
-                  {filePicker}
-                </div>
-              ) : (
-                <div style={{ display: "flex", gap: 10 }}>
-                  {urlInput}
-                  {submitAction}
-                  {uploadAction}
-                  {filePicker}
-                </div>
-              )}
-              <div className="m-mono" style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11, color: "var(--muted)", alignItems: "center", flexWrap: "wrap" }}>
-                <span className="m-stem vox">vocals</span>
-                <span className="m-stem inst">instrumental</span>
-                <span style={{ color: "var(--fg-soft)" }}>synced lyrics</span>
-              </div>
-              {submitError && (
-                <div className="m-mono" style={{ marginTop: 8, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>{submitError}</div>
-              )}
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "20px 0 11px", flexWrap: "wrap" }}>
-              {FILTERS.map((f) => {
-                const on = filter === f.key;
-                return (
-                  <button key={f.key} type="button" className="m-btn sm" onClick={() => onFilter(f.key)} style={{
-                    border: "1px solid " + (on ? "var(--accent)" : "transparent"),
-                    background: on ? "var(--accent-soft)" : "transparent",
-                    color: on ? "var(--accent)" : "var(--fg-soft)", fontWeight: on ? 650 : 500,
-                  }}>{f.label} <span className="m-mono" style={{ fontSize: 10.5, opacity: 0.75 }}>{counts[f.key]}</span></button>
-                );
-              })}
-              <span style={{ flex: 1 }}></span>
-              {counts.failed > 0 && (
-                <button className="m-btn sm ghost" type="button" onClick={onClearFailed}>Clear failed</button>
-              )}
-            </div>
-
-            <div style={{ display: "flex", gap: 8, marginBottom: 11 }}>
-              <input type="search" value={query} onChange={(e) => onQuery(e.target.value)}
-                placeholder="Search songs…" aria-label="Search songs by title, artist, or URL"
-                style={{ flex: 1, minWidth: 0, padding: "7px 11px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", outline: "none" }} />
-              <select value={sort} onChange={(e) => onSort(e.target.value as JobSort)} aria-label="Sort jobs" style={{
-                appearance: "none", padding: "7px 28px 7px 11px", border: "1px solid var(--border)", borderRadius: "var(--radius)",
-                background: "var(--bg-card)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", cursor: "pointer",
-                backgroundImage: "linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%)",
-                backgroundPosition: "calc(100% - 14px) 55%, calc(100% - 9px) 55%", backgroundSize: "5px 5px", backgroundRepeat: "no-repeat",
-              }}>
-                <option value="newest">Newest first</option>
-                <option value="oldest">Oldest first</option>
-                <option value="title">Title A–Z</option>
-              </select>
-            </div>
-
-            {listError && (
-              <div className="m-mono" style={{ marginBottom: 10, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>Couldn’t load jobs: {listError}</div>
-            )}
-            {actionError && (
-              <div className="m-mono" style={{ marginBottom: 10, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>Action failed: {actionError}</div>
-            )}
-
-            {!loaded && jobs.length === 0 ? (
-              <BoothSkeleton />
-            ) : jobs.length === 0 ? (
-              <BoothEmpty title={emptyTitle} sub={emptySub} />
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {jobs.map((j) =>
-                  statusMeta(j.status).active ? (
-                    <PRunningCard key={j.id} job={j} wsOpen={wsOpen} actions={actions} />
-                  ) : (
-                    <CompactRow key={j.id} job={j} actions={actions} />
-                  ),
-                )}
-          </div>
-        )}
-
-          </div>
-        )}
-
-        <div className="m-mono" style={{ marginTop: "auto", paddingTop: 16, display: "flex", gap: 16, fontSize: 11, color: "var(--muted)", borderTop: "1px dashed var(--border-soft)", alignItems: "center" }}>
-          <span><span style={{ color: wsOpen ? "var(--ok)" : "var(--err)" }}>{wsOpen ? "●" : "○"}</span> ws {wsOpen ? "live" : "down"}</span>
-          <span>today {costDollars(todaySpend) ?? "$0.00"}</span>
-          {version && <span style={{ marginLeft: "auto" }}>Sonereli v{version}</span>}
-        </div>
       </div>
-      {children}
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 11 }}>
+        <input type="search" value={query} onChange={(e) => onQuery(e.target.value)}
+          placeholder="Search songs…" aria-label="Search songs by title, artist, or URL"
+          style={{ flex: 1, minWidth: 0, padding: "7px 11px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", outline: "none" }} />
+        <select value={sort} onChange={(e) => onSort(e.target.value as JobSort)} aria-label="Sort jobs" style={{
+          appearance: "none", padding: "7px 28px 7px 11px", border: "1px solid var(--border)", borderRadius: "var(--radius)",
+          background: "var(--bg-card)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", cursor: "pointer",
+          backgroundImage: "linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%)",
+          backgroundPosition: "calc(100% - 14px) 55%, calc(100% - 9px) 55%", backgroundSize: "5px 5px", backgroundRepeat: "no-repeat",
+        }}>
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="title">Title A–Z</option>
+        </select>
+      </div>
+
+      {listError && (
+        <div className="m-mono" style={{ marginBottom: 10, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>Couldn’t load jobs: {listError}</div>
+      )}
+      {actionError && (
+        <div className="m-mono" style={{ marginBottom: 10, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>Action failed: {actionError}</div>
+      )}
+
+      {!loaded && jobs.length === 0 ? (
+        <BoothSkeleton />
+      ) : jobs.length === 0 ? (
+        <BoothEmpty title={emptyTitle} sub={emptySub} />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {jobs.map((j) =>
+            statusMeta(j.status).active ? (
+              <PRunningCard key={j.id} job={j} actions={actions} />
+            ) : (
+              <CompactRow key={j.id} job={j} actions={actions} />
+            ),
+          )}
+        </div>
+      )}
     </div>
   );
 }

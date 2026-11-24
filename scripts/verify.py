@@ -566,23 +566,25 @@ async def submit(args, api, evidence, scenario, profile, bearer):
                 }, actual == checks["owner_authenticated"])
                 if actual != state["authenticated_owner"]:
                     raise VerifyError("The browser did not authenticate with the machine bearer")
-                song_input = (
-                    'document.querySelector(\'input[aria-label="Song link"], '
-                    'input[aria-label="Source URL"]\')'
-                )
-                field = await wait_for(
-                    lambda: tab.element_point(song_input),
-                    20, "Booth source input unavailable",
+                add_song = await wait_for(
+                    lambda: tab.element_point('document.querySelector(".sn-add-song")'),
+                    20, "Pinned Add song action unavailable",
                 )
                 await wait_for(lambda: asyncio.sleep(0, tab.open_sockets), 15,
                                "Booth WebSocket did not open")
+                await tab.tap(add_song)
+                song_input = 'document.querySelector(\'input[name="song-link"]\')'
+                field = await wait_for(
+                    lambda: tab.element_point(song_input),
+                    20, "Add song link field unavailable",
+                )
                 await tab.tap(field)
                 # Emulated Chrome touch may leave a text field unfocused.
                 await tab.js(f"{song_input}?.focus({{preventScroll: true}})")
                 await tab.call("Input.insertText", {"text": source})
                 button = await wait_for(
                     lambda: tab.element_point(
-                        f'{song_input}?.parentElement.querySelector("button.primary")'
+                        'document.querySelector(".sn-add-submit:not(:disabled)")'
                     ),
                     5, "Submit button missing, disabled or obscured",
                 )

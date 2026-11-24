@@ -2,6 +2,7 @@ import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { ClerkProvider, SignedIn, SignedOut, useAuth, useClerk, useUser } from "@clerk/clerk-react";
 import { App } from "./App";
+import { lang } from "./i18n";
 import { FeedbackButton, FeedbackProvider } from "./feedback/Feedback";
 import { startFeedbackLog } from "./feedback/diagnostics";
 import { getConfig, type RuntimeConfig, setTokenGetter } from "./api";
@@ -43,10 +44,12 @@ function Routed({ config, authControl, catalogEnabled = false }: { config: Runti
     return <Stage key={route.token} token={route.token} publicBaseUrl={config.public_base_url} />;
   }
   if (route.name === "settings") {
-    return <SettingsPage authControl={authControl} />;
+    return <SettingsPage authControl={authControl} catalogEnabled={catalogEnabled} />;
   }
   return <App config={config} authControl={authControl} catalogEnabled={catalogEnabled}
-    mySongs={route.name !== "catalog"} shelf={route.name === "catalog" ? route.shelf : undefined} />;
+    view={route.name === "catalog" ? "catalog" : route.name === "add" ? "add" : "my-songs"}
+    shelf={route.name === "catalog" ? route.shelf : undefined}
+    addUrl={route.name === "add" ? route.url : undefined} />;
 }
 
 function Boot({ children }: { children: React.ReactNode }) {
@@ -201,5 +204,7 @@ async function bootstrap() {
   );
 }
 
+// Interface language follows the device (en/ru); content keeps its own dir/lang.
+document.documentElement.lang = lang;
 startFeedbackLog();
 void bootstrap();

@@ -15,9 +15,12 @@ from verify_cdp import VerifyError, open_tab, wait_for
 
 from karaoke.catalog import youtube_id
 
-CATALOG_TAB = '.catalog-tabs a[href="#/catalog"]'
-SONG_LINK = 'input[aria-label="Song link"]'
-ADD_SONG = ".catalog-add-song"
+TABBAR = ".sn-tabbar"
+CATALOG_TAB = '.sn-tabbar a[href="#/catalog"]'
+MY_SONGS_TAB = '.sn-tabbar a[href="#/my-songs"]'
+SONG_LINK = 'input[name="song-link"]'
+ADD_SONG = ".sn-add-song"
+ADD_SUBMIT = ".sn-add-submit"
 
 
 def check(evidence, scope, step, **observed):
@@ -104,8 +107,8 @@ async def clerk_tab(args, evidence, profile, script, owner=1):
             }})()""")
             if not signed_in:
                 raise VerifyError(f"Clerk QA sign-in failed for account #{owner}")
-            await wait_for(lambda: tab.js("!!document.querySelector('.catalog-tabs')"), 25,
-                           "Signed-in Booth tabs not visible")
+            await wait_for(lambda: tab.js(f"!!document.querySelector({json.dumps(TABBAR)})"), 25,
+                           "Signed-in tab bar not visible")
             me = await clerk_api(tab, "/me")
             if me["status"] != 200 or me["body"].get("state") != "clerk_user":
                 raise VerifyError(f"Coordinator did not authenticate QA account #{owner} as Clerk")
@@ -172,11 +175,44 @@ def stage_link(token):
     return f'a[href="#/job/{quote(token, safe="")}"]'
 
 
-async def submit_url(tab, source):
-    await type_into(tab, 'input[aria-label="Song link"]', source)
+async def open_add_song(tab):
+    """Open Add song from the pinned action unless it is already open."""
+    if not await tab.js(f"!!document.querySelector({json.dumps(SONG_LINK)})"):
+        await click(tab, ADD_SONG)
+    await wait_for(lambda: tab.js(f"!!document.querySelector({json.dumps(SONG_LINK)})"), 15,
+                   "Add song did not open")
+
+
+async def submit_url(tab, source, *, reuse=False):
+    await open_add_song(tab)
+    await type_into(tab, SONG_LINK, source)
+    if reuse:
+        await wait_for(lambda: tab.js(f"!!document.querySelector({json.dumps(ADD_SUBMIT + '[data-reuse]')})"),
+                       15, "Add song did not offer Start singing for a ready catalog song")
     tab.response = None
-    await click(tab, 'input[aria-label="Song link"] + button.primary, [data-my-songs] button.primary')
-    return await wait_for(lambda: asyncio.sleep(0, tab.response), 25, "Booth submit has no HTTP 201 receipt")
+    await click(tab, f"{ADD_SUBMIT}:not(:disabled)")
+    return await wait_for(lambda: asyncio.sleep(0, tab.response), 25, "Add song submit has no HTTP 201 receipt")
+
+
+async def add_song_pinned(tab):
+    """Add song is visible in the bottom 220 px without scrolling and hit-testable."""
+    return await tab.js(f"""(() => {{
+        const el = document.querySelector({json.dumps(ADD_SONG)});
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.top >= innerHeight - 220 && r.bottom <= innerHeight && r.left >= 0
+            && r.right <= innerWidth
+            && el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2));
+    }})()""")
+
+
+async def add_song_focuses_link(tab):
+    await click(tab, ADD_SONG)
+    return await wait_for(
+        lambda: tab.js(f"""location.hash.startsWith("#/add")
+            && document.activeElement?.matches({json.dumps(SONG_LINK)})"""),
+        15, "Add song did not focus the Song link input",
+    )
 
 
 async def cleanup(api, job, args, evidence, scope, linked):
@@ -196,28 +232,29 @@ async def verify_add_song(args, evidence, scenario, script):
         scope = f"{profile}.add-song"
         async with clerk_tab(args, evidence, profile, script) as (tab, _):
             await tab.navigate(f"{args.target}/app/")
-            song_link_visible = await wait_for(lambda: visible_in_viewport(tab, SONG_LINK), 25,
-                                               "Song link input missing on first load of /app/")
-            check(evidence, scope, first_load, song_link_visible=song_link_visible,
-                  viewport=await tab.js("[document.documentElement.clientWidth, innerHeight]"),
-                  my_songs_selected=await tab.js("""!!document.querySelector(
-                      '.catalog-tabs a[href="#/my-songs"][aria-current="page"]'
-                  )"""))
+            await wait_for(lambda: tab.js(f"!!document.querySelector({json.dumps(TABBAR)})"), 25,
+                           "Tab bar missing on first load of /app/")
+            pinned = await wait_for(lambda: add_song_pinned(tab), 15, "Add song is not pinned on My songs")
+            selected = await tab.js(f"!!document.querySelector({json.dumps(MY_SONGS_TAB + '[aria-current=page]')})")
+            viewport = await tab.js("[document.documentElement.clientWidth, innerHeight]")
             await evidence.capture(tab, scope, "first-load")
+            focused = await add_song_focuses_link(tab)
+            await evidence.capture(tab, scope, "add-from-my-songs")
+            check(evidence, scope, first_load, viewport=viewport, my_songs_selected=selected,
+                  add_song_pinned=pinned, add_song_focuses_link=focused)
+            await click(tab, ".sn-add-close")
+            await wait_for(lambda: tab.js("!location.hash.startsWith('#/add')"), 10, "Add song did not close")
             await click(tab, CATALOG_TAB)
-            add_song_visible = await wait_for(lambda: visible_in_viewport(tab, ADD_SONG), 15,
-                                              "Add song button missing from the catalog viewport")
             await wait_for(lambda: tab.js("!!document.querySelector('.catalog-browser:not(:has(.catalog-skeleton))')"),
                            15, "Catalog did not finish loading")
+            pinned = await wait_for(lambda: add_song_pinned(tab), 15, "Add song is not pinned on Catalog")
             await evidence.capture(tab, scope, "catalog")
-            await click(tab, ADD_SONG)
-            link_focused = await wait_for(
-                lambda: tab.js(f"""location.hash === "#/my-songs"
-                    && document.activeElement?.matches({json.dumps(SONG_LINK)})"""),
-                15, "Add song did not focus the Song link input",
-            )
-            check(evidence, scope, catalog_step,
-                  add_song_button_visible=add_song_visible, add_song_focuses_link=link_focused)
+            focused = await add_song_focuses_link(tab)
+            await click(tab, ".sn-add-close")
+            returned = await wait_for(lambda: tab.js("location.hash === '#/catalog'"), 10,
+                                      "Closing Add song did not return to the Catalog tab")
+            check(evidence, scope, catalog_step, add_song_pinned=pinned, add_song_focuses_link=focused,
+                  close_returns_to_tab=returned)
 
 
 async def verify_ready(args, api, evidence, scenario, script, inspect_player):
@@ -262,25 +299,31 @@ async def verify_ready(args, api, evidence, scenario, script, inspect_player):
                 lyrics = (await clerk_api(tab, f"/share/{song['stage_token']}/lyrics"))["body"]
                 await click(tab, stage_link(song["stage_token"]))
                 await inspect_player(tab, evidence, f"{scope}.sing", start["assert"], lyrics)
-                await click(tab, "button.m-btn.ghost")
-                await click(tab, '.catalog-tabs a[href="#/my-songs"]')
+                await tab.navigate(f"{args.target}/app/#/my-songs")
+                await wait_for(lambda: tab.js(f"!!document.querySelector({json.dumps(TABBAR)})"), 15,
+                               "My songs did not load")
                 identifier = youtube_id(song["source_url"])
                 source = f"https://youtu.be/{identifier}#karaoke-verify-{uuid.uuid4().hex}"
-                job = await submit_url(tab, source)
+                await open_add_song(tab)
+                await type_into(tab, SONG_LINK, source)
+                offered = await wait_for(
+                    lambda: tab.js(f"!!document.querySelector({json.dumps(ADD_SUBMIT + '[data-reuse]')})"),
+                    15, "Add song did not offer Start singing for a ready catalog song")
+                await evidence.capture(tab, scope, "add-ready")
+                job = await submit_url(tab, source, reuse=True)
                 if job["source_url"] != source or job["owner_subject"] != subject:
                     job = None
                     raise VerifyError("Reuse receipt did not match the test owner and source")
                 frames = tab.stages.get(job["id"], [])
                 active = job["status"] != "completed" or any(frame["status"] != "completed" for frame in frames)
-                link = stage_link(job["job_token"])
-                visible = await wait_for(lambda link=link: tab.js(f"!!document.querySelector({json.dumps(link)})"),
-                                         15, "Reused song did not appear in My Songs")
+                hash_ = json.dumps(f"#/job/{quote(job['job_token'], safe='')}")
+                opened = await wait_for(lambda hash_=hash_: tab.js(f"location.hash === {hash_}"), 15,
+                                        "Start singing did not open the Stage")
+                library = (await clerk_api(tab, "/jobs"))["body"]
                 check(evidence, f"{scope}.reuse", submit,
-                      sing_action_visible=visible, processing_progress_shown=active,
+                      start_singing_offered=offered, processing_progress_shown=active,
                       new_downloads=int(active), new_gpu_jobs=int(bool(job["gpu_instance_id"])),
-                      my_songs_selected=await tab.js("!!document.querySelector('[data-my-songs]')"))
-                await evidence.capture(tab, scope, "my-songs")
-                await click(tab, link)
+                      stage_opened=opened, library_entry_created=any(row["id"] == job["id"] for row in library))
                 await inspect_player(tab, evidence, f"{scope}.my-songs-sing", personal_stage["assert"], lyrics)
             finally:
                 await cleanup(api, job, args, evidence, scope, linked=True)
