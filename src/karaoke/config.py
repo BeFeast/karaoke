@@ -7,6 +7,8 @@ starts; we never read Infisical inline.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -196,7 +198,7 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 200 * 1024 * 1024  # KARAOKE_MAX_UPLOAD_BYTES
 
     # NFS-mounted artifact root inside the coordinator container.
-    artifact_root: str = "/srv/artifacts"
+    artifact_root: str | Path = "/srv/artifacts"
 
     # ---- Lyrics: multi-source word vote (#281) ----
     # Fetch a second reference text (Genius) next to LRCLIB and let the ASR

@@ -20,9 +20,9 @@ except PackageNotFoundError:  # pragma: no cover - editable/uninstalled fallback
     __version__ = "0.0.0+unknown"
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] = ()) -> int:
     """Dispatch the coordinator's operator CLI."""
-    args = list(sys.argv[1:] if argv is None else argv)
+    args = list(argv)
     if args == ["catalog", "ledger"]:
         from karaoke.catalog_ledger import main as ledger
 
@@ -33,3 +33,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print(f"karaoke {__version__} — scaffold; nothing wired up yet.")
     return 0
+
+
+def cli() -> int:
+    return main(sys.argv[1:])

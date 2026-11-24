@@ -1,4 +1,4 @@
-"""Read the catalog pilot spend ledger without exposing job data or settings."""
+"""Read the catalog pilot spend ledger with an explicit output allowlist."""
 from __future__ import annotations
 
 import asyncio

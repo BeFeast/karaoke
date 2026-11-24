@@ -36,7 +36,7 @@ dependencies = [
 ]
 
 [project.scripts]
-karaoke = "karaoke:main"
+karaoke = "karaoke:cli"
 karaoke-catalog-pilot = "karaoke.catalog_pilot:main"
 
 [build-system]
