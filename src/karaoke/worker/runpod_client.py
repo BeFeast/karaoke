@@ -520,7 +520,7 @@ class RunpodClient:
                 instrumental_path.write_bytes(b"instrumental-from-r2")
                 return vocals_path, instrumental_path
 
-            from karaoke.worker.r2_client import presign_get
+            from karaoke.worker.r2_client import presign_get, urlopen_retry
 
             for kind, target in (
                 ("vocals", vocals_path),
@@ -535,7 +535,7 @@ class RunpodClient:
                     secret_access_key=self.settings.r2_secret_access_key.get_secret_value(),
                     expires_in=int(self.settings.r2_presign_ttl_s or 600),
                 )
-                with urllib.request.urlopen(url, timeout=300) as resp:
+                with urlopen_retry(url, timeout=300) as resp:
                     target.write_bytes(resp.read())
             return vocals_path, instrumental_path
 
