@@ -129,32 +129,27 @@ Serverless pulls without auth, so a private image will leave workers stuck
 on `pulling`. (`karaoke-runpod` is already public from the r3/r4 pushes;
 new tags on the same package inherit that visibility.)
 
-## Provisioning the endpoint
+## Updating the endpoint image
 
-`scripts/runpod_provision.py` is idempotent — first run creates
-`karaoke-poc`, subsequent runs PATCH the same endpoint. From the repo
-root:
+Create the Serverless endpoint in RunPod and configure its GPU selection and
+worker limits before running the provisioner. Supply the existing endpoint ID
+with a RunPod key that can read and update that endpoint.
 
 ```bash
-RUNPOD_API_KEY=... uv run python scripts/runpod_provision.py
+RUNPOD_API_KEY=... RUNPOD_ENDPOINT_ID=... uv run python scripts/runpod_provision.py
 ```
 
-The locked spec (image, GPU type pool, workers, timeouts, flashboot)
-lives in `TEMPLATE_SPEC` / `ENDPOINT_SPEC` inside the script — do not edit
-without flagging it on issue #33. To roll the endpoint onto a new image,
-bump `TEMPLATE_SPEC["imageName"]` (e.g. to `…cuda12.4-r7`) and re-run: the
-script detects the image change and flushes warm/standby workers
-(`workersMax` bounce to 0 → drain → restore) so the next job cold-pulls the
-new tag instead of a stale worker (#75). The script prints a final
-`RUNPOD_ENDPOINT_ID=<id>` line that the operator pipes into Infisical
-manually; the script never touches Infisical.
+The script uses the [RunPod v2 management API](https://docs.runpod.io/api-reference-v2/migrate-from-v1).
+Change `IMAGE` in the script to roll out a new image. It patches the image,
+drains stale workers, and restores the endpoint's original minimum and
+maximum worker counts. Running it with the same image leaves the workers
+alone. The endpoint retains its GPU pools, exclusions and container settings.
 
-**GPU pool / VRAM note.** The endpoint's `gpuTypeIds` pool floor is the
-RTX A4000 (16 GB). BS-Roformer at audio-separator's default chunk/overlap
-settings runs comfortably under that, but if a future model or larger
-segment size OOMs on the 16 GB tier, either narrow the pool to ≥20 GB GPUs
-or pass smaller `mdxc`/`roformer` segment params to the `Separator` in
-`handler.py::_get_separator`.
+The v1 bootstrap that created `karaoke-poc` from an exact `gpuTypeIds`
+allowlist has been removed. RunPod v2 selects GPU pools with exclusions.
+Configure and review that selection when you create the endpoint. For the
+CUDA 12.4 worker image, exclude the RTX PRO 6000 Blackwell MIG 1g.24gb in
+`ADA_24` and 2g.48gb in `ADA_48_PRO` when selecting those pools.
 
 ## Why this image differs from `docker/vast/`
 
