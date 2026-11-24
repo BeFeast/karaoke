@@ -24,19 +24,19 @@ with its normal settings loaded.
 
 ```sh
 # Offline validation. No database writes or external calls.
-karaoke-catalog-pilot --dry-run
+uv run --no-sync karaoke-catalog-pilot --dry-run
 
 # Import discovery metadata and retire recordings outside the two pilot languages.
-karaoke-catalog-pilot --import-only
+uv run --no-sync karaoke-catalog-pilot --import-only
 
 # Process at most one cleared video. Supply the verified endpoint pricing ceiling.
-karaoke-catalog-pilot --manifest approved.json --run --limit 1 --usd-per-hour-ceiling RATE
+uv run --no-sync karaoke-catalog-pilot --manifest approved.json --run --limit 1 --usd-per-hour-ceiling RATE
 
 # Recheck an eligible asset in review, and publish only if all checks pass.
-karaoke-catalog-pilot --auto-check ASSET_ID
+uv run --no-sync karaoke-catalog-pilot --auto-check ASSET_ID
 
 # Read-only JSONL input for the evening review gallery.
-karaoke-catalog-pilot --gallery
+uv run --no-sync karaoke-catalog-pilot --gallery
 ```
 
 `--wait` waits for foreground downloads and the cooldown between starts.
@@ -69,11 +69,12 @@ sudo -n docker exec -d karaoke sh -c '
     umask 077
     log_dir="${KARAOKE_ARTIFACT_ROOT:-/srv/artifacts}/catalog"
     mkdir -p "$log_dir"
-    exec /app/.venv/bin/karaoke-catalog-pilot --run --wait --usd-per-hour-ceiling "$1" >> "$log_dir/pilot-run.log" 2>&1
+    exec uv run --no-sync karaoke-catalog-pilot --run --wait --usd-per-hour-ceiling "$1" >> "$log_dir/pilot-run.log" 2>&1
 ' sh "$RATE"
 ```
 
-The exec survives SSH disconnect. If the container is recreated, rerun the
+The exec survives SSH disconnect. Running through `uv run` puts the installed
+`yt-dlp` executable on the runner's PATH. If the container is recreated, rerun the
 command after it starts to recover any interrupted attempt from Postgres.
 Use `--resume` after resolving a download gate.
 

@@ -139,7 +139,7 @@ async def type_into(tab, selector, text):
     field = f"document.querySelector({json.dumps(selector)})"
     point = await wait_for(lambda: tab.element_point(field), 15, "Search or submit field not visible")
     await tab.tap(point)
-    await tab.js(f"{field}.select()")
+    await tab.js(f"(() => {{ const input = {field}; input.focus(); input.select(); }})()")
     await tab.call("Input.insertText", {"text": text})
 
 
