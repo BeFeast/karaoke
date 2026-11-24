@@ -190,8 +190,38 @@ async def cleanup(api, job, args, evidence, scope, linked):
         evidence.check(scope, "private_job_removed", True, result, passed)
 
 
+async def verify_add_song(args, evidence, scenario, script):
+    first_load, catalog_step = scenario["action"]
+    for profile in scenario["state"]["profiles"]:
+        scope = f"{profile}.add-song"
+        async with clerk_tab(args, evidence, profile, script) as (tab, _):
+            await tab.navigate(f"{args.target}/app/")
+            song_link_visible = await wait_for(lambda: visible_in_viewport(tab, SONG_LINK), 25,
+                                               "Song link input missing on first load of /app/")
+            check(evidence, scope, first_load, song_link_visible=song_link_visible,
+                  viewport=await tab.js("[document.documentElement.clientWidth, innerHeight]"),
+                  my_songs_selected=await tab.js("""!!document.querySelector(
+                      '.catalog-tabs a[href="#/my-songs"][aria-current="page"]'
+                  )"""))
+            await evidence.capture(tab, scope, "first-load")
+            await click(tab, CATALOG_TAB)
+            add_song_visible = await wait_for(lambda: visible_in_viewport(tab, ADD_SONG), 15,
+                                              "Add song button missing from the catalog viewport")
+            await wait_for(lambda: tab.js("!!document.querySelector('.catalog-browser:not(:has(.catalog-skeleton))')"),
+                           15, "Catalog did not finish loading")
+            await evidence.capture(tab, scope, "catalog")
+            await click(tab, ADD_SONG)
+            link_focused = await wait_for(
+                lambda: tab.js(f"""location.hash === "#/my-songs"
+                    && document.activeElement?.matches({json.dumps(SONG_LINK)})"""),
+                15, "Add song did not focus the Song link input",
+            )
+            check(evidence, scope, catalog_step,
+                  add_song_button_visible=add_song_visible, add_song_focuses_link=link_focused)
+
+
 async def verify_ready(args, api, evidence, scenario, script, inspect_player):
-    first_load, booth, search, start, submit, personal_stage = scenario["action"]
+    booth, search, start, submit, personal_stage = scenario["action"]
     for profile in scenario["state"]["profiles"]:
         job = None
         async with clerk_tab(args, evidence, profile, script) as (tab, subject):
@@ -199,14 +229,6 @@ async def verify_ready(args, api, evidence, scenario, script, inspect_player):
             song = await ready_fixture(tab, "he" if profile == "iphone" else "en")
             card = f'.catalog-card[data-catalog-song="{song["id"]}"]'
             try:
-                await tab.navigate(f"{args.target}/app/")
-                song_link_visible = await wait_for(lambda: visible_in_viewport(tab, SONG_LINK), 25,
-                                                   "Song link input missing on first load of /app/")
-                check(evidence, scope, first_load, song_link_visible=song_link_visible,
-                      my_songs_selected=await tab.js("""!!document.querySelector(
-                          '.catalog-tabs a[href="#/my-songs"][aria-current="page"]'
-                      )"""))
-                await evidence.capture(tab, scope, "first-load")
                 await click(tab, CATALOG_TAB)
                 await wait_for(lambda: tab.js("!!document.querySelector('.catalog-shelf-scroll')"), 15, "No catalog shelves")
                 layout = await tab.js(f"""(() => {{
@@ -220,21 +242,12 @@ async def verify_ready(args, api, evidence, scenario, script, inspect_player):
                         viewport: [width, window.innerHeight],
                     }};
                 }})()""")
-                add_song_visible = await visible_in_viewport(tab, ADD_SONG)
                 await evidence.capture(tab, scope, "shelves")
-                await click(tab, ADD_SONG)
-                link_focused = await wait_for(
-                    lambda: tab.js(f"""location.hash === "#/my-songs"
-                        && document.activeElement?.matches({json.dumps(SONG_LINK)})"""),
-                    15, "Add song did not focus the Song link input",
-                )
-                await click(tab, CATALOG_TAB)
                 await click(tab, ".catalog-shelf a[href^='#/catalog/']")
                 opened = await wait_for(lambda: tab.js("!!document.querySelector('.catalog-grid')"), 15,
                                         "Full shelf did not open")
                 await evidence.capture(tab, scope, "full-shelf")
                 check(evidence, scope, booth,
-                      add_song_button_visible=add_song_visible, add_song_focuses_link=link_focused,
                       ready_recording_visible=layout["ready"],
                       primary_shelves_visible={"Hebrew hits", "English hits"} <= set(layout["names"]),
                       shelves_scroll_independently=layout["noPageScroll"] and layout["shelfScroll"],

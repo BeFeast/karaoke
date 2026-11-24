@@ -4,14 +4,8 @@ state:
   profiles: [iphone, android]
   search_languages: [he, en]
 action:
-  - open: /app/
-    assert:
-      my_songs_selected: true
-      song_link_visible: true
   - open: catalog_tab
     assert:
-      add_song_button_visible: true
-      add_song_focuses_link: true
       ready_recording_visible: true
       primary_shelves_visible: true
       shelves_scroll_independently: true

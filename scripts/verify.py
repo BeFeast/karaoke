@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import yaml
-from verify_catalog import run_pilot_checks, verify_miss, verify_ready, verify_shared
+from verify_catalog import run_pilot_checks, verify_add_song, verify_miss, verify_ready, verify_shared
 from verify_cdp import VerifyError, open_tab, origin, wait_for
 from ytdlp_canary import _split_urls
 
@@ -692,6 +692,8 @@ async def run(args, directory):
                     await verify_miss(args, api, evidence, scenario, SCRIPT, inspect_player)
                 elif name == "catalog-shared-processing":
                     await verify_shared(args, api, evidence, scenario, SCRIPT)
+                elif name == "mobile-add-song":
+                    await verify_add_song(args, evidence, scenario, SCRIPT)
                 elif "authenticated_owner" in state:
                     for profile in state["profiles"]:
                         await submit(args, api, evidence, scenario, profile, bearer)
