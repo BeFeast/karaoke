@@ -648,7 +648,7 @@ async def verify_settings(args, evidence, scenario, script):
             await click(tab, ".sn-set-section .sn-attach:nth-of-type(2) .sn-switch")
             before = await tab.js(SETTINGS_STATE)
             await evidence.capture(tab, scope, "settings")
-            await tab.navigate(f"{args.target}/app/#/settings")
+            await tab.call("Page.reload")
             await wait_for(lambda: tab.js("!!document.querySelector('.sn-segmented')"), 20, "Settings missing after reload")
             after = await tab.js(SETTINGS_STATE)
             evidence.check(scope, "settings_persist_after_reload", step["assert"]["settings_persist_after_reload"],
