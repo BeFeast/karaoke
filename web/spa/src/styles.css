@@ -1,4 +1,5 @@
-/* Karaoke — "Marquee" design system foundation (issue #152).
+/* Karaoke — design system foundation (Marquee #152, re-pointed to Sonereli
+   UI/UX v1 tokens in step 0; the Marquee layout recipes migrate per screen).
    Token blocks + recipes ported from the accepted Claude Design export
    ("Karaoke Final" = Marquee direction), with the FINAL green-marquee accent
    baked into the token values as literals. Legacy app token names below are
@@ -7,160 +8,112 @@
    Self-hosted webfonts (fontsource, imported in main.tsx) — no external
    font <link>. */
 
-/* ── MARQUEE TOKENS (design: karaoke-marquee.css + final-app.jsx FINAL bake) ── */
-/* ─────────────────────────────────────────────────────────────────────────
-   KARAOKE v2 — "Marquee" direction tokens.
-   The neon sign, tamed: light paper booth with marquee accents by day,
-   full neon stage at night. Bungee = signage, Bricolage = lyrics/display.
-   ───────────────────────────────────────────────────────────────────────── */
+/* ── MARQUEE TOKENS (Sonereli UI/UX v1 tokens; legacy Marquee names aliased) ── */
+/* Sonereli brand v3 roles (spec 2026-11-24-sonereli-ui-ux-v1 · Design tokens).
+   Pink = current line + identity · Cyan = time/progress/focus · Lime = the one
+   primary action · Violet = atmosphere only, never text. Dark theme only. */
+:root {
+  --sn-bg: #08090D;
+  --sn-surface: #12151B;
+  --sn-raised: #1B1F27;
+  --sn-divider: #2A2E39;
+  --sn-track: #3A3F4C;
+  --sn-boundary: #707988;
+  --sn-text: #F5F7FA;
+  --sn-muted: #AAB0BC;
+  --sn-past: #858B97;
+  --sn-pink: #FF2DAA;
+  --sn-cyan: #2DDFF5;
+  --sn-lime: #DFFF00;
+  --sn-violet: #8057FF;
+  --sn-error: #FF808C;
+  --sn-success: #ACED61;
+  --sn-warning: #FFC14B;
+  --sn-on-accent: #08090D;
+  --sn-scrim: #000000BB;
+  --sn-shadow: 0 12px 32px #000000DD;
+
+  --sn-r-xs: 6px;
+  --sn-r-sm: 10px;
+  --sn-r-md: 14px;
+  --sn-r-lg: 20px;
+  --sn-r-pill: 999px;
+  --sn-ease: cubic-bezier(.22, 1, .36, 1);
+  --sn-t-fast: 120ms;
+  --sn-t-base: 200ms;
+  --sn-t-slow: 280ms;
+
+  --sn-font-ui: "Inter", "Noto Sans Hebrew", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --sn-font-display: "Anton", "Inter", "Noto Sans Hebrew", sans-serif;
+}
 
 .m-booth, .m-stage,
 .m-booth *, .m-stage * { box-sizing: border-box; }
 
-.m-booth, .m-stage {
-  --font-ui: "Geist", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+/* Legacy Marquee custom-property names, re-pointed at the Sonereli roles.
+   The booth and stage rooms are the same dark room now (Day/Night removed). */
+:root, .m-booth, .m-stage {
+  --font-ui: var(--sn-font-ui);
+  --font-sans: var(--sn-font-ui);
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  --font-display: "Bricolage Grotesque", var(--font-ui);
-  --font-sign: "Bungee", var(--font-display);
+  --font-display: var(--sn-font-ui);
+  --font-sign: var(--sn-font-display);
 
-  /* functional duet pair (stems) — constant */
-  --vox: #9fd07a;
-  --inst: #7fa3c4;
+  --bg: var(--sn-bg);
+  --bg-soft: var(--sn-raised);
+  --bg-card: var(--sn-surface);
+  --fg: var(--sn-text);
+  --fg-soft: var(--sn-muted);
+  --muted: var(--sn-muted);
+  --border: var(--sn-divider);
+  --border-soft: var(--sn-divider);
+  --accent: var(--sn-lime);
+  --accent-fg: var(--sn-on-accent);
+  --accent-soft: color-mix(in srgb, var(--sn-lime) 14%, transparent);
+  --link: var(--sn-cyan);
 
-  --radius-sm: 4px;
-  --radius: 7px;
-  --radius-lg: 13px;
+  --bulb: var(--sn-cyan);
+  --bulb-off: var(--sn-track);
+  --rose: var(--sn-pink);
+  --vox: var(--sn-pink);
+  --inst: var(--sn-cyan);
+  --vox-ui: var(--sn-pink);
+  --inst-ui: var(--sn-cyan);
+  --lyric-dim: var(--sn-past);
+  --lyric-prev: var(--sn-past);
+  --lyric-next: var(--sn-muted);
+  --glow: none;
 
+  --ok: var(--sn-success);
+  --warn: var(--sn-warning);
+  --err: var(--sn-error);
+  --info: var(--sn-cyan);
+
+  --radius-sm: var(--sn-r-xs);
+  --radius: var(--sn-r-sm);
+  --radius-lg: var(--sn-r-md);
+  --shadow-sm: none;
+  --shadow: var(--sn-shadow);
+  --rule: 1px solid var(--border);
+
+  --sheen: var(--sn-text);
+  --scrim: var(--sn-bg);
+  --err-fg: var(--sn-on-accent);
+
+  --row-y: 9px;
+  --pane-pad: 24px;
+  --fs-base: 13px;
+
+  color-scheme: dark;
+}
+
+.m-booth, .m-stage {
   font-family: var(--font-ui);
   font-size: 13px;
   line-height: 1.5;
   color: var(--fg);
   -webkit-font-smoothing: antialiased;
-}
-
-/* ── BOOTH · daytime sign, lights off ────────────────────────────────── */
-.m-booth {
-  --bg: #f5f2ea;
-  --bg-soft: #ebe6d9;
-  --bg-card: #fbf9f4;
-  --fg: #24201a;
-  --fg-soft: #4c463c;
-  --muted: #8e8675;
-  --border: #d8d1c0;
-  --border-soft: #e6e0d3;
-  --accent: #5f7a4a;          /* marquee green, inked for light bg */
-  --accent-fg: #fbf9f4;
-  --accent-soft: #e4ecd9;
-  --bulb: #9fd07a;            /* a lit bulb stays bulb-colored */
-  --bulb-off: #d8d1c0;
-  --rose: #b3503f;
-  --vox-ui: #5f7a4a;
-  --inst-ui: #44688a;
-  --ok: #5f7a4a;
-  --warn: #a07a2e;
-  --err: #a8442f;
-  --info: #44688a;
-  --lyric-dim: #cfc5ae;
-  --lyric-prev: #a89d87;
-  --lyric-next: #8a7f69;
-  --glow: none;
-  --shadow-sm: 0 1px 0 rgba(36, 32, 26, 0.05);
-  --shadow: 0 1px 2px rgba(36, 32, 26, 0.06), 0 8px 20px rgba(36, 32, 26, 0.07);
   background: var(--bg);
-}
-
-/* ── STAGE · lights on ───────────────────────────────────────────────── */
-.m-stage {
-  --bg: #161210;
-  --bg-soft: #211b16;
-  --bg-card: #1c1712;
-  --fg: #f0e9da;
-  --fg-soft: #c9c1ae;
-  --muted: #897f6c;
-  --border: #352c20;
-  --border-soft: #2a2319;
-  --accent: #9fd07a;
-  --accent-fg: #1c1207;
-  --accent-soft: #9fd07a26;
-  --bulb: #9fd07a;
-  --bulb-off: #3a3023;
-  --rose: #e06a5a;
-  --vox-ui: #9fd07a;
-  --inst-ui: #7fa3c4;
-  --ok: #97b36e;
-  --warn: #d9a44a;
-  --err: #d2705c;
-  --info: #7fa3c4;
-  --lyric-dim: #54493a;
-  --lyric-prev: #6e6354;
-  --lyric-next: #8d8170;
-  --glow: 0 0 18px #9fd07a59;
-  --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.4);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 28px rgba(0, 0, 0, 0.45);
-  background: var(--bg);
-}
-
-/* App token aliases — every legacy custom-property name re-pointed at the
-   Marquee palettes. :root = booth (light) and ONLY booth: theming is scoped
-   to the rooms (#154) — booth rooms are always light, and the stage room
-   flips day/night by swapping its container class (.m-booth ↔ .m-stage).
-   No global dark mode, no <html data-theme>. */
-:root {
-  --font-ui: "Geist", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-sans: var(--font-ui);
-  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  --font-display: "Bricolage Grotesque", var(--font-ui);
-  --font-sign: "Bungee", var(--font-display);
-
-  --bg: #f5f2ea;
-  --bg-soft: #ebe6d9;
-  --bg-card: #fbf9f4;
-  --fg: #24201a;
-  --fg-soft: #4c463c;
-  --muted: #8e8675;
-  --border: #d8d1c0;
-  --border-soft: #e6e0d3;
-  --accent: #5f7a4a;
-  --accent-fg: #fbf9f4;
-  --accent-soft: #e4ecd9;
-  --link: var(--accent);
-
-  --bulb: #9fd07a;
-  --bulb-off: #d8d1c0;
-  --rose: #b3503f;
-  --vox: #9fd07a;
-  --inst: #7fa3c4;
-  --vox-ui: #5f7a4a;
-  --inst-ui: #44688a;
-  --lyric-dim: #cfc5ae;
-  --lyric-prev: #a89d87;
-  --lyric-next: #8a7f69;
-  --glow: none;
-
-  --ok: #5f7a4a;
-  --warn: #a07a2e;
-  --err: #a8442f;
-  --info: #44688a;
-
-  --radius-sm: 4px;
-  --radius: 7px;
-  --radius-lg: 13px;
-  --shadow-sm: 0 1px 0 rgba(36, 32, 26, 0.05);
-  --shadow: 0 1px 2px rgba(36, 32, 26, 0.06), 0 8px 20px rgba(36, 32, 26, 0.07);
-  --rule: 1px solid var(--border);
-
-  /* theme-invariant utility colors swept out of the layout rules
-     (progress sheen, modal scrim, danger-button text) */
-  --sheen: #fff;
-  --scrim: #000;
-  --err-fg: #fff;
-
-  /* compact density */
-  --row-y: 9px;
-  --pane-pad: 24px;
-  --fs-base: 13px;
-
-  color-scheme: light;
 }
 /* ── END MARQUEE TOKENS ── */
 
@@ -602,7 +555,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   opacity: 0.8;
 }
 .synced-lyrics-line.is-active .synced-lyrics-seek {
-  color: var(--accent);
+  color: var(--sn-pink);
   font-size: 20px;
   line-height: 1.4;
   font-weight: 650;
@@ -635,7 +588,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   --lyric-sweep: to right;
   color: transparent;
   background-image: linear-gradient(var(--lyric-sweep),
-    var(--accent) var(--lyric-progress), var(--fg-soft) var(--lyric-progress));
+    var(--sn-pink) var(--lyric-progress), var(--fg) var(--lyric-progress));
   background-clip: text;
 }
 .lyric-token-timed:dir(rtl) { --lyric-sweep: to left; }
@@ -690,7 +643,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 .synced-lyrics-seek:focus-visible {
   outline: none;
   color: var(--fg);
-  box-shadow: inset 0 0 0 2px var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--sn-cyan);
   border-radius: var(--radius-sm);
 }
 @media (prefers-reduced-motion: reduce) {

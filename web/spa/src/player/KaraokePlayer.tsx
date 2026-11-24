@@ -30,7 +30,6 @@ import { LyricText } from "../components/LyricText";
 import { Perf } from "../components/Perf";
 import { PHONE_QUERY, useCoarsePointer, usePhoneLayout } from "../lib/layout";
 import { useActiveTouchStart } from "../lib/touchGuards";
-import type { StageTheme } from "../theme";
 import { type KaraokePlayerApi, PLAYBACK_RATES, useKaraokePlayer } from "./useKaraokePlayer";
 
 /** mm:ss for a (possibly NaN/Infinity) seconds value. */
@@ -342,18 +341,14 @@ export interface KaraokePlayerProps {
   view: "console" | "setlist" | "compact";
   /** Timed lyric lines for the wipe / setlist modules (empty = no lyrics). */
   lines: TimedLine[];
-  /** Room theme — the ◐ flip re-reads canvas colors off the room container. */
-  theme: StageTheme;
   /** Real share title (already defaulted by the Stage) — the perf top strip. */
   title: string;
   artist: string | null;
   /** Plain lyrics for the perf overlay's no-synced-data fallback. */
   plainLyrics: string | null;
-  /** Flip the room's persisted ◐ theme — shared with the perf overlay. */
-  onToggleTheme: () => void;
 }
 
-export function KaraokePlayer({ instrumentalUrl, vocalsUrl, fetchStem, onTime, seekRef, view, lines, theme, title, artist, plainLyrics, onToggleTheme }: KaraokePlayerProps) {
+export function KaraokePlayer({ instrumentalUrl, vocalsUrl, fetchStem, onTime, seekRef, view, lines, title, artist, plainLyrics }: KaraokePlayerProps) {
   const rootRef = useRef<HTMLElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [container, setContainer] = useState<HTMLElement | null>(null);
@@ -374,11 +369,10 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, fetchStem, onTime, s
     compact ? 32 : window.matchMedia?.(PHONE_QUERY).matches ? 72 : 96,
   );
 
-  // Re-read canvas colors off the room container whenever ◐ flips the room
-  // class — runs after the DOM commit, so the computed tokens are the new set.
+  // Re-read canvas colors off the room container after the first commit.
   useEffect(() => {
     if (rootRef.current) setColors(readWaveColors(rootRef.current));
-  }, [theme]);
+  }, []);
 
   // Mount the wavesurfer container once the ref is attached.
   useEffect(() => {
@@ -601,8 +595,6 @@ export function KaraokePlayer({ instrumentalUrl, vocalsUrl, fetchStem, onTime, s
           artist={artist}
           lines={lines}
           plain={plainLyrics}
-          theme={theme}
-          onToggleTheme={onToggleTheme}
           onExit={exitPerf}
           reducedMotion={reducedMotion}
         />

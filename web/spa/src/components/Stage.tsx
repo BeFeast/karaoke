@@ -4,8 +4,8 @@
 // player/KaraokePlayer.tsx around the untouched engine API. The DOM tree and
 // inline styles are the design's; the adaptations wire real data only:
 // SharePayload (incl. the new completed_at/source_url), the structured lyrics
-// payload, real artifact downloads, and the room-scoped ◐ day/night theme
-// (booth rooms stay always light). Recorded deviations: cost + receipt are
+// payload, real artifact downloads, and the dark Sonereli room
+// (Day/Night removed, UI/UX v1 step 0). Recorded deviations: cost + receipt are
 // OMITTED on this page (not in SharePayload — anonymous share viewers must
 // not see cost); the ⤢ Performance control opens the #156 fullscreen overlay
 // (components/Perf.tsx), mounted inside the player so the engine persists.
@@ -18,7 +18,6 @@ import { fmtDuration, formatRelativeTime } from "../lib/jobListUtils";
 import { useCoarsePointer, usePhoneLayout } from "../lib/layout";
 import { compactUrlLabel, sourceDisplay } from "../lib/source";
 import { clerkStageToken, goDashboard, mySongsHash, navigate, publicShareUrl } from "../router";
-import { type StageTheme, useStageTheme } from "../theme";
 import { MBulbs, SonereliMark } from "./marks";
 import { timeLines } from "./stage-core";
 import { parseLrc, sungLines, SyncedLyrics } from "./SyncedLyrics";
@@ -57,7 +56,6 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
   const [lyrics, setLyrics] = useState<LyricsPayload | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [view, setViewRaw] = useState<StageView>(initialView);
-  const [theme, toggleTheme] = useStageTheme();
   const phone = usePhoneLayout();
   const timer = useRef<number | null>(null);
 
@@ -210,8 +208,6 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
         onReloadLyrics={reloadLyrics}
         view={view}
         setView={setView}
-        theme={theme}
-        onToggleTheme={toggleTheme}
         currentTime={currentTime}
         onTime={onTime}
         seekRef={seekRef}
@@ -221,12 +217,10 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
     );
   }
 
-  // StageScreen (stage.jsx:91-161): the room container flips .m-booth (day) /
-  // .m-stage (night) — the FINAL token sets are baked into those classes, so
-  // the ◐ toggle is a class swap scoped to THIS room only.
+  // StageScreen (stage.jsx:91-161): one dark room (Sonereli UI/UX v1).
   return (
     <div className="stage-scroll">
-      <div className={`${theme === "day" ? "m-booth" : "m-stage"}${shared ? " shared-stage" : ""}`} style={{ minHeight: "100%", width: "100%", minWidth: 0, display: "flex", flexDirection: "column" }}>
+      <div className={`m-stage${shared ? " shared-stage" : ""}`} style={{ minHeight: "100%", width: "100%", minWidth: 0, display: "flex", flexDirection: "column" }}>
         {/* phone (#184): the row wraps instead of overflowing — same elements,
             same order; the desktop branch is the untouched port. */}
         <div style={phone
@@ -242,7 +236,6 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
             </>
           )}
           <FeedbackButton />
-          <button className="m-btn sm ghost" type="button" onClick={toggleTheme}>{theme === "day" ? "Night" : "Day"}</button>
         </div>
 
         <main className={shared ? "shared-stage-body" : undefined} style={shared ? undefined : { flex: 1, maxWidth: 760, width: "100%", margin: "0 auto", padding: phone ? "18px 14px 18px" : "22px 24px 20px", display: "flex", flexDirection: "column", gap: 16, minHeight: 0, minWidth: 0 }}>
@@ -265,8 +258,6 @@ function StageBody({
   onReloadLyrics,
   view,
   setView,
-  theme,
-  onToggleTheme,
   currentTime,
   onTime,
   seekRef,
@@ -283,9 +274,6 @@ function StageBody({
   onReloadLyrics: () => Promise<void>;
   view: StageView;
   setView: (v: StageView) => void;
-  theme: StageTheme;
-  /** Flip the room's persisted ◐ theme — the perf overlay shares it (#156). */
-  onToggleTheme: () => void;
   currentTime: number;
   onTime: (t: number) => void;
   seekRef: React.MutableRefObject<((time: number) => void) | null>;
@@ -446,11 +434,9 @@ function StageBody({
             seekRef={seekRef}
             view={shared ? "compact" : view}
             lines={timed}
-            theme={theme}
             title={title}
             artist={payload.artist}
             plainLyrics={lyrics?.plain ?? null}
-            onToggleTheme={onToggleTheme}
           />
         </Suspense>
       )}

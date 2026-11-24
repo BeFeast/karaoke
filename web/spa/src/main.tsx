@@ -10,22 +10,26 @@ import { SettingsPage } from "./components/SettingsPage";
 import { Stage } from "./components/Stage";
 import { SignInScreen, UserAvatar } from "./components/SignInWall";
 import { clerkStageToken, navigate, settingsHash, useRoute } from "./router";
-// Self-hosted Marquee webfonts (#152) — latin subsets only, no external
-// font <link>. Geist = UI, Geist Mono = mono, Bricolage Grotesque = display,
-// Bungee = signage. Weights cover the 400–650 range the stylesheet asks for.
-import "@fontsource/geist/latin-400.css";
-import "@fontsource/geist/latin-500.css";
-import "@fontsource/geist/latin-600.css";
-import "@fontsource/geist/latin-700.css";
+// Self-hosted Sonereli webfonts (UI/UX v1 step 0), no external font <link>:
+// Inter = UI and lyrics (latin + cyrillic for the Russian UI), Anton = display
+// titles (latin only; Russian titles fall back to Inter), Noto Sans Hebrew =
+// Hebrew lyrics and titles. Geist Mono stays until the step 11 cleanup.
+import "@fontsource/inter/latin-400.css";
+import "@fontsource/inter/latin-500.css";
+import "@fontsource/inter/latin-600.css";
+import "@fontsource/inter/latin-700.css";
+import "@fontsource/inter/cyrillic-400.css";
+import "@fontsource/inter/cyrillic-500.css";
+import "@fontsource/inter/cyrillic-600.css";
+import "@fontsource/inter/cyrillic-700.css";
+import "@fontsource/anton/latin-400.css";
+import "@fontsource/noto-sans-hebrew/hebrew-400.css";
+import "@fontsource/noto-sans-hebrew/hebrew-600.css";
+import "@fontsource/noto-sans-hebrew/hebrew-700.css";
 import "@fontsource/geist-mono/latin-400.css";
 import "@fontsource/geist-mono/latin-500.css";
 import "@fontsource/geist-mono/latin-600.css";
 import "@fontsource/geist-mono/latin-700.css";
-import "@fontsource/bricolage-grotesque/latin-400.css";
-import "@fontsource/bricolage-grotesque/latin-500.css";
-import "@fontsource/bricolage-grotesque/latin-600.css";
-import "@fontsource/bricolage-grotesque/latin-700.css";
-import "@fontsource/bungee/latin-400.css";
 import "./styles.css";
 
 // Routes between the dashboard (App), the stage room (/app/#/job/:token) and
