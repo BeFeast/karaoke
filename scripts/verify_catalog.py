@@ -491,7 +491,7 @@ async def verify_my_songs(args, evidence, scenario, script):
             song = await ready_fixture(tab)
             await tab.navigate(f"{args.target}/app/#/job/{quote(song['stage_token'], safe='')}")
             await wait_for(lambda: tab.js("window.karaokeVerify?.snapshot().ready"), 40, "Stage player never became ready")
-            await click(tab, 'button[aria-label="Play"]')
+            await click(tab, '[data-sn-play], button[aria-label="Play"]')
 
             async def sung():
                 value = await tab.js("karaokeVerify.snapshot().time")
@@ -521,7 +521,7 @@ async def verify_my_songs(args, evidence, scenario, script):
                                     "Continue singing did not open the Stage")
             await wait_for(lambda: tab.js("window.karaokeVerify?.snapshot().ready"), 40, "Resumed Stage never became ready")
             await asyncio.sleep(0.6)
-            await click(tab, 'button[aria-label="Play"]')
+            await click(tab, '[data-sn-play], button[aria-label="Play"]')
             await asyncio.sleep(0.25)
             resumed = await tab.js("karaokeVerify.snapshot().time")
             await evidence.capture(tab, scope, "resumed")

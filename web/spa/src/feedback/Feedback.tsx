@@ -8,6 +8,11 @@ const OpenFeedback = createContext<((button: HTMLButtonElement) => void) | null>
 type Screenshot = Awaited<ReturnType<typeof import("./screenshot")["captureViewport"]>>;
 type Receipt = { number: number; url: string };
 
+/** Open the feedback sheet from any control (the Stage ⋯ menu). */
+export function useOpenFeedback(): ((button: HTMLButtonElement) => void) | null {
+  return useContext(OpenFeedback);
+}
+
 export function FeedbackButton() {
   const open = useContext(OpenFeedback);
   return (

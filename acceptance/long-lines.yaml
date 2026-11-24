@@ -6,16 +6,26 @@ state:
   lyrics_script: Hebrew
 action:
   - open: public_share
-    assert: &lyrics
+    assert: &stage
       whole_song_font_size: {inactive_px: 16, active_px: 20}
       lyric_lines_fit: true
       longest_lyric_wraps: true
       active_lyric_in_view: true
       lyric_highlight_sync: 0.5
       word_highlight_sync: 0.5
+      # Sonereli Stage (UI/UX v1 step 7): the active line's top sits at 20–40%
+      # of the lyrics viewport while it is sung.
+      active_line_anchored: [0.2, 0.4]
   - open: stage
-    assert: *lyrics
+    assert: *stage
+  - open: stage
+    reduced_motion: true
+    assert: *stage
   - open: performance
     assert:
-      <<: *lyrics
       whole_song_font_size: {inactive_px: 20, active_px: 24}
+      lyric_lines_fit: true
+      longest_lyric_wraps: true
+      active_lyric_in_view: true
+      lyric_highlight_sync: 0.5
+      word_highlight_sync: 0.5

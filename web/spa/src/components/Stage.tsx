@@ -1,51 +1,36 @@
-// KARAOKE — the Stage: per-song player room on #/job/:token (Marquee port,
-// #154). Literal port of design/claude-export/proto/stage.jsx StageScreen
-// (:91-161) — TransportBar/ConsoleModule/SetlistModule live in
-// player/KaraokePlayer.tsx around the untouched engine API. The DOM tree and
-// inline styles are the design's; the adaptations wire real data only:
-// SharePayload (incl. the new completed_at/source_url), the structured lyrics
-// payload, real artifact downloads, and the dark Sonereli room
-// (Day/Night removed, UI/UX v1 step 0). Recorded deviations: cost + receipt are
-// OMITTED on this page (not in SharePayload — anonymous share viewers must
-// not see cost); the ⤢ Performance control opens the #156 fullscreen overlay
-// (components/Perf.tsx), mounted inside the player so the engine persists.
+// Sonereli — the Stage: the per-song player on #/job/:token and /share/:token
+// (UI/UX v1 steps 6–7). Lyrics fill the screen; scrub, transport and Original
+// vocals sit in the bottom dock in thumb reach. The top bar has minimize, the
+// song title and ⋯; Lyrics size, Performance view, Fix lyrics, downloads,
+// Copy share link and Report a problem live in the ⋯ sheet. A guest share
+// link shows the same Stage with the Sonereli mark instead of minimize and
+// without owner items. A job that was not ready when opened shows Processing
+// until the singer taps Start singing (step 3).
 
-import { FeedbackButton } from "../feedback/Feedback";
-import { type CSSProperties, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cancelJob, createJob, fetchProtectedArtifact, getLyrics, getShare, type JobOut, listJobs, type LyricsPayload, type SharePayload } from "../api";
-import { artifactHref, artifactView, canRetryJob, statusMeta } from "../jobStatus";
+import { useOpenFeedback } from "../feedback/Feedback";
 import { t } from "../i18n";
-import { saveLastPlayed } from "../lib/library";
+import { artifactHref, artifactView, canRetryJob, statusMeta } from "../jobStatus";
+import { coverUrl, saveLastPlayed } from "../lib/library";
+import { sourceDisplay } from "../lib/source";
+import { useKaraokePlayer } from "../player/useKaraokePlayer";
+import { addHash, clerkStageToken, closeModalRoute, itemHash, navigate, publicShareUrl, replaceHash } from "../router";
 import { connectJobSocket, isTerminal, type WsJobStatus } from "../ws";
+import { Icon } from "./Icon";
+import { LyricsRebuild, LyricsReviewEditor } from "./LyricsQuality";
+import { SonereliMark } from "./marks";
+import { Perf } from "./Perf";
 import { Processing, stageIndex } from "./Processing";
-import { fmtDuration, formatRelativeTime } from "../lib/jobListUtils";
-import { useCoarsePointer, usePhoneLayout } from "../lib/layout";
-import { compactUrlLabel, sourceDisplay } from "../lib/source";
-import { addHash, clerkStageToken, goDashboard, itemHash, mySongsHash, navigate, publicShareUrl, replaceHash } from "../router";
-import { MBulbs, SonereliMark } from "./marks";
+import { Sheet } from "./Sheet";
 import { timeLines } from "./stage-core";
-import { parseLrc, sungLines, SyncedLyrics } from "./SyncedLyrics";
+import { StageDock } from "./StageDock";
+import { StageLyrics } from "./StageLyrics";
+import { LYRICS_SIZES, type LyricsSize, loadLyricsSize, saveLyricsSize } from "./stageLyricsModel";
+import { parseLrc, sungLines } from "./SyncedLyrics";
 import { Toast } from "./Toast";
-import { LyricsReview } from "./LyricsQuality";
-
-// Lazy so wavesurfer.js (+ its WebAudio engine) only loads on the stage route,
-// keeping the booth bundle lean.
-const KaraokePlayer = lazy(() => import("../player/KaraokePlayer"));
 
 const POLL_MS = 3000;
-
-// View toggle console|setlist — persisted; console default (FINAL.defaultView).
-type StageView = "console" | "setlist";
-const VIEW_KEY = "karaoke-stage-view";
-
-function initialView(): StageView {
-  try {
-    if (localStorage.getItem(VIEW_KEY) === "setlist") return "setlist";
-  } catch {
-    /* localStorage unavailable — fall through to the default */
-  }
-  return "console";
-}
 
 export function Stage({ token, publicBaseUrl, shared = false, startAt }: {
   token: string;
@@ -61,8 +46,6 @@ export function Stage({ token, publicBaseUrl, shared = false, startAt }: {
   const [loaded, setLoaded] = useState(false);
   const [lyrics, setLyrics] = useState<LyricsPayload | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [view, setViewRaw] = useState<StageView>(initialView);
-  const phone = usePhoneLayout();
   const timer = useRef<number | null>(null);
   // Processing (UI/UX v1 step 3): a job that was not ready when opened shows
   // the Processing screen until the singer taps Start singing.
@@ -74,15 +57,6 @@ export function Stage({ token, publicBaseUrl, shared = false, startAt }: {
   const [socket, setSocket] = useState<"idle" | "open" | "dropped">("idle");
   const [lastUpdate, setLastUpdate] = useState(() => Date.now());
   const [now, setNow] = useState(() => Date.now());
-
-  const setView = useCallback((v: StageView) => {
-    try {
-      localStorage.setItem(VIEW_KEY, v);
-    } catch {
-      /* ignore persistence failure */
-    }
-    setViewRaw(v);
-  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -193,11 +167,6 @@ export function Stage({ token, publicBaseUrl, shared = false, startAt }: {
     cancelJob(owner.id).then(() => load(), () => setToast(t("err.generic")));
   }, [owner, load]);
 
-  // Remember the song and position for Continue singing (step 4).
-  const payloadRef = useRef<SharePayload | null>(null);
-  payloadRef.current = payload;
-  const savedAt = useRef(-10);
-
   // Structured lyrics (LRC + plain + provenance) once the job is complete.
   useEffect(() => {
     if (payload?.status === "completed") {
@@ -212,62 +181,6 @@ export function Stage({ token, publicBaseUrl, shared = false, startAt }: {
     if (!updated) throw new Error("Could not load the latest lyrics. Your draft is unchanged.");
     setLyrics(updated);
   }, [token]);
-
-  const onCopyLink = useCallback(async () => {
-    const url = publicShareUrl(publicBaseUrl, token);
-    try {
-      await navigator.clipboard.writeText(url);
-      setToast("Link copied");
-    } catch {
-      // Clipboard API blocked (insecure context / permissions) — fall back.
-      window.prompt("Copy this link:", url);
-    }
-  }, [publicBaseUrl, token]);
-
-  const download = useCallback(async (url: string, filename: string) => {
-    try {
-      const response = await fetchProtectedArtifact(url);
-      if (!response.ok) throw new Error("Download request failed");
-      const objectUrl = URL.createObjectURL(await response.blob());
-      const link = document.createElement("a");
-      link.href = objectUrl;
-      link.download = filename;
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-    } catch {
-      setToast("Couldn’t download this file");
-    }
-  }, []);
-
-  // ── Player ↔ lyrics transport seam (#59) ─────────────────────────────────
-  // `onTime` pushes the live playhead into state that only feeds the lyrics
-  // highlight (the player owns its own clock, so this doesn't drive playback).
-  // `seekRef` is the player's imperative seek, shared so a lyrics-line click
-  // can drive the transport. Both are stable across renders.
-  const [currentTime, setCurrentTime] = useState(0);
-  const seekRef = useRef<((time: number) => void) | null>(null);
-  const onTime = useCallback((t: number) => {
-    // Quantise to ~10 fps so timeupdate frames don't trigger a re-render storm;
-    // the active-line lookup is far coarser than that anyway.
-    setCurrentTime((prev) => (Math.abs(prev - t) < 0.1 ? prev : t));
-    const song = payloadRef.current;
-    if (!shared && song && t > 0 && Math.abs(t - savedAt.current) >= 1) {
-      savedAt.current = t;
-      saveLastPlayed({
-        token, title: song.title?.trim() || "Untitled", artist: song.artist, sourceUrl: song.source_url,
-        position: t, duration: song.duration, at: Date.now(),
-      });
-    }
-  }, [shared, token]);
-  const onSeek = useCallback((time: number) => {
-    seekRef.current?.(time);
-  }, []);
-  const reducedMotion = useMemo(
-    () =>
-      typeof window !== "undefined" &&
-      !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
-    [],
-  );
 
   if (payload && liveStatus && (payload.status !== "completed" || processing)) {
     return (
@@ -292,327 +205,403 @@ export function Stage({ token, publicBaseUrl, shared = false, startAt }: {
       </>
     );
   }
-
-  let content: ReactNode;
+  const title = payload?.title?.trim() || (shared ? t("stage.lyrics") : "");
+  let content: React.ReactNode = null;
   if (!loaded) {
     content = <StageSkeleton />;
   } else if (notFound) {
-    content = (
-      <StageEmpty
-        title="Job not found"
-        sub="This share link is invalid, expired, or you don’t have access to it."
-      />
-    );
+    content = <StageMessage title={t("stage.notFound")} lead={t("stage.notFoundLead")} />;
   } else if (error) {
     content = (
-      <div style={{ textAlign: "center", padding: "48px 20px", color: "var(--muted)" }}>
-        <div style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 600, color: "var(--fg)", marginBottom: 5 }}>Couldn’t load this job</div>
-        <div className="m-mono" style={{ fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>{error}</div>
-        <div style={{ marginTop: 12 }}>
-          <button type="button" className="m-btn sm" onClick={() => void load()}>↻ Retry</button>
-        </div>
-      </div>
-    );
-  } else if (payload) {
-    content = (
-      <StageBody
-        payload={payload}
-        token={token}
-        shared={shared}
-        protectedStage={protectedStage}
-        download={download}
-        lyrics={lyrics}
-        onLyricsSaved={setLyrics}
-        onReloadLyrics={reloadLyrics}
-        view={view}
-        setView={setView}
-        currentTime={currentTime}
-        onTime={onTime}
-        seekRef={seekRef}
-        onSeek={onSeek}
-        reducedMotion={reducedMotion}
-        startAt={startAt}
-      />
+      <StageMessage title={t("stage.loadError")} lead={t("err.generic")}
+        action={<button type="button" className="sn-btn sn-btn-small" onClick={() => void load()}>{t("action.retry")}</button>} />
     );
   }
 
-  // StageScreen (stage.jsx:91-161): one dark room (Sonereli UI/UX v1).
-  return (
-    <div className="stage-scroll">
-      <div className={`m-stage${shared ? " shared-stage" : ""}`} style={{ minHeight: "100%", width: "100%", minWidth: 0, display: "flex", flexDirection: "column" }}>
-        {/* phone (#184): the row wraps instead of overflowing — same elements,
-            same order; the desktop branch is the untouched port. */}
-        <div style={phone
-          ? { display: "flex", alignItems: "center", gap: 8, padding: "8px 14px", minHeight: 54, borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap", minWidth: 0 }
-          : { display: "flex", alignItems: "center", gap: 12, padding: "0 22px", height: 54, borderBottom: "1px solid var(--border)", flexShrink: 0, minWidth: 0 }}>
-          {!shared && <button className="m-btn sm ghost" type="button" onClick={() => token.startsWith("clerk.") ? navigate(mySongsHash) : goDashboard()}>← Booth</button>}
-          <SonereliMark size={20} />
-          <span style={{ flex: 1, minWidth: 0 }}></span>
-          {protectedStage ? <span className="m-chip info">Catalog</span> : (
-            <>
-              <span className="m-chip info">Unlisted</span>
-              <button className="m-btn sm" type="button" onClick={() => void onCopyLink()}>Copy link</button>
-            </>
-          )}
-          <FeedbackButton />
-        </div>
-
-        <main className={shared ? "shared-stage-body" : undefined} style={shared ? undefined : { flex: 1, maxWidth: 760, width: "100%", margin: "0 auto", padding: phone ? "18px 14px 18px" : "22px 24px 20px", display: "flex", flexDirection: "column", gap: 16, minHeight: 0, minWidth: 0 }}>
-          {content}
-        </main>
-        <Toast message={toast} onDone={() => setToast(null)} />
+  if (content || !payload) {
+    return (
+      <div className={`sn-app sn-stage${shared ? " shared-stage" : ""}`}>
+        <StageTop shared={shared} title={title} artist={null} />
+        <div className="sn-stage-main">{content}</div>
       </div>
-    </div>
+    );
+  }
+
+  return (
+    <StageBody
+      key={token}
+      payload={payload}
+      token={token}
+      shared={shared}
+      protectedStage={protectedStage}
+      lyrics={lyrics}
+      onLyricsSaved={setLyrics}
+      onReloadLyrics={reloadLyrics}
+      publicBaseUrl={publicBaseUrl}
+      startAt={startAt}
+    />
   );
 }
 
-function StageBody({
-  payload,
-  token,
-  shared,
-  protectedStage,
-  download,
-  lyrics,
-  onLyricsSaved,
-  onReloadLyrics,
-  view,
-  setView,
-  currentTime,
-  onTime,
-  seekRef,
-  onSeek,
-  reducedMotion,
-  startAt,
-}: {
+function StageTop({ shared, title, artist, onMore }: {
+  shared: boolean;
+  title: string;
+  artist: string | null;
+  onMore?: (button: HTMLButtonElement) => void;
+}) {
+  return (
+    <header className={`sn-stage-top${shared ? " shared-stage-song" : ""}`}>
+      {shared ? (
+        <span className="sn-stage-brand"><SonereliMark size={26} /></span>
+      ) : (
+        <button type="button" className="sn-iconbtn" onClick={closeModalRoute} aria-label={t("stage.minimize")}>
+          <Icon name="down" size={28} />
+        </button>
+      )}
+      <div className="sn-stage-title">
+        <h1><bdi className="sn-t1" dir="auto">{title}</bdi></h1>
+        {artist && <bdi className="sn-t2" dir="auto">{artist}</bdi>}
+      </div>
+      {onMore ? (
+        <button type="button" className="sn-iconbtn" data-sn-more="" aria-haspopup="dialog" aria-label={t("stage.more")}
+          onClick={(e) => onMore(e.currentTarget)}>
+          <Icon name="more" size={28} />
+        </button>
+      ) : <span className="sn-iconbtn" aria-hidden="true" />}
+    </header>
+  );
+}
+
+type SheetName = "menu" | "fix" | "downloads" | null;
+
+function StageBody({ payload, token, shared, protectedStage, lyrics, onLyricsSaved, onReloadLyrics, publicBaseUrl, startAt }: {
   payload: SharePayload;
   token: string;
   shared: boolean;
   protectedStage: boolean;
-  download: (url: string, filename: string) => Promise<void>;
   lyrics: LyricsPayload | null;
   onLyricsSaved: (lyrics: LyricsPayload) => void;
   onReloadLyrics: () => Promise<void>;
-  view: StageView;
-  setView: (v: StageView) => void;
-  currentTime: number;
-  onTime: (t: number) => void;
-  seekRef: React.MutableRefObject<((time: number) => void) | null>;
-  onSeek: (time: number) => void;
-  reducedMotion: boolean;
+  publicBaseUrl: string;
   startAt?: number;
 }) {
-  const meta = statusMeta(payload.status);
-  const isComplete = payload.status === "completed";
   const source = sourceDisplay(payload.source_url);
-  // Mobile adaptations (#184): phone shrinks the title, coarse pointers get
-  // bigger view-toggle hit targets. No m-* mobile source for this page — the
-  // desktop Marquee structure is the design; these only resize/rewrap it.
-  const phone = usePhoneLayout();
-  const coarse = useCoarsePointer();
-  const titleFallback = source.kind === "upload" ? source.label
-    : shared ? "Shared song" : `Job ${token.slice(0, 8)}`;
-  const title = payload.title?.trim() || titleFallback;
-  const pct = Math.max(0, Math.min(100, Math.round(payload.progress)));
-
-  // Resolve the two stems for the real player. `karaoke` = instrumental (the
-  // master + waveform), `vocals` = the follower. We prefer kind, then fall back
-  // to filename for older jobs whose artifacts lack a precise content_type.
+  const title = payload.title?.trim() || (source.kind === "upload" ? source.label : t("stage.lyrics"));
   const views = payload.artifacts.map((a) => artifactView(token, a));
   const audio = views.filter((v) => v.isAudio);
-  const instrumental = useMemo(
-    () => audio.find((v) => v.kind === "karaoke") ?? audio.find((v) => v.name.startsWith("karaoke")) ?? null,
-    [audio],
-  );
-  const vocals = useMemo(
-    () => audio.find((v) => v.kind === "vocals") ?? audio.find((v) => v.name.startsWith("vocals")) ?? null,
-    [audio],
-  );
+  const instrumental = audio.find((v) => v.kind === "karaoke") ?? audio.find((v) => v.name.startsWith("karaoke")) ?? null;
+  const vocals = audio.find((v) => v.kind === "vocals") ?? audio.find((v) => v.name.startsWith("vocals")) ?? null;
   const lyricsFile = views.find((v) => v.kind === "lyrics") ?? null;
 
-  // Timed lyric lines for the wipe / setlist modules — LRC start stamps with
-  // derived sing durations (stage-core.timeLines).
-  const lines = useMemo(() => (lyrics?.lrc ? parseLrc(lyrics.lrc) : []), [lyrics?.lrc]);
-  // Speech lines (#283) are listed but never sung: the player's wipe and the
-  // performance view get the sung lines only.
-  const timed = useMemo(() => timeLines(sungLines(lines), payload.duration), [lines, payload.duration]);
+  const player = useKaraokePlayer({
+    instrumentalUrl: instrumental?.href ?? null,
+    vocalsUrl: vocals?.href ?? null,
+    fetchStem: protectedStage ? fetchProtectedArtifact : undefined,
+  });
 
-  // Meta row, real data only: duration · split <relative completed_at>.
-  // Cost + receipt are deliberately absent (recorded deviation — they are not
-  // in SharePayload; anonymous share viewers must not see cost).
-  const completedRel = formatRelativeTime(payload.completed_at);
-  const metaBits = [fmtDuration(payload.duration), completedRel ? `split ${completedRel}` : null]
-    .filter(Boolean)
-    .join(" · ");
-  const lyricsPanel = isComplete && (
-    <SyncedLyrics
-      lrc={lyrics?.lrc ?? null}
-      source={lyrics?.source ?? null}
-      plainLyrics={lyrics?.plain ?? null}
-      currentTime={currentTime}
-      onSeek={onSeek}
-      reducedMotion={reducedMotion}
-    />
+  const lines = useMemo(() => (lyrics?.lrc ? parseLrc(lyrics.lrc) : []), [lyrics?.lrc]);
+  const sung = useMemo(() => sungLines(lines), [lines]);
+  const timed = useMemo(() => timeLines(sung, payload.duration), [sung, payload.duration]);
+  const reducedMotion = useMemo(
+    () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
+    [],
   );
-  const downloadControl = (url: string, name: string, label: ReactNode) => protectedStage
-    ? <button className="m-btn sm" type="button" onClick={() => void download(url, name)}>{label}</button>
-    : <a className="m-btn sm" href={url} download>{label}</a>;
-  const downloads = (
-    <>
-      {vocals && downloadControl(vocals.href, "vocals.mp3", <><span className="m-stem vox"></span>vocals.mp3</>)}
-      {instrumental && downloadControl(instrumental.href, "karaoke.mp3", <><span className="m-stem inst"></span>karaoke.mp3</>)}
-      {lyrics?.synced
-        ? downloadControl(artifactHref(token, "lyrics.lrc"), "lyrics.lrc", "≡ lyrics.lrc")
-        : lyricsFile && downloadControl(lyricsFile.href, lyricsFile.name, `≡ ${lyricsFile.name}`)}
-    </>
+  const [size, setSizeRaw] = useState<LyricsSize>(loadLyricsSize);
+  const setSize = (next: LyricsSize) => {
+    saveLyricsSize(next);
+    setSizeRaw(next);
+  };
+  const [sheet, setSheet] = useState<SheetName>(null);
+  const [perf, setPerf] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const moreRef = useRef<HTMLButtonElement | null>(null);
+  const openFeedback = useOpenFeedback();
+  const canFix = !shared && !!lyrics && lyrics.review_job_id != null && !!lyrics.revision;
+
+  // Continue singing (step 4): remember the song and position while singing.
+  const savedAt = useRef(-10);
+  useEffect(() => {
+    const time = player.currentTime;
+    if (shared || time <= 0 || Math.abs(time - savedAt.current) < 1) return;
+    savedAt.current = time;
+    saveLastPlayed({
+      token, title, artist: payload.artist, sourceUrl: payload.source_url,
+      position: time, duration: payload.duration, at: Date.now(),
+    });
+  }, [player.currentTime, shared, token, title, payload.artist, payload.source_url, payload.duration]);
+
+  // Resume where the singer stopped, once, when the stems are ready.
+  const resumed = useRef(false);
+  useEffect(() => {
+    if (resumed.current || !player.ready || !startAt) return;
+    resumed.current = true;
+    player.seek(startAt);
+  }, [player.ready, player.seek, startAt]);
+
+  // Keep the screen awake while singing.
+  useEffect(() => {
+    if (!player.playing || !navigator.wakeLock) return;
+    let cancelled = false;
+    let pending = false;
+    let lock: WakeLockSentinel | undefined;
+    const keepScreenOn = async () => {
+      if (document.hidden || pending || (lock && !lock.released)) return;
+      pending = true;
+      try {
+        const next = await navigator.wakeLock.request("screen");
+        if (cancelled) await next.release();
+        else lock = next;
+      } catch {
+        // The browser or OS can refuse a wake lock even while the tab is visible.
+      } finally {
+        pending = false;
+      }
+    };
+    void keepScreenOn();
+    document.addEventListener("visibilitychange", keepScreenOn);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", keepScreenOn);
+      void lock?.release().catch(() => {});
+    };
+  }, [player.playing]);
+
+  // Desktop keys: Space play/pause, ←/→ ±5 s. Not while typing or in a sheet.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (sheet || perf || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.closest("dialog"))) return;
+      if (e.key === " " && el?.tagName !== "BUTTON") {
+        e.preventDefault();
+        player.playPause();
+      } else if (e.key === "ArrowLeft" && !el?.closest("[role=slider]")) {
+        e.preventDefault();
+        player.skip(-5);
+      } else if (e.key === "ArrowRight" && !el?.closest("[role=slider]")) {
+        e.preventDefault();
+        player.skip(5);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [player, sheet, perf]);
+
+  const vocalPct = Math.round(player.vocalLevel * 100);
+  const onVocals = useCallback((pct: number) => player.setVocalLevel(pct / 100), [player.setVocalLevel]);
+
+  const onMore = (button: HTMLButtonElement) => {
+    moreRef.current = button;
+    setSheet("menu");
+  };
+  const report = () => {
+    setSheet(null);
+    const trigger = moreRef.current ?? document.querySelector<HTMLButtonElement>("[data-sn-more]");
+    // Let the sheet close first so the screenshot shows the Stage.
+    window.setTimeout(() => trigger && openFeedback?.(trigger), 0);
+  };
+  const copyLink = async () => {
+    setSheet(null);
+    const url = publicShareUrl(publicBaseUrl, token);
+    try {
+      await navigator.clipboard.writeText(url);
+      setToast(t("stage.copied"));
+    } catch {
+      // Clipboard API blocked (insecure context / permissions) — fall back.
+      window.prompt(t("stage.copyPrompt"), url);
+    }
+  };
+  const download = async (url: string, filename: string) => {
+    try {
+      const response = await fetchProtectedArtifact(url);
+      if (!response.ok) throw new Error("Download request failed");
+      const objectUrl = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch {
+      setToast(t("stage.downloadFailed"));
+    }
+  };
+  const downloadItem = (url: string, name: string) => protectedStage ? (
+    <button type="button" className="sn-menu-item" onClick={() => void download(url, name)}>
+      <Icon name="download" /><span className="sn-grow">{name}</span>
+    </button>
+  ) : (
+    <a className="sn-menu-item" href={url} download>
+      <Icon name="download" /><span className="sn-grow">{name}</span>
+    </a>
   );
-  const original = source.kind === "url" && (
-    <a className="m-btn sm ghost" href={payload.source_url} target="_blank" rel="noopener">▶ original ↗</a>
+
+  const noLyrics = (
+    <div className="sn-nolyrics">
+      {coverUrl(payload.source_url)
+        ? <img className="sn-nolyrics-cover" src={coverUrl(payload.source_url) ?? undefined} alt="" />
+        : <span className="sn-nolyrics-cover" aria-hidden="true"><Icon name="note" size={48} /></span>}
+      <p className="sn-empty-title">{t("stage.noLyrics")}</p>
+      <button type="button" className="sn-btn sn-btn-small" onClick={(e) => openFeedback?.(e.currentTarget)}>
+        <Icon name="flag" size={20} />{t("stage.reportLyrics")}
+      </button>
+    </div>
   );
 
   return (
-    <>
-      {/* header block: meta row + title + view toggle (stage.jsx:105-124) */}
-      <div className={shared ? "shared-stage-song" : undefined} style={{ display: "flex", alignItems: "flex-end", gap: 14, flexWrap: "wrap", minWidth: 0 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div className="m-mono stage-song-meta" style={{ fontSize: 11, color: "var(--muted)", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
-            {metaBits && <span>{metaBits}</span>}
-            {payload.owner_display_name && <span data-feedback-private style={{ minWidth: 0, overflowWrap: "anywhere" }}>shared by {payload.owner_display_name}</span>}
-            {/* uploads (#173) have no external source — show the filename, no link.
-                Single-line ellipsis on both widths (#184): the raw URL used to
-                wrap across ~4 lines; the full URL stays in the href. */}
-            {shared ? null : source.kind === "url" ? (
-              <a href={payload.source_url} target="_blank" rel="noopener" className="m-mono" style={{ color: "var(--info)", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
-                source: {compactUrlLabel(source.label)} ↗
-              </a>
-            ) : (
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>source: {source.label}</span>
-            )}
-          </div>
-          <h1 dir="auto" style={{ margin: "6px 0 0", fontFamily: "var(--font-display)", fontWeight: 650, fontSize: phone ? 20 : 28, letterSpacing: "-0.02em", lineHeight: 1.1, overflowWrap: "anywhere" }}>{title}</h1>
-          {(payload.artist || payload.album) && (
-            <div className="stage-song-artist" style={{ marginTop: 2, fontSize: 13, color: "var(--muted)", overflowWrap: "anywhere" }}>
-              {[payload.artist, payload.album].filter(Boolean).join(" — ")}
-            </div>
-          )}
-        </div>
-        {/* view toggle */}
-        {isComplete && !shared && (
-          <div style={{ display: "flex", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-            {(["console", "setlist"] as const).map((v) => (
-              <button key={v} type="button" onClick={() => setView(v)} className="m-mono" style={{
-                appearance: "none", border: "none", cursor: "pointer", padding: coarse ? "10px 14px" : "6px 13px", fontSize: 11,
-                background: view === v ? "var(--accent)" : "var(--bg-card)",
-                color: view === v ? "var(--accent-fg)" : "var(--fg-soft)", fontWeight: 650,
-              }}>{v}</button>
-            ))}
-          </div>
+    <div className={`sn-app sn-stage${shared ? " shared-stage" : ""}`}>
+      <StageTop shared={shared} title={title} artist={payload.artist} onMore={onMore} />
+      <div className="sn-stage-main">
+        {!instrumental ? (
+          <StageMessage title={t("stage.noAudio")} />
+        ) : player.ended ? (
+          <EndCard onAgain={() => {
+            player.seek(0);
+            player.playPause();
+          }} shared={shared} />
+        ) : lyrics === null && payload.status === "completed" ? (
+          <StageSkeleton />
+        ) : (
+          <StageLyrics lines={lines} duration={payload.duration} plain={lyrics?.plain ?? null}
+            currentTime={player.currentTime} onSeek={player.seek} size={size} reducedMotion={reducedMotion}
+            noLyrics={noLyrics} />
         )}
       </div>
+      {instrumental && (
+        <StageDock player={player} lines={sung} vocalPct={vocalPct} onVocals={onVocals}>
+          {player.error ? (
+            <p className="sn-stage-status sn-err" role="alert">
+              {t("stage.audioError")}
+              <button type="button" className="sn-btn sn-btn-small sn-btn-ghost" onClick={() => window.location.reload()}>
+                {t("action.retry")}
+              </button>
+            </p>
+          ) : !player.ready ? <p className="sn-stage-status" role="status">{t("stage.loading")}</p> : null}
+        </StageDock>
+      )}
 
-      {/* in-flight: stage chip + worker note + wipebar, refreshed by the poll */}
-      {meta.active && (
-        <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "13px 16px", display: "grid", gap: 10, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-            <span className={`m-chip ${meta.chip === "neutral" ? "" : meta.chip}`}><span className="m-dot"></span>{meta.label}</span>
-            <span className="m-mono" style={{ fontSize: 11.5, color: "var(--muted)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {payload.stage_note || meta.note}
-            </span>
+      <Sheet open={sheet === "menu"} title={title} onClose={() => setSheet(null)}>
+        <div className="sn-sheet-group">
+          <span className="sn-label">{t("stage.size")}</span>
+          <div className="sn-segmented" role="radiogroup" aria-label={t("stage.size")}>
+            {LYRICS_SIZES.map((value) => (
+              <button key={value} type="button" role="radio" aria-checked={size === value}
+                className={size === value ? "is-on" : undefined} onClick={() => setSize(value)}>
+                {value.toUpperCase()}
+              </button>
+            ))}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-            <div className="m-wipebar" style={{ "--wipe": pct + "%", flex: 1 } as CSSProperties}><i></i></div>
-            <span className="m-mono" style={{ fontSize: 10.5, color: "var(--muted)" }}>{pct}%</span>
+        </div>
+        <div className="sn-menu">
+          <button type="button" className="sn-menu-item" data-sn-perf="" disabled={!player.ready}
+            onClick={() => {
+              setSheet(null);
+              setPerf(true);
+            }}>
+            <Icon name="expand" /><span className="sn-grow">{t("stage.perf")}</span>
+          </button>
+          {canFix && (
+            <button type="button" className="sn-menu-item" onClick={() => setSheet("fix")}>
+              <Icon name="edit" /><span className="sn-grow">{t("stage.fix")}</span>
+            </button>
+          )}
+          <button type="button" className="sn-menu-item" onClick={() => setSheet("downloads")}>
+            <Icon name="download" /><span className="sn-grow">{t("stage.downloads")}</span>
+          </button>
+          {!shared && !protectedStage && (
+            <button type="button" className="sn-menu-item" onClick={() => void copyLink()}>
+              <Icon name="link" /><span className="sn-grow">{t("stage.copyLink")}</span>
+            </button>
+          )}
+          <button type="button" className="sn-menu-item feedback-trigger" onClick={report}>
+            <Icon name="flag" /><span className="sn-grow">{t("stage.report")}</span>
+          </button>
+        </div>
+      </Sheet>
+
+      <Sheet open={sheet === "downloads"} title={t("stage.downloads")} onClose={() => setSheet(null)}>
+        <div className="sn-menu">
+          {vocals && downloadItem(vocals.href, "vocals.mp3")}
+          {instrumental && downloadItem(instrumental.href, "karaoke.mp3")}
+          {lyrics?.synced
+            ? downloadItem(artifactHref(token, "lyrics.lrc"), "lyrics.lrc")
+            : lyricsFile && downloadItem(lyricsFile.href, lyricsFile.name)}
+          {source.kind === "url" && (
+            <a className="sn-menu-item" href={payload.source_url} target="_blank" rel="noopener">
+              <Icon name="share" /><span className="sn-grow">{t("stage.original")}</span>
+            </a>
+          )}
+        </div>
+      </Sheet>
+
+      {canFix && lyrics && (
+        <Sheet open={sheet === "fix"} title={t("stage.fix")} onClose={() => setSheet(null)} className="sn-sheet-tall">
+          <div className="sn-fix m-stage">
+            <LyricsRebuild lyrics={lyrics} onReload={onReloadLyrics} />
+            <LyricsReviewEditor key={lyrics.revision} lyrics={lyrics} onSaved={onLyricsSaved} onSeek={player.seek}
+              onReload={onReloadLyrics} />
           </div>
-        </div>
+        </Sheet>
       )}
 
-      {payload.status === "failed" && (
-        <div className="m-mono" style={{ padding: "10px 12px", borderRadius: "var(--radius)", background: "color-mix(in oklab, var(--err) 9%, var(--bg))", border: "1px solid color-mix(in oklab, var(--err) 24%, transparent)", color: "var(--err)", fontSize: 11.5, lineHeight: 1.5 }}>
-          This job failed to process. Try resubmitting the source URL from the booth.
-        </div>
+      {perf && (
+        <Perf player={player} title={title} artist={payload.artist} lines={timed} plain={lyrics?.plain ?? null}
+          onExit={() => setPerf(false)} reducedMotion={reducedMotion} />
       )}
-
-      {!isComplete && !meta.active && payload.status !== "failed" && (
-        <StageEmpty title={meta.label} sub="Results will appear here once the job finishes." />
-      )}
-
-
-      {shared && lyricsPanel}
-
-      {/* player: waveform card + console/setlist modules (KaraokePlayer.tsx) */}
-      {isComplete && instrumental && (
-        <Suspense
-          fallback={
-            <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "14px 16px" }} aria-hidden>
-              <div className="ksplayer-wave-wrap"><div className="ksplayer-loading" /></div>
-            </div>
-          }
-        >
-          <KaraokePlayer
-            instrumentalUrl={instrumental.href}
-            vocalsUrl={vocals?.href ?? null}
-            fetchStem={protectedStage ? fetchProtectedArtifact : undefined}
-            onTime={onTime}
-            seekRef={seekRef}
-            view={shared ? "compact" : view}
-            lines={timed}
-            title={title}
-            artist={payload.artist}
-            plainLyrics={lyrics?.plain ?? null}
-            startAt={startAt}
-          />
-        </Suspense>
-      )}
-      {isComplete && !instrumental && (
-        <StageEmpty title="No audio tracks" sub="No audio tracks were produced for this job." />
-      )}
-
-      {!shared && isComplete && lyrics && <LyricsReview lyrics={lyrics} onSaved={onLyricsSaved} onSeek={onSeek} onReload={onReloadLyrics} />}
-
-      {!shared && lyricsPanel}
-
-      {/* take home (stage.jsx:150-157) — real downloads via artifactHref */}
-      {isComplete && (shared ? (
-        <details className="shared-stage-downloads">
-          <summary>Downloads</summary>
-          <div>{downloads}{original}</div>
-        </details>
-      ) : (
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: "auto", borderTop: "1px dashed var(--border)", paddingTop: 13, flexWrap: "wrap", minWidth: 0 }}>
-          <span className="m-mono" style={{ fontSize: 10.5, letterSpacing: "0.09em", textTransform: "uppercase", color: "var(--muted)", marginRight: 6 }}>take home</span>
-          {downloads}
-          <span style={{ flex: 1, minWidth: 0 }}></span>
-          {original}
-        </div>
-      ))}
-    </>
-  );
-}
-
-// Loading: the design's shimmer/skeleton primitives — no spinners.
-function StageSkeleton() {
-  return (
-    <div aria-hidden style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div>
-        <span className="skel skel-line s" />
-        <span className="skel skel-line m" style={{ height: "1.5rem" }} />
-      </div>
-      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: "14px 16px" }}>
-        <span className="skel" style={{ display: "block", height: 96 }} />
-      </div>
-      <span className="skel skel-line l" />
+      <Toast message={toast} onDone={() => setToast(null)} />
     </div>
   );
 }
 
-// Empty/terminal states built from marquee primitives (bulbs), no spinners.
-function StageEmpty({ title, sub }: { title: string; sub: string }) {
+function EndCard({ onAgain, shared }: { onAgain: () => void; shared: boolean }) {
+  const [songs, setSongs] = useState<JobOut[]>([]);
+  useEffect(() => {
+    if (shared) return;
+    let cancelled = false;
+    listJobs(50).then((rows) => {
+      if (!cancelled) setSongs(rows.filter((row) => row.status === "completed").slice(0, 3));
+    }, () => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [shared]);
   return (
-    <div style={{ textAlign: "center", padding: "48px 20px", color: "var(--muted)" }}>
-      <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
-        <MBulbs n={7} lit={0} size={5} gap={8} />
-      </div>
-      <div style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 600, color: "var(--fg)", marginBottom: 5 }}>{title}</div>
-      <div style={{ fontSize: 12.5 }}>{sub}</div>
+    <div className="sn-endcard">
+      <h2 className="sn-display sn-end-title">{t("stage.end")}</h2>
+      <button type="button" className="sn-btn sn-btn-primary sn-block" onClick={onAgain}>
+        <Icon name="retry" size={22} />{t("stage.again")}
+      </button>
+      {songs.length > 0 && (
+        <ul className="sn-list">
+          {songs.map((song) => (
+            <li key={song.id}>
+              <a className="sn-row" href={itemHash(song.job_token)}>
+                <span className="sn-grow"><bdi className="sn-t1" dir="auto">{song.title?.trim() || song.source_url}</bdi>
+                  {song.artist && <bdi className="sn-t2" dir="auto">{song.artist}</bdi>}</span>
+                <Icon name="play" size={20} className="sn-row-play" />
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Loading: static skeleton lines, no shimmer.
+function StageSkeleton() {
+  return (
+    <div className="sn-stage-skeleton" aria-hidden="true">
+      {[70, 85, 60, 90, 75, 55].map((w, i) => <span key={i} className="sn-skel" style={{ width: `${w}%` }} />)}
+    </div>
+  );
+}
+
+function StageMessage({ title, lead, action }: { title: string; lead?: string; action?: React.ReactNode }) {
+  return (
+    <div className="sn-empty">
+      <p className="sn-empty-title">{title}</p>
+      {lead && <p className="sn-lead">{lead}</p>}
+      {action}
     </div>
   );
 }

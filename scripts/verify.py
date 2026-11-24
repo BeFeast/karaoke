@@ -63,6 +63,23 @@ def video_id(url):
     return parse_qs(parts.query).get("v", [url])[0]
 
 
+PLAY_BUTTON = '[data-sn-play], button[aria-label="Play"]'
+MORE_MENU = "[data-sn-more]"
+
+
+async def open_more_menu_item(tab, item):
+    """Tap ⋯ on the Stage (UI/UX v1 step 6), then the sheet item `item`."""
+    more = await tab.element_point(f"document.querySelector({json.dumps(MORE_MENU)})")
+    if not more:
+        raise VerifyError("The Stage ⋯ menu is unreachable")
+    await tab.tap(more)
+    point = await wait_for(
+        lambda: tab.element_point(f"document.querySelector({json.dumps('dialog[open] ' + item)})"),
+        8, f"Stage menu item {item} is unreachable",
+    )
+    await tab.tap(point)
+
+
 PROCESSING_ORDER = {"queued": -1, "downloading": 0, "separating": 1, "transcribing": 2,
                     "finalizing": 3, "ready": 4}
 PROCESSING_STATE = """(() => {
@@ -377,10 +394,15 @@ async def inspect_long_lines(tab, evidence, scope, checks, lyrics, performance):
     ), 40, "Player or lyrics never became ready")
     await tab.js("document.fonts.ready.then(() => true)")
     if performance:
-        point = await tab.element_point('document.querySelector(\'button[title^="Performance mode"]\')')
-        if not point:
-            raise VerifyError("Performance control is unreachable")
-        await tab.tap(point)
+        if await tab.js(f"!!document.querySelector({json.dumps(MORE_MENU)})"):
+            await open_more_menu_item(tab, "[data-sn-perf]")
+        else:
+            point = await tab.element_point('document.querySelector(\'button[title^="Performance mode"]\')')
+            if not point:
+                raise VerifyError("Performance control is unreachable")
+            await tab.tap(point)
+        await wait_for(lambda: tab.js('!!document.querySelector(\'[aria-label="Exit performance mode"]\')'),
+                       8, "Performance view did not open")
 
     snapshot = f"karaokeVerify.lyricLayout({json.dumps(performance)})"
     sizes = []
@@ -388,6 +410,8 @@ async def inspect_long_lines(tab, evidence, scope, checks, lyrics, performance):
         # Use the real lyric button's seek action. Sampling paused keeps short
         # lines from being skipped, and lets us cover every active font size.
         await tab.js(f"karaokeVerify.seekLyric({index})")
+        if "active_line_anchored" in checks:
+            await asyncio.sleep(0.45)  # let the follow scroll (280 ms) settle
         sample = await tab.js(snapshot)
         if sample["index"] == index and (sample["text"] or "").split() == intervals[index][2].split():
             sizes.append(sample)
@@ -395,7 +419,7 @@ async def inspect_long_lines(tab, evidence, scope, checks, lyrics, performance):
     await tab.js(f"karaokeVerify.seekLyric({longest})")
     play = ('document.querySelector(\'[aria-label="Exit performance mode"]\').parentElement'
             '.parentElement.querySelector(\'button[aria-label="Play"]\')'
-            if performance else 'document.querySelector(\'button[aria-label="Play"]\')')
+            if performance else f'document.querySelector({json.dumps(PLAY_BUTTON)})')
     point = await tab.element_point(play)
     if not point:
         raise VerifyError("Play is unreachable")
@@ -460,6 +484,7 @@ async def inspect_long_lines(tab, evidence, scope, checks, lyrics, performance):
             {"interval_s": [start, end], "samples": len(samples), "mismatches": len(mistimed)},
             covered and bool(active_samples) and not mistimed,
         ),
+        "active_line_anchored": anchor_check(sizes, checks.get("active_line_anchored")),
         "word_highlight_sync": (
             {"expected_words": len(words), "sample_errors": len(word_errors),
              "distinct_highlights": len({s["lastStarted"] for s in active_samples})},
@@ -470,11 +495,41 @@ async def inspect_long_lines(tab, evidence, scope, checks, lyrics, performance):
         evidence.check(scope, name, expected, *scope_data[name])
 
 
+def anchor_check(samples, bounds):
+    """Step 7: after a seek the active line's top sits at 20–40% of the lyrics
+    viewport. Exempt: lines near the top that cannot scroll (scrollTop 0) and
+    lines too tall for the anchor, which move up but must stay whole."""
+    if bounds is None:
+        return None
+    low, high = bounds
+    rows = []
+    for sample in samples:
+        anchor, share = sample.get("anchor"), sample.get("heightShare")
+        if anchor is None:
+            rows.append(("missing", False))
+        elif low <= anchor <= high:
+            rows.append(("anchored", True))
+        elif sample.get("scrollTop", 1) <= 1 and anchor < high:
+            rows.append(("top", True))
+        elif share is not None and share > 1 - high and sample.get("inView"):
+            rows.append(("tall", True))
+        else:
+            rows.append((anchor, False))
+    kinds = [kind for kind, _ in rows]
+    observed = {"anchored": kinds.count("anchored"), "top": kinds.count("top"), "tall": kinds.count("tall"),
+                "off": [kind for kind, ok in rows if not ok]}
+    return observed, bool(rows) and observed["anchored"] > 0 and all(ok for _, ok in rows)
+
+
 async def run_player(args, evidence, profile, job, lyrics, step):
     surface = step["open"]
-    scope = f"{profile}.{surface}"
+    scope = f"{profile}.{surface}" + (".reduced-motion" if step.get("reduced_motion") else "")
     async with open_tab(args.cdp, profile, args.target, SCRIPT) as tab:
         try:
+            if step.get("reduced_motion"):
+                await tab.call("Emulation.setEmulatedMedia", {
+                    "features": [{"name": "prefers-reduced-motion", "value": "reduce"}],
+                })
             path = route(job) if surface == "public_share" else f"/app/#/job/{job['job_token']}"
             await tab.navigate(f"{args.target}{path}")
             if "whole_song_font_size" in step["assert"]:
@@ -515,10 +570,14 @@ async def run_feedback(args, evidence, profile, job, checks, version, *, live=Fa
                     await tab.call("Page.reload")
                     await wait_for(lambda: tab.js("window.karaokeVerifyFeedback?.length === 0"),
                                    15, "Share page did not reload")
-                await wait_for(lambda: tab.js("!!document.querySelector('.shared-stage-song h1')"),
+                # v0.51+: Report a problem sits in the Stage ⋯ menu, rendered with the song.
+                await wait_for(lambda: tab.js("!!document.querySelector('[data-sn-more], .shared-stage .feedback-trigger')"),
                                25, "Public share song did not load")
                 await tab.js("document.fonts.ready.then(() => true)")
-                await tap(".shared-stage .feedback-trigger")
+                if await tab.js(f"!!document.querySelector({json.dumps(MORE_MENU)})"):
+                    await open_more_menu_item(tab, ".feedback-trigger")
+                else:
+                    await tap(".shared-stage .feedback-trigger")
                 await tap(".feedback-sheet[open] button[type=submit]")
                 receipt = await wait_for(
                     lambda: tab.js(f"document.querySelector({selector})?.textContent?.trim()"),
