@@ -111,7 +111,7 @@ final class SonereliUITests: XCTestCase {
         XCTAssertTrue(element(app, "catalog.song.1").waitForExistence(timeout: 10))
         capture(app, name: "05-catalog")
         element(app, "catalog.song.2").tap()
-        XCTAssertTrue(wait(timeout: 5) { element(app, "catalog.song.2").label.contains("Preparing") || element(app, "catalog.song.2").label.contains("Готовится") })
+        XCTAssertTrue(wait(timeout: 5) { Self.element(app, "catalog.song.2").label.contains("Preparing") || Self.element(app, "catalog.song.2").label.contains("Готовится") })
         capture(app, name: "06-catalog-prepare-one-tap")
         let search = app.textFields["catalog.search"]
         search.tap()
@@ -131,7 +131,7 @@ final class SonereliUITests: XCTestCase {
         let play = waitForStage(app)
         tapSeek(app, at: 13.3 / 40)
         play.tap()
-        XCTAssertTrue(wait(timeout: 4) { element(app, "stage.lyric.3").isSelected })
+        XCTAssertTrue(wait(timeout: 4) { Self.element(app, "stage.lyric.3").isSelected })
         Thread.sleep(forTimeInterval: 0.8)
         capture(app, name: "10-stage-english")
         tapSeek(app, at: 24.5 / 40)
@@ -150,7 +150,7 @@ final class SonereliUITests: XCTestCase {
         element(app, "songs.job.1").tap()
         let hebrewPlay = waitForStage(app)
         hebrewPlay.tap()
-        XCTAssertTrue(wait(timeout: 6) { element(app, "stage.lyric.1").isSelected })
+        XCTAssertTrue(wait(timeout: 6) { Self.element(app, "stage.lyric.1").isSelected })
         capture(app, name: "14-stage-hebrew-rtl")
     }
 
@@ -198,6 +198,11 @@ final class SonereliUITests: XCTestCase {
 
     @MainActor
     private func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
+        Self.element(app, identifier)
+    }
+
+    @MainActor
+    private static func element(_ app: XCUIApplication, _ identifier: String) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 
