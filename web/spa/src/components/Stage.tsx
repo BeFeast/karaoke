@@ -12,12 +12,16 @@
 
 import { FeedbackButton } from "../feedback/Feedback";
 import { type CSSProperties, lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchProtectedArtifact, getLyrics, getShare, type LyricsPayload, type SharePayload } from "../api";
-import { artifactHref, artifactView, statusMeta } from "../jobStatus";
+import { cancelJob, createJob, fetchProtectedArtifact, getLyrics, getShare, type JobOut, listJobs, type LyricsPayload, type SharePayload } from "../api";
+import { artifactHref, artifactView, canRetryJob, statusMeta } from "../jobStatus";
+import { t } from "../i18n";
+import { saveLastPlayed } from "../lib/library";
+import { connectJobSocket, isTerminal, type WsJobStatus } from "../ws";
+import { Processing, stageIndex } from "./Processing";
 import { fmtDuration, formatRelativeTime } from "../lib/jobListUtils";
 import { useCoarsePointer, usePhoneLayout } from "../lib/layout";
 import { compactUrlLabel, sourceDisplay } from "../lib/source";
-import { clerkStageToken, goDashboard, mySongsHash, navigate, publicShareUrl } from "../router";
+import { addHash, clerkStageToken, goDashboard, itemHash, mySongsHash, navigate, publicShareUrl, replaceHash } from "../router";
 import { MBulbs, SonereliMark } from "./marks";
 import { timeLines } from "./stage-core";
 import { parseLrc, sungLines, SyncedLyrics } from "./SyncedLyrics";
@@ -43,10 +47,12 @@ function initialView(): StageView {
   return "console";
 }
 
-export function Stage({ token, publicBaseUrl, shared = false }: {
+export function Stage({ token, publicBaseUrl, shared = false, startAt }: {
   token: string;
   publicBaseUrl: string;
   shared?: boolean;
+  /** Resume position from Continue singing (#/job/:token?t=…). */
+  startAt?: number;
 }) {
   const protectedStage = clerkStageToken(token);
   const [payload, setPayload] = useState<SharePayload | null>(null);
@@ -58,6 +64,16 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
   const [view, setViewRaw] = useState<StageView>(initialView);
   const phone = usePhoneLayout();
   const timer = useRef<number | null>(null);
+  // Processing (UI/UX v1 step 3): a job that was not ready when opened shows
+  // the Processing screen until the singer taps Start singing.
+  const [sawProcessing, setSawProcessing] = useState<boolean | null>(null);
+  const [started, setStarted] = useState(false);
+  const [owner, setOwner] = useState<JobOut | null>(null);
+  const [live, setLive] = useState<{ status: WsJobStatus; progress: number; error: string | null } | null>(null);
+  const [failedStage, setFailedStage] = useState(-1);
+  const [socket, setSocket] = useState<"idle" | "open" | "dropped">("idle");
+  const [lastUpdate, setLastUpdate] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
 
   const setView = useCallback((v: StageView) => {
     try {
@@ -72,6 +88,8 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
     try {
       const data = await getShare(token);
       setPayload(data);
+      setLastUpdate(Date.now());
+      setSawProcessing((seen) => seen ?? data.status !== "completed");
       setError(null);
       setNotFound(false);
     } catch (err) {
@@ -111,6 +129,74 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
       }
     };
   }, [active, load]);
+
+  // The owner's row (id, error) enables Cancel/Try again and the live socket.
+  const processing = sawProcessing === true && !started;
+  useEffect(() => {
+    if (shared || !processing) return;
+    let cancelled = false;
+    listJobs(200).then((rows) => {
+      if (!cancelled) setOwner(rows.find((row) => row.job_token === token) ?? null);
+    }, () => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [shared, processing, token, payload?.status]);
+
+  const ownerId = owner?.id ?? null;
+  const watching = processing && ownerId !== null && !!payload && statusMeta(payload.status).active;
+  useEffect(() => {
+    if (!watching || ownerId === null) return;
+    return connectJobSocket({
+      onEvent: (event) => {
+        if (event.job_id !== ownerId) return;
+        setLastUpdate(Date.now());
+        setLive((prev) => ({
+          status: event.status,
+          progress: event.progress ?? prev?.progress ?? 0,
+          error: event.type === "stage_change" ? event.error : prev?.error ?? null,
+        }));
+        if (isTerminal(event.status)) void load();
+      },
+      onOpenChange: (open) => setSocket((prev) => (open ? "open" : prev === "idle" ? "idle" : "dropped")),
+    });
+  }, [watching, ownerId, load]);
+
+  useEffect(() => {
+    if (socket !== "dropped") return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [socket]);
+
+  // Live status: the socket's frame when it is newer, else the REST payload.
+  const liveStatus: WsJobStatus | null = payload
+    ? live && !(isTerminal(payload.status) && !isTerminal(live.status)) ? live.status : payload.status
+    : null;
+  useEffect(() => {
+    if (liveStatus && !isTerminal(liveStatus)) {
+      const index = stageIndex(liveStatus);
+      if (index >= 0) setFailedStage(Math.min(index, 2));
+    }
+  }, [liveStatus]);
+
+  const retry = useCallback(() => {
+    if (!owner || !canRetryJob(owner)) {
+      navigate(addHash);
+      return;
+    }
+    createJob({ url: owner.source_url, title: owner.title ?? undefined })
+      .then((job) => replaceHash(itemHash(job.job_token)), () => setToast(t("err.generic")));
+  }, [owner]);
+
+  const cancel = useCallback(() => {
+    if (!owner) return;
+    cancelJob(owner.id).then(() => load(), () => setToast(t("err.generic")));
+  }, [owner, load]);
+
+  // Remember the song and position for Continue singing (step 4).
+  const payloadRef = useRef<SharePayload | null>(null);
+  payloadRef.current = payload;
+  const savedAt = useRef(-10);
 
   // Structured lyrics (LRC + plain + provenance) once the job is complete.
   useEffect(() => {
@@ -164,7 +250,15 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
     // Quantise to ~10 fps so timeupdate frames don't trigger a re-render storm;
     // the active-line lookup is far coarser than that anyway.
     setCurrentTime((prev) => (Math.abs(prev - t) < 0.1 ? prev : t));
-  }, []);
+    const song = payloadRef.current;
+    if (!shared && song && t > 0 && Math.abs(t - savedAt.current) >= 1) {
+      savedAt.current = t;
+      saveLastPlayed({
+        token, title: song.title?.trim() || "Untitled", artist: song.artist, sourceUrl: song.source_url,
+        position: t, duration: song.duration, at: Date.now(),
+      });
+    }
+  }, [shared, token]);
   const onSeek = useCallback((time: number) => {
     seekRef.current?.(time);
   }, []);
@@ -174,6 +268,30 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
       !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
     [],
   );
+
+  if (payload && liveStatus && (payload.status !== "completed" || processing)) {
+    return (
+      <>
+        <Processing
+          view={{
+            status: liveStatus,
+            progress: live && liveStatus === live.status ? live.progress : payload.progress,
+            title: payload.title?.trim() || "Your song",
+            artist: payload.artist,
+            sourceUrl: payload.source_url,
+            error: owner?.error ?? live?.error ?? null,
+          }}
+          owner={shared ? null : owner}
+          failedStage={failedStage}
+          staleSeconds={socket === "dropped" ? Math.max(0, Math.round((now - lastUpdate) / 1000)) : null}
+          onStart={() => setStarted(true)}
+          onCancel={cancel}
+          onRetry={retry}
+        />
+        <Toast message={toast} onDone={() => setToast(null)} />
+      </>
+    );
+  }
 
   let content: ReactNode;
   if (!loaded) {
@@ -213,6 +331,7 @@ export function Stage({ token, publicBaseUrl, shared = false }: {
         seekRef={seekRef}
         onSeek={onSeek}
         reducedMotion={reducedMotion}
+        startAt={startAt}
       />
     );
   }
@@ -263,6 +382,7 @@ function StageBody({
   seekRef,
   onSeek,
   reducedMotion,
+  startAt,
 }: {
   payload: SharePayload;
   token: string;
@@ -279,6 +399,7 @@ function StageBody({
   seekRef: React.MutableRefObject<((time: number) => void) | null>;
   onSeek: (time: number) => void;
   reducedMotion: boolean;
+  startAt?: number;
 }) {
   const meta = statusMeta(payload.status);
   const isComplete = payload.status === "completed";
@@ -437,6 +558,7 @@ function StageBody({
             title={title}
             artist={payload.artist}
             plainLyrics={lyrics?.plain ?? null}
+            startAt={startAt}
           />
         </Suspense>
       )}

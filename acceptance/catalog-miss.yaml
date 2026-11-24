@@ -15,8 +15,8 @@ action:
       job_submitted: queued
       websocket_completed: 100
       synced_lyrics: true
-      sing_action_visible: true
-      my_songs_selected: true
+      start_singing_visible: true
+      processing_screen_shown: true
   - open: booth_sing_link
     assert:
       playback_advances: 0.75

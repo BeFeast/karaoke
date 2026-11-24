@@ -43,14 +43,61 @@ const STRINGS = {
   "err.tooLarge": ["This file is too large.", "Файл слишком большой."],
   "err.fileType": ["Use an MP3, M4A, WAV, FLAC or OGG file.", "Нужен файл MP3, M4A, WAV, FLAC или OGG."],
   "err.generic": ["Something went wrong. Try again.", "Что-то пошло не так. Повтори попытку."],
+  "action.back": ["Back", "Назад"],
+  "action.cancel": ["Cancel", "Отменить"],
+  "action.remove": ["Remove", "Убрать"],
+  "action.more": ["More actions", "Ещё действия"],
+  "proc.queued": ["Waiting to start", "Ждём очереди"],
+  "proc.running": ["Preparing your song", "Готовим песню"],
+  "proc.ready": ["Your song is ready", "Песня готова"],
+  "proc.failed": ["We couldn’t prepare this song", "Не удалось подготовить песню"],
+  "proc.cancelled": ["Preparation cancelled", "Подготовка отменена"],
+  "proc.subQueued": ["Your song starts as soon as a slot frees up.", "Подготовка начнётся, как только освободится место."],
+  "proc.subRunning": ["You can leave this screen. Preparation keeps going.", "Можно уйти с этого экрана, подготовка продолжится."],
+  "proc.subReady": ["Vocals separated · lyrics synced.", "Вокал отделён · текст синхронизирован."],
+  "proc.subSource": ["We couldn’t open this link. It may be private, removed or region-locked.", "Не удалось открыть ссылку. Видео может быть закрытым, удалённым или недоступным в регионе."],
+  "proc.subFailed": ["Something went wrong while preparing. Try again.", "Во время подготовки что-то пошло не так. Повтори попытку."],
+  "proc.subCancelled": ["You can prepare it again any time.", "Её можно подготовить снова в любой момент."],
+  "proc.stages": ["Preparation stages", "Этапы подготовки"],
+  "proc.download": ["Getting the audio", "Загружаем звук"],
+  "proc.separate": ["Separating vocals", "Отделяем вокал"],
+  "proc.lyrics": ["Syncing lyrics", "Синхронизируем текст"],
+  "proc.final": ["Final check", "Финальная проверка"],
+  "proc.done": ["Done", "Готово"],
+  "proc.stopped": ["Stopped", "Остановлено"],
+  "proc.hint": ["It appears in My songs when it’s ready.", "Когда песня будет готова, она появится в «Моих песнях»."],
+  "proc.keepBrowsing": ["Keep browsing", "Вернуться к песням"],
+  "proc.tryAnother": ["Try another link", "Другая ссылка"],
+  "proc.prepareAgain": ["Prepare again", "Подготовить снова"],
+  "proc.reconnecting": ["Reconnecting… showing the last update from {s} s ago.", "Переподключаемся… показано обновление {s} с назад."],
+  "proc.toast": ["Your song is ready", "Песня готова"],
+  "home.continue": ["Continue singing", "Продолжить"],
+  "home.resume": ["Resume {title} at {time}", "Продолжить «{title}» с {time}"],
+  "home.preparing": ["Preparing", "Готовятся"],
+  "home.attention": ["Needs attention", "Требуют внимания"],
+  "home.ready": ["Ready to sing", "Можно петь"],
+  "home.couldntPrepare": ["Couldn’t prepare", "Не удалось подготовить"],
+  "home.cancelled": ["Cancelled", "Отменено"],
+  "home.emptyTitle": ["What’s your first song?", "С какой песни начнём?"],
+  "home.emptyLead": ["Paste a YouTube link with Add song, or pick a ready song from the catalog.", "Вставь ссылку YouTube через «Добавить песню» или выбери готовую песню в каталоге."],
+  "home.browse": ["Browse the catalog", "Открыть каталог"],
+  "home.loading": ["Loading your songs…", "Загружаем песни…"],
+  "home.error": ["Your songs didn’t load. Check the connection and try again.", "Песни не загрузились. Проверь связь и повтори попытку."],
+  "home.search": ["Search my songs", "Поиск по моим песням"],
+  "home.noMatch": ["No songs match.", "Ничего не нашлось."],
+  "home.removeTitle": ["Remove this song?", "Убрать песню?"],
+  "home.removeBody": ["“{title}” and its tracks will be removed from your songs.", "«{title}» и её дорожки будут удалены из твоих песен."],
+  "home.removeAction": ["Remove {title}", "Убрать «{title}»"],
+  "home.open": ["Open {title}", "Открыть «{title}»"],
   "catalog.search": ["Search the catalog", "Поиск по каталогу"],
   "catalog.placeholder": ["Song or artist · שיר או אמן", "Песня или исполнитель · שיר או אמן"],
 } as const satisfies Record<string, readonly [string, string]>;
 
 export type StringKey = keyof typeof STRINGS;
 
-export function t(key: StringKey, language: Lang = lang): string {
-  return STRINGS[key][language === "ru" ? 1 : 0];
+export function t(key: StringKey, vars?: Record<string, string | number>, language: Lang = lang): string {
+  const text: string = STRINGS[key][language === "ru" ? 1 : 0];
+  return vars ? text.replace(/\{(\w+)\}/g, (match, name: string) => (name in vars ? String(vars[name]) : match)) : text;
 }
 
 export function allKeys(): StringKey[] {

@@ -1,6 +1,7 @@
 // Add song (#/add, Sonereli UI/UX v1 step 2). One field for a song link with
 // Paste, a live check of the link, an audio upload as the alternative, and a
-// pinned primary action. A link to a song the catalog already has ready (#277)
+// pinned primary action. After a submit Processing replaces Add in the
+// history (step 3). A link to a song the catalog already has ready (#277)
 // turns the action into Start singing: the server links it to the owner
 // without GPU work, and the Stage opens directly.
 
@@ -8,7 +9,7 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { type CatalogSong, getCatalog, type JobOut } from "../api";
 import { t } from "../i18n";
 import { parseSongLink, youtubeId } from "../lib/songLink";
-import { closeModalRoute, itemHash, mySongsHash, replaceHash } from "../router";
+import { closeModalRoute, itemHash, replaceHash } from "../router";
 import { Icon } from "./Icon";
 
 // Extensions POST /jobs/upload accepts (mirror of the server allowlist, #173).
@@ -89,14 +90,15 @@ export function AddSong({ initialUrl, catalogEnabled, onCreate, onUpload }: {
     setError(null);
     try {
       if (file) {
-        await onUpload(file);
-        replaceHash(mySongsHash);
+        const job = await onUpload(file);
+        replaceHash(itemHash(job.job_token));
         return;
       }
       if (link.kind !== "youtube" && link.kind !== "url") return;
       const job = await onCreate(link.url);
-      // A catalog-ready song comes back completed: open the Stage directly.
-      replaceHash(job.status === "completed" ? itemHash(job.job_token) : mySongsHash);
+      // Processing replaces Add in the history; a catalog-ready song comes
+      // back completed and opens straight on the Stage.
+      replaceHash(itemHash(job.job_token));
     } catch (err) {
       setError(errorText(err, file !== null));
       setSending(false);

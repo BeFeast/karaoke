@@ -390,15 +390,17 @@ async def verify_miss(args, api, evidence, scenario, script, inspect_player):
             if frame["status"] != "completed":
                 raise VerifyError(f"Private job #{job['id']} returned {frame['status']}")
             lyrics = await api.lyrics(job)
-            link = stage_link(job["job_token"])
-            visible = await wait_for(lambda link=link: tab.js(f"!!document.querySelector({json.dumps(link)})"),
-                                     15, "Private job has no Sing action")
+            processing_hash = json.dumps(f"#/job/{quote(job['job_token'], safe='')}")
+            on_processing = await tab.js(f"location.hash === {processing_hash}")
+            visible = await wait_for(lambda: tab.js("!!document.querySelector('.sn-start-singing')"),
+                                     30, "Private job has no Start singing action")
+            await evidence.capture(tab, scope, "processing-ready")
             check(evidence, scope, submit, job_submitted=job["status"],
-                  websocket_completed=frame["progress"], synced_lyrics=lyrics["synced"], sing_action_visible=visible,
-                  my_songs_selected=await tab.js("!!document.querySelector('[data-my-songs]')"))
+                  websocket_completed=frame["progress"], synced_lyrics=lyrics["synced"],
+                  start_singing_visible=visible, processing_screen_shown=on_processing)
             evidence.check(scope, "private_gpu_cost_micros", "reported", final["gpu_cost_micros"],
                            final["gpu_cost_micros"] is not None)
-            await click(tab, link)
+            await click(tab, ".sn-start-singing")
             await inspect_player(tab, evidence, f"{scope}.sing", start["assert"], lyrics)
         async with clerk_tab(args, evidence, second, script, owner=2) as (tab, other_subject):
             await click(tab, CATALOG_TAB)
@@ -475,3 +477,54 @@ async def verify_shared(args, api, evidence, scenario, script):
     finally:
         for job in jobs:
             await cleanup(api, job, args, evidence, scope, linked=True)
+
+
+async def verify_my_songs(args, evidence, scenario, script):
+    sing, home, resume = scenario["action"]
+    for profile in scenario["state"]["profiles"]:
+        scope = f"{profile}.my-songs"
+        async with clerk_tab(args, evidence, profile, script) as (tab, _):
+            song = await ready_fixture(tab)
+            await tab.navigate(f"{args.target}/app/#/job/{quote(song['stage_token'], safe='')}")
+            await wait_for(lambda: tab.js("window.karaokeVerify?.snapshot().ready"), 40, "Stage player never became ready")
+            await click(tab, 'button[aria-label="Play"]')
+
+            async def sung():
+                value = await tab.js("karaokeVerify.snapshot().time")
+                return value if value is not None and value >= 6 else None
+
+            stopped_at = await wait_for(sung, 30, "Playback did not advance on the Stage")
+            await asyncio.sleep(1.2)
+            stopped_at = await tab.js("karaokeVerify.snapshot().time") or stopped_at
+            await evidence.capture(tab, scope, "singing")
+            stored = await tab.js("JSON.parse(localStorage.getItem('sonereli-last-played') || 'null')")
+            saved = bool(stored and stored["token"] == song["stage_token"]
+                         and abs(stored["position"] - stopped_at) <= 1.5)
+            check(evidence, scope, sing, position_saved=saved)
+
+            await tab.js("location.hash = '#/my-songs'")
+            card = await wait_for(lambda: tab.js("!!document.querySelector('.sn-resume .sn-resume-play')"), 15,
+                                  "Continue singing card missing on My songs")
+            title = await tab.js("document.querySelector('.sn-resume .sn-t1')?.textContent")
+            await evidence.capture(tab, f"{scope}", "continue-card")
+            check(evidence, scope, home, continue_singing_visible=card and title == song["title"],
+                  add_song_pinned=await add_song_pinned(tab))
+
+            position = stored["position"] if stored else None
+            await click(tab, ".sn-resume-play")
+            token_hash = json.dumps(f"#/job/{quote(song['stage_token'], safe='')}")
+            opened = await wait_for(lambda token_hash=token_hash: tab.js(f"location.hash.startsWith({token_hash})"), 15,
+                                    "Continue singing did not open the Stage")
+            await wait_for(lambda: tab.js("window.karaokeVerify?.snapshot().ready"), 40, "Resumed Stage never became ready")
+            await asyncio.sleep(0.6)
+            await click(tab, 'button[aria-label="Play"]')
+            await asyncio.sleep(0.25)
+            resumed = await tab.js("karaokeVerify.snapshot().time")
+            await evidence.capture(tab, scope, "resumed")
+            drift = None if resumed is None or position is None else round(abs(resumed - position), 3)
+            for name, expected in resume["assert"].items():
+                if name == "stage_opened":
+                    evidence.check(scope, name, expected, opened, bool(opened) == expected)
+                elif name == "resumed_within_s":
+                    evidence.check(scope, name, expected, {"saved_s": position, "resumed_s": resumed, "drift_s": drift},
+                                   drift is not None and drift <= expected)

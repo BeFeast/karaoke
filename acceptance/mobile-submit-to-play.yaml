@@ -10,6 +10,9 @@ action:
       websocket_completed: 100
       real_gpu_job: runpod-
       synced_lyrics: true
+      # Processing (#/job/:token) shows the stages in pipeline order and ends on Start singing.
+      processing_stages_in_order: true
+      start_singing_visible: true
   - open: booth_sing_link
     assert:
       playback_advances: 0.75

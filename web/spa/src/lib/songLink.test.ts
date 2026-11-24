@@ -37,8 +37,9 @@ describe("interface language", () => {
   });
 
   test("every key has both languages", () => {
-    expect(t("tab.mySongs", "en")).toBe("My songs");
-    expect(t("tab.mySongs", "ru")).toBe("Мои песни");
-    expect(t("action.add", "ru")).toBe("Добавить песню");
+    expect(t("tab.mySongs", undefined, "en")).toBe("My songs");
+    expect(t("tab.mySongs", undefined, "ru")).toBe("Мои песни");
+    expect(t("action.add", undefined, "ru")).toBe("Добавить песню");
+    expect(t("proc.reconnecting", { s: 12 }, "en")).toBe("Reconnecting… showing the last update from 12 s ago.");
   });
 });

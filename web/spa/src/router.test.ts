@@ -29,3 +29,9 @@ test("Add song is its own route and carries a prefilled link", () => {
   expect(parseHash("#/")).toEqual({ name: "dashboard" });
   expect(parseHash("#/catalog")).toEqual({ name: "catalog" });
 });
+
+test("a resumed song carries its start position", () => {
+  expect(itemHash("abc", 34.27)).toBe("#/job/abc?t=34.2");
+  expect(parseHash("#/job/abc?t=34.2")).toEqual({ name: "item", token: "abc", startAt: 34.2 });
+  expect(parseHash("#/job/abc")).toEqual({ name: "item", token: "abc" });
+});

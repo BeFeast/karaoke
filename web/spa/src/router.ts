@@ -20,7 +20,7 @@ export type CatalogShelf = { axis: "collection" | "genre" | "decade"; value: str
 
 export type Route =
   | { name: "dashboard" }
-  | { name: "item"; token: string }
+  | { name: "item"; token: string; startAt?: number }
   | { name: "settings" }
   | { name: "add"; url: string }
   | { name: "my-songs" }
@@ -36,7 +36,10 @@ function parseHash(hash: string): Route {
   const segments = path.split("/").filter(Boolean);
 
   if (segments[0] === "job" && segments[1]) {
-    return { name: "item", token: decodeURIComponent(segments[1]) };
+    const startAt = Number(query.get("t"));
+    return Number.isFinite(startAt) && startAt > 0
+      ? { name: "item", token: decodeURIComponent(segments[1]), startAt }
+      : { name: "item", token: decodeURIComponent(segments[1]) };
   }
   if (segments[0] === "my-songs") return { name: "my-songs" };
   if (segments[0] === "add") return { name: "add", url: query.get("url") ?? "" };
@@ -94,8 +97,9 @@ export function useRoute(): Route {
 }
 
 /** Build the in-app (hash) link for a job's item page. */
-export function itemHash(token: string): string {
-  return `#/job/${encodeURIComponent(token)}`;
+export function itemHash(token: string, startAt?: number): string {
+  const base = `#/job/${encodeURIComponent(token)}`;
+  return startAt && startAt > 0 ? `${base}?t=${Math.floor(startAt * 10) / 10}` : base;
 }
 
 /** Build the in-app (hash) link for the settings page. */
