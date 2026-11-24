@@ -85,8 +85,7 @@ private struct RootView: View {
             do {
                 let key = try await Coordinator.publishableKey()
                 try Task.checkCancellation()
-                Clerk.configure(publishableKey: key, options: .init(telemetryEnabled: false))
-                clerk = Clerk.shared
+                clerk = Clerk.configure(publishableKey: key, options: .init(telemetryEnabled: false))
             } catch is CancellationError {
                 return
             } catch {

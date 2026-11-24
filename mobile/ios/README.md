@@ -78,7 +78,8 @@ temporary file through `SONERELI_QA_TICKET_FILE`, the corresponding tester ID
 in `SONERELI_QA_SUBJECT`, and the authorized YouTube URL in
 `SONERELI_QA_YOUTUBE_URL`. Run `scripts/verify ios-live` on a simulator with
 no other Sonereli account signed in. This scenario creates one paid job.
-It uses native ClerkKit and the live coordinator, and checks completion on
+The live lane uses ad-hoc simulator signing for Keychain access. It uses
+native ClerkKit and the live coordinator, and checks completion on
 the WebSocket before playing both stems. Record and clean up the created
 job once terminal. This scenario does not drive the YouTube app or verify
 the physical Lock Screen.

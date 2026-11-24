@@ -55,6 +55,7 @@ fi
 if [[ "$action" == build ]]; then exit 0; fi
 
 live_test=SonereliUITests/SonereliLiveUITests
+signing=(CODE_SIGNING_ALLOWED=NO)
 selection=(-skip-testing:"$live_test")
 case "$action" in
   ios-live)
@@ -66,6 +67,9 @@ case "$action" in
     export TEST_RUNNER_SONERELI_QA_SUBJECT="$SONERELI_QA_SUBJECT"
     export TEST_RUNNER_SONERELI_QA_YOUTUBE_URL="$SONERELI_QA_YOUTUBE_URL"
     selection=(-only-testing:"$live_test")
+    # Clerk uses the simulator Keychain. Ad-hoc signing supplies the
+    # simulated application identifier without an Apple certificate.
+    signing=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- "SONERELI_TEAM_ID=${SONERELI_TEAM_ID:-LA9V2K2376}")
     ;;
   ios-stage) selection=(-only-testing:SonereliUITests/SonereliUITests/testStagePlaybackAndHebrewLyrics) ;;
   ios-share) selection=(-only-testing:SonereliUITests/SonereliUITests/testShareConfirmationProgressAndSing) ;;
@@ -75,7 +79,7 @@ rm -rf "$bundle" "$out/screenshots"
 # Bash 3.2 treats an empty array as unset with nounset.
 xcodebuild "${args[@]}" ${selection[@]+"${selection[@]}"} -configuration Debug \
   -parallel-testing-enabled NO -resultBundlePath "$bundle" \
-  CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$out/test.log"
+  "${signing[@]}" test 2>&1 | tee "$out/test.log"
 grep -E 'Executed [1-9][0-9]* tests?, with 0 failures' "$out/test.log" >/dev/null
 if grep -Eq 'Test Case .* skipped' "$out/test.log"; then
   echo "The iOS acceptance suite reported skipped tests." >&2
