@@ -9,15 +9,27 @@ coordinator keeps ownership and artifact handling on the existing API.
 
 1. In YouTube, open a video and choose **Share → Sonereli**. Use **More** if
    Sonereli is in the additional destinations on the iOS share sheet.
-2. Tap **Готово**, then open Sonereli. The share extension saves the URL in
+2. Tap **Done**, then open Sonereli. The share extension saves the URL in
    the shared App Group. iOS share extensions return to the source app.
-3. Sign in when prompted and confirm **Подготовить песню**. After completion,
-   choose **Sing**. The song also appears in **Мои песни**.
+3. Sign in when prompted. Add song opens with the shared link; tap
+   **Prepare song**. Processing follows the job over the WebSocket; when it
+   is ready, tap **Start singing**. The song also appears in **My songs**.
 
-The Stage keeps both stems on one audio timeline. The backing track starts at
-full volume and vocals start muted. Raise the vocals slider to hear both.
-The media controls on the Lock Screen use the same playback position as the
-app. When the Stage closes, its temporary audio files are removed.
+## Interface (UI/UX v1, 0.2.0)
+
+Three tabs, My songs · Catalog · Settings, with **Add song** pinned above the
+tab bar on My songs and Catalog. The UI follows the device language (English
+or Russian); Hebrew appears only in content. Brand v3 colours, dark only;
+Anton (display) and Inter are bundled under the SIL Open Font License
+(`App/Fonts/*-OFL.txt`).
+
+The Stage keeps both stems on one audio timeline. The backing track always
+plays at full volume; **Original vocals** rides a perceptual (dB) curve. The
+first song on a device starts at 50%, later songs at the level last chosen on
+the Stage or in Settings; the mic toggle mutes without changing it. The song
+lives above navigation: minimizing the Stage leaves a mini-player on every
+tab. The Lock Screen shows artwork, ±5 s and play/pause on the same playback
+position as the app. Temporary audio files are removed when the song closes.
 
 ## Simulator verification
 
@@ -29,7 +41,9 @@ scripts/verify ios-stage
 scripts/verify ios-share
 ```
 
-The first command runs a Release simulator build and both Debug XCUITests.
+The first command runs a Release simulator build and the Debug XCUITests:
+the Stage with Hebrew lyrics and the mini-player, the share → Processing →
+Sing flow, an English gallery of every main screen and a Russian pass.
 The fixture sign-in and share inbox used by the tests exist only in Debug.
 The checks exercise the Stage with different stem sample rates and mixed
 Hebrew text, plus the share confirmation and progress flow with fixture
