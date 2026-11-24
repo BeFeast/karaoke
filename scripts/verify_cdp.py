@@ -132,7 +132,7 @@ class Tab:
             if isinstance(frame, dict) and frame.get("type") == "stage_change":
                 stages = self.stages.setdefault(frame["job_id"], [])
                 stages.append({key: frame.get(key) for key in ("status", "progress")})
-        elif method == "Network.responseReceived" and self.bearer:
+        elif method == "Network.responseReceived":
             response = p["response"]
             if urlsplit(response["url"]).path == "/jobs" and response["status"] == 201:
                 self.submissions.add(p["requestId"])

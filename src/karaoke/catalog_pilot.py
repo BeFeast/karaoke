@@ -64,6 +64,8 @@ class SeedSong(BaseModel):
     collections: list[str]
     decade: int = Field(ge=1900, le=2100, multiple_of=10)
     appearances: list[Appearance] = Field(min_length=1)
+    available: bool = True
+    metadata_allowed: bool = True
     playback_basis: str | None = None
 
 
@@ -116,7 +118,8 @@ async def import_seeds(session: AsyncSession, manifest: SeedManifest) -> list[Ca
         source.recording.genres_uncertain = seed.genres_uncertain
         source.recording.collections = sorted(set(seed.collections))
         source.recording.decade = seed.decade
-        source.metadata_allowed = True
+        source.available = seed.available
+        source.metadata_allowed = seed.metadata_allowed
         source.playback_allowed = bool((seed.playback_basis or "").strip())
         source.provenance = [
             {
@@ -335,7 +338,7 @@ async def _execute_locked(args, manifest, settings, factory) -> None:
         for source in sources:
             if dispatched >= args.limit:
                 break
-            if not source.available or not source.playback_allowed:
+            if not (source.available and source.metadata_allowed and source.playback_allowed):
                 continue
             while True:
                 attempts = list(await session.scalars(select(CatalogAsset)))
@@ -419,7 +422,7 @@ def main() -> None:
     seeds = unique_seeds(manifest)
     if not (args.run or args.publish or args.import_only):
         print(json.dumps({
-            "unique": len(seeds), "eligible": sum(bool(s.playback_basis) for s in seeds),
+            "unique": len(seeds), "eligible": sum(s.available and s.metadata_allowed and bool((s.playback_basis or "").strip()) for s in seeds),
             "total_usd": 1.0, "utc_day_usd": 0.35, "cooldown_seconds": 300,
             "sources": [s.video_id for s in seeds],
         }, ensure_ascii=False))

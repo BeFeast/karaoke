@@ -1,4 +1,3 @@
-import { CatalogBrowser } from "./Catalog";
 // KARAOKE — the Booth: live dashboard on #/ (Marquee port, #153).
 // Literal port of design/claude-export/proto/booth.jsx (BoothScreen :82-150,
 // PRunningCard :58-80, infra strip :141-146) plus the filter-chip pattern from
@@ -20,7 +19,8 @@ import { canRetryJob, type JobFilter, statusMeta } from "../jobStatus";
 import { costDollars, fmtDuration, formatRelativeTime, type JobSort } from "../lib/jobListUtils";
 import { usePhoneLayout } from "../lib/layout";
 import { sourceDisplay } from "../lib/source";
-import { catalogHash, type CatalogShelf, mySongsHash, navigate, itemHash } from "../router";
+import { catalogHash, type CatalogShelf, itemHash, mySongsHash, navigate } from "../router";
+import { CatalogBrowser } from "./Catalog";
 import { MBulbs, MDuetWave, SonereliMark, MWipe } from "./marks";
 
 export interface JobActions {
@@ -406,88 +406,88 @@ export function BoothScreen({
           }} />
         ) : (
           <div data-my-songs>
-        <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)", padding: 16 }}>
-          <h1 style={{ margin: "0 0 16px", fontFamily: "var(--font-display)", fontSize: 24, lineHeight: "32px", textWrap: "balance" }}>Choose a song and sing</h1>
-          {phone ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {urlInput}
-              <div style={{ display: "flex", gap: 10 }}>
-                {submitAction}
-                {uploadAction}
-              </div>
-              {filePicker}
-            </div>
-          ) : (
-            <div style={{ display: "flex", gap: 10 }}>
-              {urlInput}
-              {submitAction}
-              {uploadAction}
-              {filePicker}
-            </div>
-          )}
-          <div className="m-mono" style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11, color: "var(--muted)", alignItems: "center", flexWrap: "wrap" }}>
-            <span className="m-stem vox">vocals</span>
-            <span className="m-stem inst">instrumental</span>
-            <span style={{ color: "var(--fg-soft)" }}>synced lyrics</span>
-          </div>
-          {submitError && (
-            <div className="m-mono" style={{ marginTop: 8, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>{submitError}</div>
-          )}
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "20px 0 11px", flexWrap: "wrap" }}>
-          {FILTERS.map((f) => {
-            const on = filter === f.key;
-            return (
-              <button key={f.key} type="button" className="m-btn sm" onClick={() => onFilter(f.key)} style={{
-                border: "1px solid " + (on ? "var(--accent)" : "transparent"),
-                background: on ? "var(--accent-soft)" : "transparent",
-                color: on ? "var(--accent)" : "var(--fg-soft)", fontWeight: on ? 650 : 500,
-              }}>{f.label} <span className="m-mono" style={{ fontSize: 10.5, opacity: 0.75 }}>{counts[f.key]}</span></button>
-            );
-          })}
-          <span style={{ flex: 1 }}></span>
-          {counts.failed > 0 && (
-            <button className="m-btn sm ghost" type="button" onClick={onClearFailed}>Clear failed</button>
-          )}
-        </div>
-
-        <div style={{ display: "flex", gap: 8, marginBottom: 11 }}>
-          <input type="search" value={query} onChange={(e) => onQuery(e.target.value)}
-            placeholder="Search songs…" aria-label="Search songs by title, artist, or URL"
-            style={{ flex: 1, minWidth: 0, padding: "7px 11px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", outline: "none" }} />
-          <select value={sort} onChange={(e) => onSort(e.target.value as JobSort)} aria-label="Sort jobs" style={{
-            appearance: "none", padding: "7px 28px 7px 11px", border: "1px solid var(--border)", borderRadius: "var(--radius)",
-            background: "var(--bg-card)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", cursor: "pointer",
-            backgroundImage: "linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%)",
-            backgroundPosition: "calc(100% - 14px) 55%, calc(100% - 9px) 55%", backgroundSize: "5px 5px", backgroundRepeat: "no-repeat",
-          }}>
-            <option value="newest">Newest first</option>
-            <option value="oldest">Oldest first</option>
-            <option value="title">Title A–Z</option>
-          </select>
-        </div>
-
-        {listError && (
-          <div className="m-mono" style={{ marginBottom: 10, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>Couldn’t load jobs: {listError}</div>
-        )}
-        {actionError && (
-          <div className="m-mono" style={{ marginBottom: 10, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>Action failed: {actionError}</div>
-        )}
-
-        {!loaded && jobs.length === 0 ? (
-          <BoothSkeleton />
-        ) : jobs.length === 0 ? (
-          <BoothEmpty title={emptyTitle} sub={emptySub} />
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {jobs.map((j) =>
-              statusMeta(j.status).active ? (
-                <PRunningCard key={j.id} job={j} wsOpen={wsOpen} actions={actions} />
+            <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)", padding: 16 }}>
+              <h1 style={{ margin: "0 0 16px", fontFamily: "var(--font-display)", fontSize: 24, lineHeight: "32px", textWrap: "balance" }}>Choose a song and sing</h1>
+              {phone ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {urlInput}
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {submitAction}
+                    {uploadAction}
+                  </div>
+                  {filePicker}
+                </div>
               ) : (
-                <CompactRow key={j.id} job={j} actions={actions} />
-              ),
+                <div style={{ display: "flex", gap: 10 }}>
+                  {urlInput}
+                  {submitAction}
+                  {uploadAction}
+                  {filePicker}
+                </div>
+              )}
+              <div className="m-mono" style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 11, color: "var(--muted)", alignItems: "center", flexWrap: "wrap" }}>
+                <span className="m-stem vox">vocals</span>
+                <span className="m-stem inst">instrumental</span>
+                <span style={{ color: "var(--fg-soft)" }}>synced lyrics</span>
+              </div>
+              {submitError && (
+                <div className="m-mono" style={{ marginTop: 8, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>{submitError}</div>
+              )}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 4, margin: "20px 0 11px", flexWrap: "wrap" }}>
+              {FILTERS.map((f) => {
+                const on = filter === f.key;
+                return (
+                  <button key={f.key} type="button" className="m-btn sm" onClick={() => onFilter(f.key)} style={{
+                    border: "1px solid " + (on ? "var(--accent)" : "transparent"),
+                    background: on ? "var(--accent-soft)" : "transparent",
+                    color: on ? "var(--accent)" : "var(--fg-soft)", fontWeight: on ? 650 : 500,
+                  }}>{f.label} <span className="m-mono" style={{ fontSize: 10.5, opacity: 0.75 }}>{counts[f.key]}</span></button>
+                );
+              })}
+              <span style={{ flex: 1 }}></span>
+              {counts.failed > 0 && (
+                <button className="m-btn sm ghost" type="button" onClick={onClearFailed}>Clear failed</button>
+              )}
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginBottom: 11 }}>
+              <input type="search" value={query} onChange={(e) => onQuery(e.target.value)}
+                placeholder="Search songs…" aria-label="Search songs by title, artist, or URL"
+                style={{ flex: 1, minWidth: 0, padding: "7px 11px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", outline: "none" }} />
+              <select value={sort} onChange={(e) => onSort(e.target.value as JobSort)} aria-label="Sort jobs" style={{
+                appearance: "none", padding: "7px 28px 7px 11px", border: "1px solid var(--border)", borderRadius: "var(--radius)",
+                background: "var(--bg-card)", color: "var(--fg)", fontSize: 12.5, fontFamily: "var(--font-mono)", cursor: "pointer",
+                backgroundImage: "linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%)",
+                backgroundPosition: "calc(100% - 14px) 55%, calc(100% - 9px) 55%", backgroundSize: "5px 5px", backgroundRepeat: "no-repeat",
+              }}>
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="title">Title A–Z</option>
+              </select>
+            </div>
+
+            {listError && (
+              <div className="m-mono" style={{ marginBottom: 10, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>Couldn’t load jobs: {listError}</div>
             )}
+            {actionError && (
+              <div className="m-mono" style={{ marginBottom: 10, fontSize: 11.5, color: "var(--err)", overflowWrap: "anywhere" }}>Action failed: {actionError}</div>
+            )}
+
+            {!loaded && jobs.length === 0 ? (
+              <BoothSkeleton />
+            ) : jobs.length === 0 ? (
+              <BoothEmpty title={emptyTitle} sub={emptySub} />
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {jobs.map((j) =>
+                  statusMeta(j.status).active ? (
+                    <PRunningCard key={j.id} job={j} wsOpen={wsOpen} actions={actions} />
+                  ) : (
+                    <CompactRow key={j.id} job={j} actions={actions} />
+                  ),
+                )}
           </div>
         )}
 

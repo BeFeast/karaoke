@@ -12,7 +12,8 @@ confirming playback eligibility. Leave it empty to include metadata and skip
 precompute. Use the same approved manifest for all writes so importing it
 again applies the intended permissions. Setting an existing entry's
 `playback_basis` back to null disables its existing shared Stage, including
-owner links.
+owner links. Set `available` or `metadata_allowed` to false to hide the
+recording and disable its exports.
 
 The pilot uses the coordinator's database, artifact volume, yt-dlp, and
 configured RunPod endpoint. Run from the coordinator application environment

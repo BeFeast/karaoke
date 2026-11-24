@@ -1,8 +1,7 @@
-# Design scenario. Use an authorized fixture and isolate the owner-only submission.
 state:
   authenticated_owner: clerk_user
-  catalog_access: allowlisted
   catalog_fixture: recording_absent
+  private_url: https://www.youtube.com/watch?v=e-ORhEE9VVg
   profiles: [iphone, android]
 action:
   - search: title_outside_catalog
@@ -17,11 +16,13 @@ action:
       websocket_completed: 100
       synced_lyrics: true
       sing_action_visible: true
+      my_songs_selected: true
   - open: booth_sing_link
     assert:
       playback_advances: 0.75
       lyric_highlight_sync: 0.5
-  - search: submitted_title_as_second_allowlisted_owner
+  - search: submitted_title_as_second_clerk_owner
     assert:
       no_matching_recording_visible: true
       other_owner_job_visible: false
+      user_originated_job_in_catalog: false

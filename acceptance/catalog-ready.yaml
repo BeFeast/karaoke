@@ -1,18 +1,20 @@
-# Design scenario. The verifier needs catalog support before this can run.
 state:
   authenticated_owner: clerk_user
-  catalog_access: allowlisted
   catalog_fixture: ready_recording_with_synced_lyrics
-  owner_library: empty
   profiles: [iphone, android]
 action:
   - open: booth
     assert:
       ready_recording_visible: true
+      primary_shelves_visible: true
+      shelves_scroll_independently: true
+      viewport: [390, 844]
+      full_shelf_link_works: true
   - search: partial_artist_or_title
     assert:
       matching_recording_visible: true
       recording_version_visible: true
+      shelves_replaced_by_results: true
       sing_action_visible: true
   - open: catalog_sing_link
     assert: &player
@@ -27,5 +29,6 @@ action:
       processing_progress_shown: false
       new_downloads: 0
       new_gpu_jobs: 0
+      my_songs_selected: true
   - open: booth_sing_link
     assert: *player

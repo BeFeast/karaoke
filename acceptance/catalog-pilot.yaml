@@ -1,8 +1,9 @@
-# Design scenario for the pilot controls. Use a fake clock and stub providers.
+# Exercise the pilot controls with an isolated database, fake time, and stub providers.
 state:
-  catalog_fixture: approved_seed_manifest_with_duplicate_video_id
+  catalog_fixture: pilot_manifest_with_duplicate_video_id
   pilot_budget: {total_usd: 1.00, daily_usd: 0.35}
   profiles: [desktop]
+  cooldown_fixture: prior_pilot_download_started_299_seconds_before_fake_now
 action:
   - import_twice: seed_metadata
     assert:

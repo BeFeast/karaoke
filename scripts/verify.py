@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import yaml
+from verify_catalog import run_pilot_checks, verify_miss, verify_ready, verify_shared
 from verify_cdp import VerifyError, open_tab, origin, wait_for
 from ytdlp_canary import _split_urls
 
@@ -25,7 +26,7 @@ SCRIPT = (ROOT / "scripts/verify_browser.js").read_text()
 FEEDBACK_SCRIPT = (ROOT / "scripts/verify_feedback.js").read_text()
 TERMINAL = {"completed", "failed", "cancelled"}
 EXPORTS = ("karaoke.mp3", "vocals.mp3", "lyrics.txt", "lyrics.lrc")
-TOKEN_PATTERN = re.compile(r"((?:/share/|#/job/))[\w-]+")
+TOKEN_PATTERN = re.compile(r"((?:/share/|#/job/))[.\w-]+")
 HEBREW = re.compile(r"[\u05d0-\u05ea]")
 
 
@@ -131,12 +132,14 @@ class Evidence:
     def __init__(self, directory, bearer):
         self.directory = directory
         self.bearer = bearer
+        self.secrets = []
         self.rows = []
         self.screenshots = []
 
     def redact(self, value):
-        if self.bearer:
-            value = value.replace(self.bearer, "[redacted]")
+        for secret in [self.bearer, *self.secrets]:
+            if secret:
+                value = value.replace(secret, "[redacted]")
         return TOKEN_PATTERN.sub(r"\1[redacted]", value)
 
     def check(self, scope, name, expected, observed, passed):
@@ -666,7 +669,7 @@ def scenarios(selection):
 
 async def run(args, directory):
     selected = scenarios(args.scenario)
-    bearer = get_bearer()
+    bearer = get_bearer() if any(name != "catalog-pilot" for name in selected) else None
     results = {}
     print(f"Evidence: {directory}", flush=True)
     async with httpx.AsyncClient(base_url=args.target, timeout=25, follow_redirects=False) as http:
@@ -678,7 +681,15 @@ async def run(args, directory):
             job_id = None
             try:
                 state = scenario["state"]
-                if "authenticated_owner" in state:
+                if name == "catalog-pilot":
+                    await run_pilot_checks(evidence, scenario, ROOT)
+                elif name == "catalog-ready":
+                    await verify_ready(args, api, evidence, scenario, SCRIPT, inspect_player)
+                elif name == "catalog-miss":
+                    await verify_miss(args, api, evidence, scenario, SCRIPT, inspect_player)
+                elif name == "catalog-shared-processing":
+                    await verify_shared(args, api, evidence, scenario, SCRIPT)
+                elif "authenticated_owner" in state:
                     for profile in state["profiles"]:
                         await submit(args, api, evidence, scenario, profile, bearer)
                 else:
@@ -728,7 +739,10 @@ def main():
         parser.error("--live-feedback requires the feedback scenario")
     args.target = PROD if args.target == "prod" else args.target.rstrip("/")
     args.cdp = os.getenv("KARAOKE_VERIFY_CDP_URL", "").rstrip("/")
-    for label, value in (("--target", args.target), ("KARAOKE_VERIFY_CDP_URL", args.cdp)):
+    origins = [("--target", args.target)]
+    if args.scenario != "catalog-pilot":
+        origins.append(("KARAOKE_VERIFY_CDP_URL", args.cdp))
+    for label, value in origins:
         if origin(value)[0] not in {"http", "https"} or not origin(value)[1]:
             parser.error(f"{label} must be an HTTP(S) origin")
         if urlsplit(value).path or urlsplit(value).query or urlsplit(value).fragment or urlsplit(value).username:
