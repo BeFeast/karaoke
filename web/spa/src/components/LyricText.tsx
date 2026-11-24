@@ -60,6 +60,12 @@ export const LyricText = memo(function LyricText({
 }) {
   const phrases = useMemo(() => phrasesFor(line), [line]);
   const active = currentTime !== undefined;
+  // The word being sung now (cyan underline on the Stage): the last word that
+  // has started. Lines without word timing get no underline.
+  let nowWord: TimedWord | undefined;
+  if (active && line.words) {
+    for (const word of line.words) if (word.t <= currentTime) nowWord = word;
+  }
   return (
     <span className="lyric-text" dir="auto" data-lyric-active={active || undefined}
       data-lyric-neighbor={neighbor || undefined}>
@@ -71,6 +77,7 @@ export const LyricText = memo(function LyricText({
                 <span
                   className={active ? "lyric-token lyric-token-timed" : "lyric-token"}
                   data-lyric-word-start={token.word && token.wordOffset <= 0 ? token.word.t : undefined}
+                  data-now={nowWord && token.word === nowWord ? "" : undefined}
                   style={active ? {
                     "--lyric-progress": `${reducedMotion ? 100 : tokenProgress(token, line, currentTime)}%`,
                   } as CSSProperties : undefined}

@@ -5,45 +5,24 @@
 // AudioContext clock, mixed by per-stem GainNodes — sample-locked by
 // construction, no follower element, no drift correction (#113).
 //
-// Wavesurfer is a visual-only waveform + seek surface here: created from
-// pre-computed peaks + duration (a supported 7.x path), with NO url and NO
-// media — it never plays anything. Exactly two edges connect it to the engine:
-//
-//   * ws → engine: the `interaction` event (absolute seconds) drives seek().
-//     Wavesurfer also pokes its own src-less internal element on click; that
-//     is inert, and the engine's setTime on the next tick is authoritative.
-//   * engine → ws: setTime(pos) from the engine tick renders the cursor.
-//
-// The engine tick also feeds `subscribeTime` (raw position, for the lyrics
-// highlight seam) and React state (quantized to 0.1 s so the transport row
-// re-renders at ~10 Hz, not at the rAF rate).
+// The Stage draws its own scrub bar (Sonereli UI/UX v1), so there is no
+// waveform: the engine tick feeds `subscribeTime` (raw position, for the
+// lyrics) and React state (quantized to 0.1 s so the transport re-renders at
+// ~10 Hz, not at the rAF rate).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import WaveSurfer from "wavesurfer.js";
-import { computePeaks, gainsForLevel } from "./engineMath";
+import { gainsForLevel } from "./engineMath";
 import { type ABRegion, DualStemEngine } from "./stemEngine";
 
 /** Available playback speeds for the rate control. */
 export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5] as const;
 
 export interface KaraokePlayerOptions {
-  /** Same-origin URL of the instrumental stem (audio + waveform). */
-  instrumentalUrl: string;
+  /** Same-origin URL of the instrumental stem; null = no song loaded. */
+  instrumentalUrl: string | null;
   fetchStem?: (url: string, signal?: AbortSignal) => Promise<Response>;
   /** Same-origin URL of the vocals stem, if present. */
   vocalsUrl: string | null;
-  /** Waveform container element. */
-  container: HTMLElement | null;
-  /** Wave / progress / cursor colors (resolved from CSS tokens by the caller). */
-  colors: { wave: string; progress: string; cursor: string };
-  /** Skip the moving-cursor animation work for reduced-motion users. */
-  reducedMotion: boolean;
-  /**
-   * Waveform canvas height in px (default 96). Read when the engine/canvas
-   * is (re)built — a mid-session change does not re-create the canvas
-   * (#185: the phone height is a mount-time choice, rotation keeps it).
-   */
-  waveHeight?: number;
 }
 
 export type { ABRegion };
@@ -60,6 +39,8 @@ export interface KaraokePlayerState {
   loop: boolean;
   region: ABRegion;
   hasVocals: boolean;
+  /** The track played to its end (cleared by play / seek). */
+  ended: boolean;
   error: string | null;
 }
 
@@ -87,7 +68,7 @@ export interface KaraokePlayerApi extends KaraokePlayerState {
 }
 
 export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
-  const { instrumentalUrl, vocalsUrl, fetchStem, container, colors, reducedMotion, waveHeight = 96 } = opts;
+  const { instrumentalUrl, vocalsUrl, fetchStem } = opts;
 
   const [state, setState] = useState<KaraokePlayerState>({
     ready: false,
@@ -99,26 +80,26 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
     loop: false,
     region: { a: null, b: null },
     hasVocals: vocalsUrl != null,
+    ended: false,
     error: null,
   });
 
-  const wsRef = useRef<WaveSurfer | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
   const engineRef = useRef<DualStemEngine | null>(null);
   // Mutable mirrors so the async setup reads fresh values without re-running.
   const levelRef = useRef(0.5);
   const loopRef = useRef(false);
   const regionRef = useRef<ABRegion>({ a: null, b: null });
-  const colorsRef = useRef(colors);
   const timeSubsRef = useRef(new Set<(t: number) => void>());
 
-  // ── Build the engine + the visual waveform once per URL set ──────────────
+  // ── Build the engine once per URL set ───────────────────────────────────
   useEffect(() => {
-    if (!container) return;
+    setState((s) => ({ ...s, ready: false, playing: false, duration: 0, currentTime: 0, ended: false,
+      hasVocals: vocalsUrl != null, error: null }));
+    if (!instrumentalUrl) return;
     let disposed = false;
     const abort = new AbortController();
     let engine: DualStemEngine | null = null;
-    let ws: WaveSurfer | null = null;
     const unsubs: Array<() => void> = [];
 
     let ctx: AudioContext | null = null;
@@ -149,34 +130,10 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
         loaded.setLoop(loopRef.current);
         loaded.setRegion(regionRef.current);
 
-        // Visual-only wavesurfer: peaks + duration, no url, no media.
-        const c = colorsRef.current;
-        ws = WaveSurfer.create({
-          container,
-          peaks: [computePeaks(loaded.instrumentalBuffer.getChannelData(0), 4096)],
-          duration: loaded.duration,
-          height: waveHeight,
-          waveColor: c.wave,
-          progressColor: c.progress,
-          cursorColor: c.cursor,
-          cursorWidth: 2,
-          barWidth: 2,
-          barGap: 1,
-          barRadius: 2,
-          normalize: true,
-          interact: true,
-          hideScrollbar: true,
-        });
-        wsRef.current = ws;
-
-        // ws → engine: waveform click/drag seeks (absolute seconds).
-        unsubs.push(ws.on("interaction", (newTime: number) => loaded.seek(newTime)));
-
-        // engine → ws + React: cursor, raw time feed, quantized state.
+        // engine → React: raw time feed, quantized state.
         unsubs.push(
           loaded.onTick((pos, force) => {
             if (disposed) return;
-            ws?.setTime(pos);
             for (const cb of timeSubsRef.current) cb(pos);
             // ~10 Hz for the mm:ss display; transport events (pause/seek)
             // always land exactly so the display never shows a stale 0.1 s.
@@ -186,7 +143,7 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
         unsubs.push(
           loaded.onEnded(() => {
             if (disposed) return;
-            setState((s) => ({ ...s, playing: false }));
+            setState((s) => ({ ...s, playing: false, ended: true }));
           }),
         );
 
@@ -205,34 +162,10 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
       for (const off of unsubs) off();
       engineRef.current = null;
       engine?.dispose();
-      wsRef.current = null;
-      try {
-        ws?.destroy();
-      } catch {
-        /* already torn down */
-      }
       ctxRef.current = null;
       void ctx.close().catch(() => undefined);
     };
-    // Re-create only when the source URLs change. Color/motion changes are
-    // applied via setOptions in a separate effect to avoid rebuilding.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [container, instrumentalUrl, vocalsUrl, fetchStem]);
-
-  // ── Live-apply color changes (theme toggle) without rebuilding ───────────
-  useEffect(() => {
-    colorsRef.current = colors;
-    wsRef.current?.setOptions({
-      waveColor: colors.wave,
-      progressColor: colors.progress,
-      cursorColor: colors.cursor,
-    });
-  }, [colors.wave, colors.progress, colors.cursor]);
-
-  // Reduced-motion: cursor still tracks, but disable the smooth scroll cost.
-  useEffect(() => {
-    wsRef.current?.setOptions({ autoScroll: !reducedMotion });
-  }, [reducedMotion]);
+  }, [instrumentalUrl, vocalsUrl, fetchStem]);
 
   // ── Imperative controls ──────────────────────────────────────────────────
   const playPause = useCallback(() => {
@@ -246,12 +179,13 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
       setState((s) => ({ ...s, playing: false }));
     } else {
       engine.play();
-      setState((s) => ({ ...s, playing: true }));
+      setState((s) => ({ ...s, playing: true, ended: false }));
     }
   }, []);
 
   const seek = useCallback((time: number) => {
     engineRef.current?.seek(time);
+    setState((s) => (s.ended ? { ...s, ended: false } : s));
   }, []);
 
   const skip = useCallback(

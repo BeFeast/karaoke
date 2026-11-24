@@ -25,9 +25,12 @@
 
   const select = (selector) => document.querySelector(selector);
   const all = (selector) => [...document.querySelectorAll(selector)];
-  const play = () => select('button[aria-label="Play"], button[aria-label="Pause"]');
+  // Sonereli Stage (UI/UX v1 step 6) marks its controls with data-sn-*; the
+  // aria-label fallbacks keep older releases and Performance view working.
+  const play = () => select('[data-sn-play], button[aria-label="Play"], button[aria-label="Pause"]');
   const audio = () => select("audio[controls]");
-  const mix = () => select('.ksplayer [style*="ew-resize"], .ksplayer [style*="ns-resize"]');
+  const mix = () => select('[data-sn-vocals], .ksplayer [style*="ew-resize"], .ksplayer [style*="ns-resize"]');
+  const lyricsList = () => select('.synced-lyrics-list') ?? select('[aria-label="Synced lyrics"]');
   const line = (row) => row.querySelector(".synced-lyrics-seek");
 
   function rect(element, offsetX = 0.5, offsetY = 0.5) {
@@ -49,7 +52,7 @@
     },
 
     lyricLayout(performance) {
-      const list = select(".synced-lyrics-list");
+      const list = lyricsList();
       const rows = [...list.children];
       const current = rows.find((row) => row.getAttribute("aria-current") === "true");
       // Keep the old surface selectors so this scenario can also run against v0.45.0.
@@ -102,6 +105,12 @@
         inView: !!(box && viewport && box.top >= Math.max(0, viewport.top) - 1
           && box.bottom <= Math.min(innerHeight, viewport.bottom) + 1
           && box.left >= -1 && box.right <= innerWidth + 1),
+        // Top of the active line as a share of the lyrics viewport (step 7 anchor).
+        anchor: !performance && box && viewport && viewport.height > 0
+          ? Math.round(((box.top - viewport.top) / viewport.height) * 1000) / 1000 : null,
+        heightShare: !performance && box && viewport && viewport.height > 0
+          ? Math.round((box.height / viewport.height) * 1000) / 1000 : null,
+        scrollTop: performance ? null : Math.round(list.scrollTop),
         visualRows: performance && legacyParts.length ? legacyParts.length : active ? glyphRows(active) : 0,
         inlineWraps: !inline || glyphRows(inline) > 1,
         direction: active ? getComputedStyle((performance && legacyParts[0]) || active).direction : null,
@@ -128,7 +137,7 @@
 
     snapshot() {
       const native = audio();
-      const synced = select('[aria-label="Synced lyrics"]');
+      const synced = lyricsList();
       const rows = synced ? [...synced.children] : [];
       const current = rows.find((row) => row.getAttribute("aria-current") === "true");
       const sung = rows.filter((row) => !row.classList.contains("is-speech"));
@@ -173,6 +182,7 @@
         lyricsScrollWidth: synced?.scrollWidth ?? plain?.scrollWidth ?? null,
         scale: visualViewport?.scale ?? null,
         mixPresent: !!mix(),
+        vocalsPct: mix()?.getAttribute("aria-valuenow") != null ? Number(mix().getAttribute("aria-valuenow")) : null,
         rtlLines: rtl.filter((direction) => direction === "rtl").length,
         hebrewLines: rtlRows.length,
         lyricsDirection: synced ? getComputedStyle(synced).direction
