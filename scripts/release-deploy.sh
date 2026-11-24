@@ -108,6 +108,24 @@ image_id() { docker image inspect --format '{{.Id}}' "$1" 2>/dev/null; }
 
 image_exists() { docker image inspect "$1" >/dev/null 2>&1; }
 
+CATALOG_MIGRATION=alembic/versions/0005_song_catalog.py
+CATALOG_COMPAT_SUFFIX=-schema-0005
+
+# Older entrypoints run Alembic before the API starts. Keep the old app and
+# the new additive revision together in a companion image, prepared before
+# the first catalog deploy. Rollback can then keep all migrated data in place.
+prepare_catalog_rollback() {
+    local previous="$1"
+    [[ "$previous" == 0.45.* && -f "$SRC_DIR/$CATALOG_MIGRATION" ]] || return 0
+    local compat="${IMAGE}:${previous}${CATALOG_COMPAT_SUFFIX}"
+    if image_exists "$compat"; then return 0; fi
+    log "preparing additive catalog rollback image ${compat}"
+    docker build -t "$compat" -f - "$SRC_DIR" <<EOF
+FROM ${IMAGE}:${previous}
+COPY ${CATALOG_MIGRATION} /app/alembic/versions/
+EOF
+}
+
 # Versioned tags (X.Y.Z) of $IMAGE, ascending by semver.
 versioned_tags() {
     local tag out=""
@@ -125,7 +143,8 @@ current_version() {
     [ -n "$cur" ] || return 0
     local t
     for t in $(versioned_tags); do
-        if [ "$(image_id "${IMAGE}:${t}")" = "$cur" ]; then
+        if [ "$(image_id "${IMAGE}:${t}")" = "$cur" ] \
+            || [ "$(image_id "${IMAGE}:${t}${CATALOG_COMPAT_SUFFIX}" || true)" = "$cur" ]; then
             printf '%s' "$t"
             return 0
         fi
@@ -202,6 +221,14 @@ retag_current() {
     log "${IMAGE}:current -> ${IMAGE}:$1"
 }
 
+retag_rollback() {
+    local target="$1"
+    if image_exists "${IMAGE}:${target}${CATALOG_COMPAT_SUFFIX}"; then
+        target+="${CATALOG_COMPAT_SUFFIX}"
+    fi
+    retag_current "$target"
+}
+
 # Recreate the stack via Dockhand (KARAOKE_RECREATE_CMD) — never `docker
 # compose up/down/restart` directly.
 recreate() {
@@ -225,6 +252,9 @@ prune_images() {
         [ "$t" = "$protected" ] && continue
         if docker image rm "${IMAGE}:${t}" >/dev/null 2>&1; then
             log "pruned ${IMAGE}:${t}"
+            if image_exists "${IMAGE}:${t}${CATALOG_COMPAT_SUFFIX}"; then
+                docker image rm "${IMAGE}:${t}${CATALOG_COMPAT_SUFFIX}" >/dev/null 2>&1 || true
+            fi
         else
             log "kept ${IMAGE}:${t} (in use or removal failed)"
         fi
@@ -238,9 +268,8 @@ if [ "$MODE" = "rollback" ]; then
         exit 1
     fi
     log "rollback requested -> ${VERSION}"
-    retag_current "$VERSION"
-    recreate
-    if wait_for_health_version "$VERSION"; then
+    retag_rollback "$VERSION"
+    if recreate && wait_for_health_version "$VERSION"; then
         log "rollback to ${VERSION} verified"
         exit 0
     fi
@@ -253,9 +282,7 @@ PREV_VERSION="$(current_version || true)"
 log "deploying ${VERSION} (previous ${IMAGE}:current = ${PREV_VERSION:-none})"
 
 # Idempotency: already deployed and healthy -> no-op (no rebuild, no recreate).
-if image_exists "${IMAGE}:${VERSION}" \
-    && [ "$(image_id "${IMAGE}:current")" = "$(image_id "${IMAGE}:${VERSION}")" ] \
-    && [ "$(health_version || true)" = "$VERSION" ]; then
+if [ "$PREV_VERSION" = "$VERSION" ] && [ "$(health_version || true)" = "$VERSION" ]; then
     log "${VERSION} already deployed and healthy — nothing to do"
     exit 0
 fi
@@ -265,22 +292,20 @@ log "checking out v${VERSION} in ${SRC_DIR}"
 git -C "$SRC_DIR" fetch --tags --quiet
 git -C "$SRC_DIR" checkout --quiet "v${VERSION}"
 
-# 2. Build the versioned image, retag current, prune old tags.
+# 2. Build the versioned image and prepare rollback before retagging current.
 log "docker build -t ${IMAGE}:${VERSION} -f ${DOCKERFILE} ${SRC_DIR}"
 docker build -t "${IMAGE}:${VERSION}" -f "${SRC_DIR%/}/${DOCKERFILE}" "$SRC_DIR"
+prepare_catalog_rollback "$PREV_VERSION"
 retag_current "$VERSION"
-prune_images
 
-# 3. Recreate the stack (Dockhand).
-recreate
-
-# 4. Verify health version + canary.
-if verify "$VERSION"; then
+# 3. Recreate through Dockhand and verify. A recreate error also rolls back.
+if recreate && verify "$VERSION"; then
+    prune_images
     log "deploy of ${VERSION} verified — ${IMAGE}:current is live"
     exit 0
 fi
 
-# 5. Auto-rollback on verify failure.
+# 4. Auto-rollback on recreate or verify failure.
 err "verify failed for ${VERSION}"
 if [ -z "$PREV_VERSION" ] || ! image_exists "${IMAGE}:${PREV_VERSION}"; then
     alert "verify failed for ${VERSION} and no previous version to roll back to — runtime may be broken"
@@ -288,9 +313,8 @@ if [ -z "$PREV_VERSION" ] || ! image_exists "${IMAGE}:${PREV_VERSION}"; then
 fi
 
 alert "verify failed for ${VERSION} — rolling back to ${PREV_VERSION}"
-retag_current "$PREV_VERSION"
-recreate
-if wait_for_health_version "$PREV_VERSION"; then
+retag_rollback "$PREV_VERSION"
+if recreate && wait_for_health_version "$PREV_VERSION"; then
     alert "deploy of ${VERSION} FAILED; rolled back to last-good ${PREV_VERSION}"
     exit 1
 fi

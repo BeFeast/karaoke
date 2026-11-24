@@ -94,7 +94,10 @@ class Job(Base):
         nullable=True,
     )
 
-    catalog_asset_id: Mapped[int | None] = mapped_column(ForeignKey("catalog_assets.id"), index=True)
+    catalog_asset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("catalog_assets.id", name="fk_jobs_catalog_asset_id", use_alter=True),
+        index=True,
+    )
 
     artifacts: Mapped[list[Artifact]] = relationship(
         back_populates="job",

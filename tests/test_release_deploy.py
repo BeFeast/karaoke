@@ -105,7 +105,15 @@ printf '{"status":"ok","service":"karaoke","version":"%s"}' "$running"
 # running version the fake curl reports.
 FAKE_RECREATE = r"""#!/usr/bin/env bash
 set -eu
-cp "$FAKE_STATE/images/current" "$FAKE_STATE/running"
+current="$(cat "$FAKE_STATE/images/current")"
+if [ "$current" = "0.46.0" ]; then
+    touch "$FAKE_STATE/catalog-schema-present"
+    if [ "${FAKE_FAIL_RECREATE:-0}" = "1" ]; then exit 1; fi
+fi
+if [ -f "$FAKE_STATE/catalog-schema-present" ] && [[ "$current" == 0.45.* && "$current" != *-schema-0005 ]]; then
+    exit 1
+fi
+printf '%s' "${current%-schema-0005}" > "$FAKE_STATE/running"
 """
 
 
@@ -179,6 +187,7 @@ def env(tmp_path: pathlib.Path):
         versioned=versioned,
         running_version=lambda: (state / "running").read_text(encoding="utf-8"),
         checkouts=state / "checkouts",
+        stack=stack,
     )
 
 
@@ -357,3 +366,29 @@ def test_prune_keeps_at_most_five_versioned_images(env) -> None:
     # Oldest dropped, newest kept.
     assert "1.0.0" not in remaining
     assert "1.1.0" in remaining
+
+
+@pytest.mark.parametrize("fail_recreate", [False, True])
+def test_catalog_migration_keeps_previous_image_bootable(env, fail_recreate):
+    migration = env.stack / "alembic" / "versions" / "0005_song_catalog.py"
+    migration.parent.mkdir(parents=True)
+    migration.touch()
+    env.seed("0.45.1")
+    env.seed("current", "0.45.1")
+    env.running("0.45.1")
+
+    result = env.run("0.46.0", extra_env={
+        "FAKE_FAIL_RECREATE": "1" if fail_recreate else "0",
+        "KARAOKE_SERVICE_TOKEN": "test-token",
+        "FAKE_CANARY_HTTP": "500",
+    })
+
+    assert result.returncode != 0
+    assert "rolled back to last-good 0.45.1" in result.stderr
+    assert env.read_image("0.45.1") == "0.45.1"
+    assert env.read_image("current") == "0.45.1-schema-0005"
+    assert env.running_version() == "0.45.1"
+
+    manual = env.run("--rollback", "0.45.1")
+    assert manual.returncode == 0, manual.stderr
+    assert env.read_image("current") == "0.45.1-schema-0005"

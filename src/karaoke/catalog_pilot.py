@@ -295,8 +295,9 @@ async def _execute_locked(args, manifest, settings, factory) -> None:
                 .where(
                     CatalogSource.external_id == args.publish,
                     CatalogSource.available.is_(True),
+                    CatalogSource.metadata_allowed.is_(True),
                     CatalogSource.playback_allowed.is_(True),
-                    CatalogAsset.state == "review",
+                    CatalogAsset.state.in_(("review", "ready")),
                 )
                 .options(joinedload(CatalogAsset.job))
                 .order_by(CatalogAsset.id.desc())
@@ -377,7 +378,10 @@ async def _execute_locked(args, manifest, settings, factory) -> None:
                     job_token=secrets.token_urlsafe(24), owner_subject=PILOT_OWNER,
                     source_url=youtube_url(source.external_id),
                     artist=track.artist, title=track.title, track=track.title,
-                    status=JobStatus.queued,
+                    # Previous releases only re-dispatch queued jobs at boot.
+                    # A process crash or rollback must never dispatch a pilot
+                    # job as an ordinary private worker with public exports.
+                    status=JobStatus.downloading,
                 )
                 session.add(job)
                 await session.flush()
