@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import subprocess
 from argparse import Namespace
 from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
+from yt_dlp import YoutubeDL
 
 from karaoke import catalog_pilot
 from karaoke.catalog import PILOT_DOWNLOAD_GATE_NOTE
@@ -167,3 +169,20 @@ def test_pilot_ytdlp_never_retries(monkeypatch, tmp_path):
     assert command[command.index("--retries") + 1] == "0"
     assert command[command.index("--extractor-retries") + 1] == "0"
     assert command[command.index("--fragment-retries") + 1] == "0"
+
+
+def test_pilot_info_json_path_uses_yt_dlp_filename_rules(monkeypatch, tmp_path):
+    dest = tmp_path / "source.audio"
+    metadata = {"availability": "public", "id": "1TAuiaxqJTY", "ext": "m4a"}
+
+    def provider(cmd, **_kwargs):
+        template = next(arg.removeprefix("infojson:") for arg in cmd if arg.startswith("infojson:"))
+        with YoutubeDL({"quiet": True, "outtmpl": {"infojson": template}}) as ydl:
+            sidecar = Path(ydl.prepare_filename(metadata, "infojson"))
+        sidecar.write_text(json.dumps(metadata), encoding="utf-8")
+        dest.write_bytes(b"audio")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(pipeline.subprocess, "run", provider)
+    result = pipeline._download_audio("https://youtu.be/1TAuiaxqJTY", dest, pilot=True)
+    assert pipeline._read_json_object(result.with_suffix(".info.json")) == metadata

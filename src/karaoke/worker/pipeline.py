@@ -399,7 +399,8 @@ def _download_audio(
             *(["--ignore-config", "--retries", "0", "--extractor-retries", "0",
                "--fragment-retries", "0", "--abort-on-unavailable-fragments",
                "--match-filters", "availability = public & !is_live",
-               "--write-info-json", "-o", f"infojson:{dest.with_suffix('.info.json')}"] if pilot else []),
+               # yt-dlp adds the info.json suffix to this output template.
+               "--write-info-json", "-o", f"infojson:{dest.with_suffix('')}"] if pilot else []),
             *_ytdlp_extractor_args(settings),
             *aux,
             "-f", "ba/bestaudio/best",
