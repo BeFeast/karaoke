@@ -639,6 +639,9 @@ async def verify_settings(args, evidence, scenario, script):
             song = await ready_fixture(tab)
             await tab.navigate(f"{args.target}/app/#/settings")
             await wait_for(lambda: tab.js("!!document.querySelector('.sn-segmented')"), 20, "Singing settings missing")
+            # Keep the chosen vocals level across the reloads below (the
+            # verifier otherwise resets it on every page load).
+            await tab.js("karaokeVerify.keepVocals()")
             await click(tab, ".sn-segmented [role=radio]:nth-child(3)")
             await tab.js("""(() => {
                 const range = document.querySelector('.sn-range');
@@ -661,8 +664,8 @@ async def verify_settings(args, evidence, scenario, script):
                 size: document.querySelector('.sn-lyrics')?.dataset.size ?? null,
                 vocals: Number(document.querySelector('[data-sn-vocals]')?.getAttribute('aria-valuenow')),
             }))()""")
-            # The verifier clears the per-song vocals memory on load, so the
-            # Stage starts from the Settings default.
+            # Settings writes the same device level the Stage slider does, so
+            # the next song starts there.
             evidence.check(scope, "stage_uses_settings", step["assert"]["stage_uses_settings"], stage,
                            stage == {"size": "l", "vocals": 40})
 
@@ -676,6 +679,7 @@ async def verify_settings(args, evidence, scenario, script):
             evidence.check(scope, "feedback_screen", step["assert"]["feedback_screen"],
                            {"topics": topics, "topic_pressed": pressed, "attach_state_screenshot": attach},
                            topics == 5 and pressed == "true" and attach == [True, False])
-            # Leave the profile as found: M, 25%, screen on, count-in on.
+            # Leave the profile as found: M, 50%, screen on, count-in on.
             await tab.js("""(() => { for (const key of ['sonereli-lyrics-size', 'sonereli-vocals-default',
-                'sonereli-keep-awake', 'sonereli-count-in']) localStorage.removeItem(key); })()""")
+                'sonereli-keep-awake', 'sonereli-count-in']) localStorage.removeItem(key);
+                karaokeVerify.keepVocals(false); })()""")

@@ -1,11 +1,16 @@
 // Runs before page scripts. Observe the Web Audio timeline and gains without
 // replacing playback, bypassing the user gesture, or modifying the app state.
 (() => {
-  // Every run starts from the Original vocals default (step 9): the per-song
-  // memory in this persistent browser profile must not leak in. The Settings
-  // default itself is left alone (mobile-settings restores it when done).
+  // Every page load starts from the first-song Original vocals level (50%):
+  // the device memory of the last chosen level must not leak from an earlier
+  // check in the same tab. A check that tests the memory itself (Settings,
+  // remembered-after-reload) marks the tab with karaokeVerify.keepVocals()
+  // first; the mark lives in sessionStorage, so it survives Page.reload.
   try {
-    localStorage.removeItem("sonereli-vocals-by-song");
+    if (sessionStorage.getItem("karaokeVerify.keepVocals") !== "1") {
+      localStorage.removeItem("sonereli-vocals-default");
+      localStorage.removeItem("sonereli-vocals-by-song");
+    }
   } catch {
     /* storage unavailable */
   }
@@ -54,6 +59,23 @@
   }
 
   window.karaokeVerify = {
+    keepVocals(on = true) {
+      try {
+        if (on) sessionStorage.setItem("karaokeVerify.keepVocals", "1");
+        else sessionStorage.removeItem("karaokeVerify.keepVocals");
+      } catch {
+        return false;
+      }
+      return true;
+    },
+    rememberedVocals() {
+      try {
+        const raw = localStorage.getItem("sonereli-vocals-default");
+        return raw === null ? null : Number(raw);
+      } catch {
+        return null;
+      }
+    },
     async seekLyric(index) {
       line(all(".synced-lyrics-line")[index]).click();
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));

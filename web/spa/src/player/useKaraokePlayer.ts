@@ -76,7 +76,7 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
     duration: 0,
     currentTime: 0,
     rate: 1,
-    vocalLevel: 0.25,
+    vocalLevel: 0.5,
     loop: false,
     region: { a: null, b: null },
     hasVocals: vocalsUrl != null,
@@ -87,7 +87,7 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
   const ctxRef = useRef<AudioContext | null>(null);
   const engineRef = useRef<DualStemEngine | null>(null);
   // Mutable mirrors so the async setup reads fresh values without re-running.
-  const levelRef = useRef(0.25);
+  const levelRef = useRef(0.5);
   const loopRef = useRef(false);
   const regionRef = useRef<ABRegion>({ a: null, b: null });
   const timeSubsRef = useRef(new Set<(t: number) => void>());

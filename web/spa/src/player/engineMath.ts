@@ -32,7 +32,8 @@ export const VOCAL_RANGE_DB = 30;
 /**
  * Stem gains for an Original vocals level (0 = off … 1 = full). The backing
  * track always plays at full gain; the vocal stem rides a perceptual (dB)
- * curve, so 25% is a faint guide voice and 100% is the original recording.
+ * curve, so 50% (-15 dB, the start level) is a guide voice and 100% is the
+ * original recording.
  * 0 mutes the vocals exactly.
  */
 export function gainsForLevel(level: number): { inst: number; voc: number } {
