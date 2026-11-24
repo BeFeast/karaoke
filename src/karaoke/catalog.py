@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -14,6 +14,21 @@ from karaoke.db.models import CatalogAsset, CatalogRecording, CatalogSource, Job
 PILOT_OWNER = "internal:catalog-pilot"
 PIPELINE_VERSION = "1"
 YOUTUBE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+DOWNLOAD_ADMISSION_LOCK = 0x534F4E4552454C4A
+PILOT_DOWNLOAD_GATE = re.compile(
+    r"(?:HTTP(?: Error)?|HTTP status)[: ]+(?:403|429)\b|"
+    r"\b(?:403 Forbidden|429 Too Many Requests)\b|bot[ -](?:gate|check)|"
+    r"sign in to confirm",
+    re.I,
+)
+
+
+async def lock_download_admission(session: AsyncSession) -> None:
+    """Order foreground submission and pilot admission in coordinator Postgres."""
+    if session.get_bind().dialect.name == "postgresql":
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"), {"key": DOWNLOAD_ADMISSION_LOCK}
+        )
 
 
 def youtube_id(url: str) -> str | None:

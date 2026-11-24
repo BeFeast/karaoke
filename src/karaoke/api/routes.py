@@ -43,7 +43,13 @@ from karaoke.api.cookies_store import (
 from karaoke.api.lyrics_review import revision, save_review, snapshot
 from karaoke.api.preflight import match_url
 from karaoke.api.ws import forget_job, publish_stage
-from karaoke.catalog import PILOT_OWNER, pilot_job_root, ready_assets, ready_for_url
+from karaoke.catalog import (
+    PILOT_OWNER,
+    lock_download_admission,
+    pilot_job_root,
+    ready_assets,
+    ready_for_url,
+)
 from karaoke.config import Settings, get_settings
 from karaoke.db.models import CatalogAsset, Job, JobStatus
 from karaoke.db.session import get_session, get_session_factory
@@ -435,6 +441,7 @@ async def create_job(
         await session.refresh(job, attribute_names=["artifacts"])
         publish_stage(job.id, JobStatus.completed, 100)
         return JobOut.from_orm_job(job, public_base_url=settings.public_base_url)
+    await lock_download_admission(session)
     job = Job(
         job_token=secrets.token_urlsafe(24),
         owner_subject=owner.subject,

@@ -19,7 +19,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from karaoke.api.lyrics_review import revision, snapshot
-from karaoke.catalog import PILOT_OWNER, PIPELINE_VERSION, YOUTUBE_ID, pilot_job_root, youtube_url
+from karaoke.catalog import (
+    PILOT_DOWNLOAD_GATE,
+    PILOT_OWNER,
+    PIPELINE_VERSION,
+    YOUTUBE_ID,
+    lock_download_admission,
+    pilot_job_root,
+    youtube_url,
+)
 from karaoke.config import Settings, get_settings
 from karaoke.db.models import (
     CatalogAsset,
@@ -44,7 +52,6 @@ EXECUTION_SECONDS = 480
 BILLING_SECONDS = EXECUTION_SECONDS + 120
 RUNNER_LOCK = 0x534F4E4552454C49
 DEFAULT_MANIFEST = Path("catalog/pilot-2026-11-24.json")
-BLOCKED_DOWNLOAD = re.compile(r"\b(?:403|429)\b|bot[ -](?:gate|check)|sign in to confirm", re.I)
 
 
 class Appearance(BaseModel):
@@ -169,7 +176,7 @@ def admission(
 
 
 def download_blocked(error: str | None) -> bool:
-    return bool(error and (BLOCKED_DOWNLOAD.search(error) or _is_bot_check(error)))
+    return bool(error and (PILOT_DOWNLOAD_GATE.search(error) or _is_bot_check(error)))
 
 
 def _checked_exports(settings: Settings, job: Job) -> str | None:
@@ -238,7 +245,8 @@ async def _recover(session, state, settings):
         if not terminal:
             return False
         job.status = JobStatus.failed
-        job.error = "Catalog pilot interrupted before exports were finalized"
+        if not job.error:
+            job.error = "Catalog pilot interrupted before exports were finalized"
         await settle(session, asset, state, settings)
     return True
 
@@ -344,6 +352,7 @@ async def _execute_locked(args, manifest, settings, factory) -> None:
                 attempts = list(await session.scalars(select(CatalogAsset)))
                 if any(a.source_id == source.id for a in attempts):
                     break
+                await lock_download_admission(session)
                 foreground = await session.scalar(
                     select(Job.id).where(
                         Job.owner_subject != PILOT_OWNER,

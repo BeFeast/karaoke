@@ -40,7 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from karaoke.api import ws as ws_events
-from karaoke.catalog import pilot_job_root
+from karaoke.catalog import PILOT_DOWNLOAD_GATE, pilot_job_root
 from karaoke.db.models import Artifact, Job, JobStatus
 from karaoke.textnorm import bigram_agreement
 from karaoke.titles import derive_metadata
@@ -376,7 +376,9 @@ def _download_audio(
         while True:
             attempt += 1
             try:
-                _run(cmd, timeout=900)
+                result = _run(cmd, timeout=900)
+                if pilot and (PILOT_DOWNLOAD_GATE.search(result.stderr) or _is_bot_check(result.stderr)):
+                    raise PipelineError(f"yt-dlp pilot download gate: {result.stderr[-2000:]}")
                 break
             except PipelineError as exc:
                 if pilot:
