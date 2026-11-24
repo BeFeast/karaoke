@@ -2,7 +2,7 @@ import XCTest
 
 final class SonereliUITests: XCTestCase {
     @MainActor
-    func testStagePlaybackAndHebrewLyrics() {
+    func testStagePlaybackAndHebrewLyrics() throws {
         let app = signedIn()
         let job = app.descendants(matching: .any).matching(identifier: "songs.job.1").firstMatch
         XCTAssertTrue(job.waitForExistence(timeout: 10))
@@ -54,12 +54,19 @@ final class SonereliUITests: XCTestCase {
         app.sliders["stage.seek"].adjust(toNormalizedSliderPosition: 0.20)
         play.tap()
         XCTAssertEqual(play.label, "Пауза")
-        let beforeBackground = app.staticTexts["stage.elapsed"].label
+        let elapsed = app.staticTexts["stage.elapsed"]
+        let beforeBackground = try XCTUnwrap(Self.seconds(from: elapsed.label))
         XCUIDevice.shared.press(.home)
-        Thread.sleep(forTimeInterval: 2)
+        Thread.sleep(forTimeInterval: 4)
         app.activate()
         XCTAssertEqual(play.label, "Пауза")
-        XCTAssertNotEqual(app.staticTexts["stage.elapsed"].label, beforeBackground)
+        let backgroundAdvance = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let seconds = Self.seconds(from: elapsed.label) else { return false }
+            return seconds >= beforeBackground + 3
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [backgroundAdvance], timeout: 1.5), .completed,
+                       "Elapsed after foregrounding was \(elapsed.label).")
+
     }
 
     @MainActor
@@ -74,6 +81,12 @@ final class SonereliUITests: XCTestCase {
         openStage(in: app)
         XCTAssertTrue(app.sliders["stage.backing"].isHittable)
         capture(app, name: "ios-share-stage")
+    }
+
+    private static func seconds(from clock: String) -> Int? {
+        let parts = clock.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2 else { return nil }
+        return parts[0] * 60 + parts[1]
     }
 
     @MainActor

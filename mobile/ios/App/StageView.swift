@@ -57,6 +57,7 @@ struct StageView: View {
         }
         .onChange(of: scenePhase, initial: true) { _, phase in
             UIApplication.shared.isIdleTimerDisabled = phase == .active
+            if phase == .active { player?.updatePosition() }
         }
     }
 
