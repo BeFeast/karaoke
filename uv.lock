@@ -549,7 +549,7 @@ wheels = [
 
 [[package]]
 name = "karaoke"
-version = "0.46.5"
+version = "0.47.0"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
