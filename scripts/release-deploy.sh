@@ -109,11 +109,12 @@ image_id() { docker image inspect --format '{{.Id}}' "$1" 2>/dev/null; }
 image_exists() { docker image inspect "$1" >/dev/null 2>&1; }
 
 CATALOG_MIGRATION=alembic/versions/0005_song_catalog.py
-CATALOG_COMPAT_SUFFIX=-schema-0005
+CATALOG_GUARD=src/karaoke/api/catalog_rollback.py
+CATALOG_COMPAT_SUFFIX=-schema-0005-guard
 
 # Older entrypoints run Alembic before the API starts. Keep the old app and
 # the new additive revision together in a companion image, prepared before
-# the first catalog deploy. Rollback can then keep all migrated data in place.
+# the first catalog deploy. Its API guard keeps the catalog rows private.
 prepare_catalog_rollback() {
     local previous="$1"
     [[ "$previous" == 0.45.* && -f "$SRC_DIR/$CATALOG_MIGRATION" ]] || return 0
@@ -123,6 +124,8 @@ prepare_catalog_rollback() {
     docker build -t "$compat" -f - "$SRC_DIR" <<EOF
 FROM ${IMAGE}:${previous}
 COPY ${CATALOG_MIGRATION} /app/alembic/versions/
+COPY ${CATALOG_GUARD} /app/src/karaoke/api/
+RUN .venv/bin/python ${CATALOG_GUARD} src/karaoke/api/app.py
 EOF
 }
 

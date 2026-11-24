@@ -110,10 +110,10 @@ if [ "$current" = "0.46.0" ]; then
     touch "$FAKE_STATE/catalog-schema-present"
     if [ "${FAKE_FAIL_RECREATE:-0}" = "1" ]; then exit 1; fi
 fi
-if [ -f "$FAKE_STATE/catalog-schema-present" ] && [[ "$current" == 0.45.* && "$current" != *-schema-0005 ]]; then
+if [ -f "$FAKE_STATE/catalog-schema-present" ] && [[ "$current" == 0.45.* && "$current" != *-schema-0005-guard ]]; then
     exit 1
 fi
-printf '%s' "${current%-schema-0005}" > "$FAKE_STATE/running"
+printf '%s' "${current%-schema-0005-guard}" > "$FAKE_STATE/running"
 """
 
 
@@ -386,9 +386,9 @@ def test_catalog_migration_keeps_previous_image_bootable(env, fail_recreate):
     assert result.returncode != 0
     assert "rolled back to last-good 0.45.1" in result.stderr
     assert env.read_image("0.45.1") == "0.45.1"
-    assert env.read_image("current") == "0.45.1-schema-0005"
+    assert env.read_image("current") == "0.45.1-schema-0005-guard"
     assert env.running_version() == "0.45.1"
 
     manual = env.run("--rollback", "0.45.1")
     assert manual.returncode == 0, manual.stderr
-    assert env.read_image("current") == "0.45.1-schema-0005"
+    assert env.read_image("current") == "0.45.1-schema-0005-guard"

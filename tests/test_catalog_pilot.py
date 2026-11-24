@@ -2,23 +2,26 @@
 from __future__ import annotations
 
 import datetime as dt
+import subprocess
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
 
+from karaoke import catalog_pilot
+from karaoke.catalog import PILOT_DOWNLOAD_GATE_NOTE
 from karaoke.catalog_pilot import (
     COOLDOWN,
     SeedManifest,
     admission,
-    download_blocked,
     import_seeds,
-    settle,
     unique_seeds,
 )
 from karaoke.config import Settings
 from karaoke.db.models import Base, CatalogAsset, CatalogPilotState, CatalogSource, Job, JobStatus
 from karaoke.db.session import create_engine_and_sessionmaker
+from karaoke.worker import pipeline
 
 NOW = dt.datetime(2026, 11, 24, 12, tzinfo=dt.UTC)
 
@@ -83,38 +86,80 @@ def test_priority_cooldown_and_reservations():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("error", [
-    "HTTP Error 429: Too Many Requests",
-    "HTTP Error 403: Forbidden",
-    "Sign in to confirm that you’re not a bot",
+@pytest.mark.parametrize(("exit_code", "gate"), [
+    (0, "HTTP Error 403: Forbidden"),
+    (1, "HTTP Error 403: Forbidden"),
+    (1, "HTTP Error 429: Too Many Requests"),
+    (1, "Sign in to confirm that you’re not a bot"),
 ])
-async def test_yt_dlp_gate_stops_and_pauses_without_gpu(error, tmp_path):
-    class Session:
-        async def commit(self):
-            pass
-
-    asset = CatalogAsset(
-        reserved_micros=100_000,
-        state="processing",
-        job=Job(status=JobStatus.failed, progress=15, error=error),
+async def test_yt_dlp_gate_stops_and_pauses_without_gpu(exit_code, gate, tmp_path, monkeypatch, capsys):
+    path = Path(__file__).parents[1] / "catalog" / "pilot-2026-11-24.json"
+    manifest = SeedManifest.model_validate_json(path.read_text())
+    manifest.songs = [
+        song.model_copy(update={"playback_basis": "approved test fixture"})
+        for song in manifest.songs[:2]
+    ]
+    engine, factory = create_engine_and_sessionmaker(f"sqlite+aiosqlite:///{tmp_path / 'pilot.db'}")
+    settings = Settings(
+        artifact_root=str(tmp_path), device_mode="runpod",
+        runpod_api_key="stub", runpod_endpoint_id="stub",
     )
-    state = CatalogPilotState(paused=False)
-    assert download_blocked(error)
-    await settle(Session(), asset, state, Settings(artifact_root=str(tmp_path)))
-    assert state.paused and asset.charged_micros == 0 and asset.state == "failed"
-
-
-def test_pilot_ytdlp_never_retries(monkeypatch, tmp_path):
-    from karaoke.worker import pipeline
-
+    args = Namespace(
+        import_only=False, publish=None, usd_per_hour_ceiling=1.0,
+        resume=False, wait=False, limit=2,
+    )
     calls = []
 
     def provider(cmd, **_kwargs):
         calls.append(cmd)
-        raise pipeline.PipelineError("HTTP Error 429: Too Many Requests")
+        stderr = f"Early diagnostic\nWARNING: {gate}\n" + ("ordinary download progress " * 150)
+        return subprocess.CompletedProcess(cmd, exit_code, "", stderr)
 
-    monkeypatch.setattr(pipeline, "_run", provider)
-    with pytest.raises(pipeline.PipelineError, match="429"):
+    async def interrupted_after_worker(*_args):
+        raise RuntimeError("interrupted before settling the budget")
+
+    monkeypatch.setattr(pipeline.subprocess, "run", provider)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        # Leave only the persisted worker failure. The next runner must
+        # recover the structured note and stop before a second download.
+        with monkeypatch.context() as patch:
+            patch.setattr(catalog_pilot, "settle", interrupted_after_worker)
+            with pytest.raises(RuntimeError, match="interrupted"):
+                await catalog_pilot._execute_locked(args, manifest, settings, factory)
+        async with factory() as session:
+            job = await session.scalar(select(Job))
+            assert job.status == JobStatus.failed
+            assert job.stage_note == PILOT_DOWNLOAD_GATE_NOTE
+            assert "Early diagnostic" in job.error
+            assert gate in job.error
+            assert job.progress < 75
+            assert job.vast_instance_id is None
+            assert not (await session.get(CatalogPilotState, 1)).paused
+
+        for _ in range(2):
+            await catalog_pilot._execute_locked(args, manifest, settings, factory)
+            assert "paused" in capsys.readouterr().out
+        assert len(calls) == 1
+        async with factory() as session:
+            assert (await session.get(CatalogPilotState, 1)).paused
+            [asset] = list(await session.scalars(select(CatalogAsset)))
+            assert asset.state == "failed"
+            assert asset.charged_micros == 0
+    finally:
+        await engine.dispose()
+
+
+def test_pilot_ytdlp_never_retries(monkeypatch, tmp_path):
+    calls = []
+
+    def provider(cmd, **_kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 1, "", "HTTP Error 429: Too Many Requests")
+
+    monkeypatch.setattr(pipeline.subprocess, "run", provider)
+    with pytest.raises(pipeline.PilotDownloadGate, match="429"):
         pipeline._download_audio("https://youtu.be/1TAuiaxqJTY", tmp_path / "source.audio", pilot=True)
     assert len(calls) == 1
     command = calls[0]

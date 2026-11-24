@@ -40,7 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from karaoke.api import ws as ws_events
-from karaoke.catalog import PILOT_DOWNLOAD_GATE, pilot_job_root
+from karaoke.catalog import PILOT_DOWNLOAD_GATE, PILOT_DOWNLOAD_GATE_NOTE, pilot_job_root
 from karaoke.db.models import Artifact, Job, JobStatus
 from karaoke.textnorm import bigram_agreement
 from karaoke.titles import derive_metadata
@@ -228,6 +228,41 @@ class PipelineError(RuntimeError):
     pass
 
 
+class PilotDownloadGate(PipelineError):
+    """yt-dlp reported a gate that requires a manual pilot resume."""
+
+
+def _run_pilot_download(cmd: list[str]) -> None:
+    """Inspect the whole provider result before bounding persisted diagnostics."""
+    try:
+        proc = subprocess.run(cmd, text=True, capture_output=True, timeout=900)
+    except subprocess.TimeoutExpired as exc:
+        # TimeoutExpired carries bytes even for text-mode subprocesses.
+        def decode(value: str | bytes | None) -> str:
+            return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
+
+        _check_pilot_download(decode(exc.stdout), decode(exc.stderr), "yt-dlp timed out")
+    else:
+        failed = f"yt-dlp exited with status {proc.returncode}" if proc.returncode else None
+        _check_pilot_download(proc.stdout, proc.stderr, failed)
+
+
+def _check_pilot_download(stdout: str, stderr: str, failure: str | None) -> None:
+    output = f"{stderr}\n{stdout}"
+    gated = bool(PILOT_DOWNLOAD_GATE.search(output) or _is_bot_check(output))
+    if not (gated or failure):
+        return
+    # The argument list and output tail alone are insufficient. Some builds
+    # report the HTTP gate only once near the beginning of stderr.
+    diagnostic = stderr if len(stderr) <= 2400 else f"{stderr[:1200]}\n…\n{stderr[-1200:]}"
+    stdout_gate = PILOT_DOWNLOAD_GATE.search(stdout) or _BOT_CHECK_RE.search(stdout)
+    if stdout_gate:
+        diagnostic += f"\nstdout: {stdout_gate[0]}"
+    reason = failure or "yt-dlp reported a gate"
+    error_type = PilotDownloadGate if gated else PipelineError
+    raise error_type(f"{reason}\n{diagnostic}")
+
+
 # ---------------------------------------------------------------------------
 # coordinator-side subprocess steps (download + normalize + encode)
 # ---------------------------------------------------------------------------
@@ -371,18 +406,20 @@ def _download_audio(
             "-o", str(dest),
             source_url,
         ]
+        if pilot:
+            _run_pilot_download(cmd)
+            if not dest.is_file() or dest.stat().st_size == 0:
+                raise PipelineError(f"yt-dlp produced no audio at {dest}")
+            return dest
+
         attempt = 0
         media_retries = 0
         while True:
             attempt += 1
             try:
-                result = _run(cmd, timeout=900)
-                if pilot and (PILOT_DOWNLOAD_GATE.search(result.stderr) or _is_bot_check(result.stderr)):
-                    raise PipelineError(f"yt-dlp pilot download gate: {result.stderr[-2000:]}")
+                _run(cmd, timeout=900)
                 break
             except PipelineError as exc:
-                if pilot:
-                    raise
                 if _MEDIA_403_RE.search(str(exc)) and media_retries < len(_MEDIA_403_BACKOFF_S):
                     delay = _MEDIA_403_BACKOFF_S[media_retries]
                     media_retries += 1
@@ -1748,6 +1785,10 @@ async def run_real_job(
             job.vast_cost_micros = round((gpu.vast_cost + extra_gpu_cost) * 1_000_000)
             await session.commit()
         ws_events.publish_stage(job_id, JobStatus.completed, 100, stage_note=job.stage_note)
+    except PilotDownloadGate as exc:
+        await _mark_failed(
+            session_factory, job_id, str(exc), stage_note=PILOT_DOWNLOAD_GATE_NOTE,
+        )
     except Exception as exc:  # noqa: BLE001 — surface as a failed job, never crash the loop
         await _mark_failed(session_factory, job_id, f"{type(exc).__name__}: {exc}")
 

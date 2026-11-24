@@ -15,6 +15,7 @@ PILOT_OWNER = "internal:catalog-pilot"
 PIPELINE_VERSION = "1"
 YOUTUBE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 DOWNLOAD_ADMISSION_LOCK = 0x534F4E4552454C4A
+PILOT_DOWNLOAD_GATE_NOTE = "Catalog pilot paused by a YouTube download gate"
 PILOT_DOWNLOAD_GATE = re.compile(
     r"(?:HTTP(?: Error)?|HTTP status)[: ]+(?:403|429)\b|"
     r"\b(?:403 Forbidden|429 Too Many Requests)\b|bot[ -](?:gate|check)|"

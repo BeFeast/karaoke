@@ -20,7 +20,7 @@ from sqlalchemy.orm import joinedload
 
 from karaoke.api.lyrics_review import revision, snapshot
 from karaoke.catalog import (
-    PILOT_DOWNLOAD_GATE,
+    PILOT_DOWNLOAD_GATE_NOTE,
     PILOT_OWNER,
     PIPELINE_VERSION,
     YOUTUBE_ID,
@@ -39,7 +39,7 @@ from karaoke.db.models import (
     JobStatus,
 )
 from karaoke.db.session import create_engine_and_sessionmaker
-from karaoke.worker.pipeline import _is_bot_check, run_real_job
+from karaoke.worker.pipeline import run_real_job
 from karaoke.worker.runpod_client import RUNPOD_REST, TERMINAL_STATES
 from karaoke.worker.scheduler import _has_runpod, _use_runpod
 
@@ -175,10 +175,6 @@ def admission(
     return "eligible"
 
 
-def download_blocked(error: str | None) -> bool:
-    return bool(error and (PILOT_DOWNLOAD_GATE.search(error) or _is_bot_check(error)))
-
-
 def _checked_exports(settings: Settings, job: Job) -> str | None:
     exports = pilot_job_root(settings.artifact_root, job.job_token) / "exports"
     for name in ("vocals.mp3", "karaoke.mp3"):
@@ -211,7 +207,7 @@ async def settle(session: AsyncSession, asset: CatalogAsset, state: CatalogPilot
         entered_gpu = job.progress >= 75
         asset.charged_micros = asset.reserved_micros if entered_gpu else 0
         asset.state = "failed"
-        if not entered_gpu and download_blocked(job.error):
+        if not entered_gpu and job.stage_note == PILOT_DOWNLOAD_GATE_NOTE:
             state.paused = True
     await session.commit()
 
