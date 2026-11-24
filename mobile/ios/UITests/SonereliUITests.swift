@@ -46,8 +46,10 @@ final class SonereliUITests: XCTestCase {
         let seekSelected = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in afterSeek.exists && afterSeek.isSelected }, object: nil
         )
-        XCTAssertEqual(XCTWaiter.wait(for: [seekSelected], timeout: 4), .completed,
-                       "Expected the Hebrew line at 14 seconds, observed time \(sought).")
+        let result = XCTWaiter.wait(for: [seekSelected], timeout: 4)
+        capture(app, name: "ios-stage-after-seek")
+        XCTAssertEqual(result, .completed,
+                       "Expected the Hebrew line at 14 seconds, observed time \(sought). \(app.debugDescription)")
     }
 
     @MainActor

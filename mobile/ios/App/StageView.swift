@@ -12,6 +12,7 @@ struct StageView: View {
     @State private var loadError: String?
     @State private var attempt = 0
     @State private var dragPosition: Double?
+    @State private var scrollTarget: Int?
     @ScaledMetric(relativeTo: .body) private var lyricSize = 16.0
     @ScaledMetric(relativeTo: .title3) private var activeSize = 20.0
 
@@ -82,38 +83,38 @@ struct StageView: View {
 
     private func stage(player: StemPlayer, lyrics: Lyrics) -> some View {
         let active = lyrics.activeIndex(at: player.position, in: lines)
-        return ScrollViewReader { scroll in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
-                    if lines.isEmpty {
-                        if let text = lyrics.plain, !text.isEmpty {
-                            ForEach(Array(text.components(separatedBy: .newlines).enumerated()), id: \.offset) { _, line in
-                                if !line.isEmpty { lyricText(line, active: false) }
-                            }
-                        } else {
-                            Text("Текст песни недоступен").foregroundStyle(.secondary)
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                if lines.isEmpty {
+                    if let text = lyrics.plain, !text.isEmpty {
+                        ForEach(Array(text.components(separatedBy: .newlines).enumerated()), id: \.offset) { _, line in
+                            if !line.isEmpty { lyricText(line, active: false) }
                         }
                     } else {
-                        ForEach(lines.indices, id: \.self) { index in
-                            lyricText(lines[index].text, active: index == active)
-                                .accessibilityIdentifier("stage.lyric.\(index)")
-                                .accessibilityAddTraits(index == active ? .isSelected : [])
-                                .id(index)
-                        }
+                        Text("Текст песни недоступен").foregroundStyle(.secondary)
+                    }
+                } else {
+                    ForEach(lines.indices, id: \.self) { index in
+                        lyricText(lines[index].text, active: index == active)
+                            .accessibilityIdentifier("stage.lyric.\(index)")
+                            .accessibilityAddTraits(index == active ? .isSelected : [])
+                            .id(index)
                     }
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 24)
             }
-            .accessibilityIdentifier("stage.lyrics")
-            .onChange(of: active, initial: true) { _, index in
-                guard let index else { return }
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.20)) {
-                    scroll.scrollTo(index, anchor: .center)
-                }
-            }
-            .safeAreaInset(edge: .bottom, spacing: 0) { controls(player) }
+            .scrollTargetLayout()
+            .padding(.horizontal, 24)
+            .padding(.vertical, 24)
         }
+        .scrollPosition(id: $scrollTarget, anchor: .center)
+        .accessibilityIdentifier("stage.lyrics")
+        .onChange(of: active, initial: true) { _, index in
+            guard let index else { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.20)) {
+                scrollTarget = index
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) { controls(player) }
     }
 
     private func lyricText(_ text: String, active: Bool) -> some View {
