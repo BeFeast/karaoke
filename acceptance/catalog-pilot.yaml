@@ -1,7 +1,7 @@
 # Exercise the pilot controls with an isolated database, fake time, and stub providers.
 state:
   catalog_fixture: pilot_manifest_with_duplicate_video_id
-  pilot_budget: {total_usd: 1.00, daily_usd: 0.35}
+  pilot_budget: {total_usd: 1.00, daily_usd: 1.00}
   profiles: [desktop]
   cooldown_fixture: prior_pilot_download_started_299_seconds_before_fake_now
 action:
@@ -22,8 +22,21 @@ action:
     assert:
       pilot_state: waiting_for_budget
       new_gpu_jobs: 0
+  - reserve: from_observed_pilot_ledger
+    assert:
+      reservation_micros: 118532
+      uncertain_charge_influences_reservation: false
   - run_pilot: with_available_budget_and_provider_429
     assert:
       pilot_state: paused
       new_gpu_jobs: 0
       automatic_retries: 0
+  - auto_check: complete_and_faulted_exports
+    assert:
+      all_checks_pass: ready
+      any_check_fails: review
+      audit_actor: auto-check
+  - import: english_and_hebrew_manifest
+    assert:
+      excluded_asset_hidden: true
+      excluded_asset_charge_retained: true

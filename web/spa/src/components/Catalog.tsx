@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import { type CatalogPage, type CatalogSong, getCatalog } from "../api";
 import { catalogHash, type CatalogShelf, itemHash } from "../router";
 
-const PRIMARY = ["Хиты на иврите", "Русские хиты"];
-const GENRE_NAMES: Record<string, string> = { pop: "Поп", "hip-hop": "Хип хоп", mizrahi: "Мизрахи" };
+const PRIMARY = ["Hebrew hits", "English hits"];
+const GENRE_NAMES: Record<string, string> = { pop: "Pop", "hip-hop": "Hip hop", mizrahi: "Mizrahi" };
 
 function shelfTitle(shelf: CatalogShelf) {
-  if (shelf.axis === "decade") return shelf.value + "‑е";
+  if (shelf.axis === "decade") return shelf.value + "s";
   return shelf.axis === "genre" ? GENRE_NAMES[shelf.value] ?? shelf.value : shelf.value;
 }
 
@@ -97,7 +97,7 @@ export function CatalogBrowser({ query, shelf, prepare, pasteUrl }: {
           {shelf && !search && (
             <div className="catalog-shelf-heading">
               <h2>{shelfTitle(shelf)}</h2>
-              <a className="m-btn sm ghost" href={catalogHash()}>← Каталог</a>
+              <a className="m-btn sm ghost" href={catalogHash()}>← Catalog</a>
             </div>
           )}
           <div className="catalog-grid">{page.songs.map(card)}</div>
@@ -119,7 +119,7 @@ export function CatalogBrowser({ query, shelf, prepare, pasteUrl }: {
             <section key={group.axis + group.value} className="catalog-shelf" aria-label={title}>
               <div className="catalog-shelf-heading">
                 <h2>{title}</h2>
-                <a className="m-btn sm ghost" href={catalogHash(group)} aria-label={`Все песни полки «${title}»`}>→ все</a>
+                <a className="m-btn sm ghost" href={catalogHash(group)} aria-label={`See all songs in ${title}`}>See all →</a>
               </div>
               <div className="catalog-shelf-scroll">{songs.slice(0, 8).map(card)}</div>
             </section>

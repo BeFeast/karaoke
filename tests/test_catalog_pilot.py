@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import shutil
 import subprocess
+import wave
 from argparse import Namespace
+from array import array
 from pathlib import Path
 
 import pytest
@@ -12,16 +15,28 @@ from sqlalchemy import func, select
 from yt_dlp import YoutubeDL
 
 from karaoke import catalog_pilot
-from karaoke.catalog import PILOT_DOWNLOAD_GATE_NOTE
+from karaoke.catalog import PILOT_DOWNLOAD_GATE_NOTE, pilot_job_root
+from karaoke.catalog_auto_check import Thresholds
+from karaoke.catalog_identity import PILOT_OWNER
 from karaoke.catalog_pilot import (
     COOLDOWN,
     SeedManifest,
     admission,
     import_seeds,
+    reservation,
     unique_seeds,
 )
 from karaoke.config import Settings
-from karaoke.db.models import Base, CatalogAsset, CatalogPilotState, CatalogSource, Job, JobStatus
+from karaoke.db.models import (
+    Base,
+    CatalogAsset,
+    CatalogPilotState,
+    CatalogRecording,
+    CatalogSource,
+    CatalogTrack,
+    Job,
+    JobStatus,
+)
 from karaoke.db.session import create_engine_and_sessionmaker
 from karaoke.worker import pipeline
 
@@ -34,6 +49,7 @@ def test_duplicate_manifest_and_repeat_import(tmp_path):
     path = Path(__file__).parents[1] / "catalog" / "pilot-2026-11-24.json"
     manifest = SeedManifest.model_validate_json(path.read_text())
     assert len(unique_seeds(manifest)) == 30
+    assert {song.language for song in manifest.songs} == {"en", "he"}
     duplicate = manifest.model_copy(update={"songs": [*manifest.songs, manifest.songs[0]]})
     assert len(unique_seeds(duplicate)) == 30
 
@@ -67,7 +83,7 @@ def test_priority_cooldown_and_reservations():
 
     prior = CatalogAsset(
         source_id=1, state="ready", download_started_at=NOW - COOLDOWN * 3,
-        finished_at=NOW - COOLDOWN * 2, reserved_micros=350_000, charged_micros=300_000,
+        finished_at=NOW - COOLDOWN * 2, reserved_micros=950_000, charged_micros=930_000,
     )
     assert check(foreground=True) == "waiting_for_foreground"
     assert check(paused=True) == "paused"
@@ -80,11 +96,161 @@ def test_priority_cooldown_and_reservations():
     prior.state = "ready"
     prior.finished_at = NOW - dt.timedelta(days=1)
     prior.download_started_at = prior.finished_at - COOLDOWN
-    assert check(attempts=[prior]) == "eligible"
+    assert check(attempts=[prior]) == "waiting_for_budget"
+    assert check(attempts=[prior], reserve=50_000) == "eligible"
     assert check(attempts=[prior] * 4) == "waiting_for_budget"
     prior.download_started_at = NOW.replace(hour=0) - dt.timedelta(minutes=10)
     prior.finished_at = NOW.replace(hour=0) + dt.timedelta(minutes=1)
     assert check(attempts=[prior]) == "waiting_for_budget"
+
+
+def test_reservation_uses_observed_charges_and_stays_within_caps():
+    observed = CatalogAsset(
+        charged_micros=79_021, state="retired",
+        job=Job(status=JobStatus.completed, vast_cost_micros=12_354),
+    )
+    uncertain = CatalogAsset(
+        charged_micros=333_334, job=Job(status=JobStatus.failed),
+    )
+    assert reservation([], 1) == 50_000
+    assert reservation([observed, uncertain], 2) == 118_532
+    assert admission(
+        now=NOW, attempts=[CatalogAsset(
+            source_id=1, charged_micros=900_000,
+            download_started_at=NOW - dt.timedelta(days=1),
+            finished_at=NOW - dt.timedelta(days=1), state="review",
+        )], foreground=False, paused=False, reserve=reservation([observed], 2),
+    ) == "waiting_for_budget"
+
+
+def _stem(path, *, backing=False, silent=False, short=False):
+    with wave.open(str(path), "wb") as wav:
+        wav.setparams((1, 2, 8000, 0, "NONE", "not compressed"))
+        pcm = array("h", (
+            (0 if silent or (not backing and sample // 8000 not in (1, 5, 9)) else
+             9_000 if sample % (8 if backing else 20) < (4 if backing else 10) else -9_000)
+            for sample in range(8000 * (8 if short else 12))
+        ))
+        wav.writeframes(pcm.tobytes())
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="requires coordinator ffmpeg")
+@pytest.mark.parametrize(("failure", "reason"), [
+    (None, None), ("missing", "karaoke_missing"), ("broken", "karaoke_decode"),
+    ("silent", "karaoke_rms"), ("short", "karaoke_duration"), ("leakage", "vocal_band_leakage"),
+    ("missing_lrc", "synced_lyrics_missing"), ("unordered", "lyric_timestamps"),
+    ("coverage", "lyrics_coverage"), ("gap", "lyrics_gap"), ("offset", "lyric_onset_offset"),
+])
+async def test_auto_check_publishes_only_on_all_checks(tmp_path, failure, reason):
+    manifest = SeedManifest.model_validate_json(
+        (Path(__file__).parents[1] / "catalog" / "pilot-2026-11-24.json").read_text()
+    )
+    manifest.songs = manifest.songs[:1]
+    settings = Settings(artifact_root=str(tmp_path))
+    engine, factory = create_engine_and_sessionmaker(f"sqlite+aiosqlite:///{tmp_path / 'pilot.db'}")
+    limits = Thresholds(lyric_line_window_s=1.25, lyric_gap_max_s=0.5)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with factory() as session:
+            [source] = await import_seeds(session, manifest)
+            job = Job(
+                job_token="pilot-fixture", owner_subject=PILOT_OWNER, duration=12,
+                status=JobStatus.completed, source_url="https://youtu.be/" + source.external_id,
+            )
+            asset = CatalogAsset(
+                job=job, source=source, pipeline_version="test",
+                download_started_at=NOW, reserved_micros=100_000, state="review",
+            )
+            session.add(asset)
+            await session.commit()
+            asset_id = asset.id
+        root = pilot_job_root(tmp_path, "pilot-fixture")
+        exports = root / "exports"
+        exports.mkdir(parents=True)
+        (root / "work").mkdir()
+        _stem(exports / "vocals.mp3")
+        if failure == "broken":
+            (exports / "karaoke.mp3").write_bytes(b"not audio")
+        elif failure != "missing":
+            _stem(
+                exports / "karaoke.mp3", backing=failure != "leakage",
+                silent=failure == "silent", short=failure == "short",
+            )
+        lyrics = {
+            "unordered": "[00:05.00] five\n[00:01.00] one",
+            "coverage": "[00:01.00] one\n[00:01.20] partial",
+            "gap": "[00:01.00] one\n[00:09.00] nine",
+            "offset": "[00:00.20] one\n[00:04.20] five\n[00:08.20] nine",
+        }.get(failure, "[00:01.00] one\n[00:05.00] five\n[00:09.00] nine")
+        if failure != "missing_lrc":
+            (exports / "lyrics.lrc").write_text(lyrics, encoding="utf-8")
+        args = Namespace(auto_check=asset_id, thresholds=limits)
+        await catalog_pilot._execute_locked(args, manifest, settings, factory)
+        async with factory() as session:
+            asset = await session.get(CatalogAsset, asset_id)
+            audit = json.loads((await session.get(Job, asset.job_id)).stage_note)
+            assert audit["who"] == "auto-check"
+            assert audit["result"] == asset.state
+            assert audit["values"]["vocals_decodes"]
+            if reason:
+                assert reason in audit["reasons"]
+                assert asset.state == "review"
+                assert (root / "work").is_dir()
+            else:
+                assert audit["reasons"] == []
+                assert asset.state == "ready"
+                assert len(asset.lyric_revision) == 64
+                assert not (root / "work").exists()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_import_retires_excluded_assets_without_erasing_the_ledger(tmp_path):
+    manifest = SeedManifest.model_validate_json(
+        (Path(__file__).parents[1] / "catalog" / "pilot-2026-11-24.json").read_text()
+    )
+    settings = Settings(artifact_root=str(tmp_path))
+    engine, factory = create_engine_and_sessionmaker(f"sqlite+aiosqlite:///{tmp_path / 'pilot.db'}")
+    root = pilot_job_root(tmp_path, "retired-fixture")
+    (root / "exports").mkdir(parents=True)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with factory() as session:
+            source = CatalogSource(
+                provider="youtube", external_id="4e6s1b4G35Y",
+                available=True, metadata_allowed=True, playback_allowed=True,
+                recording=CatalogRecording(
+                    track=CatalogTrack(title="Retired", artist="Fixture"), version="studio",
+                    language="ru",
+                ),
+            )
+            asset = CatalogAsset(
+                job=Job(
+                    job_token="retired-fixture", owner_subject=PILOT_OWNER,
+                    status=JobStatus.completed, source_url="https://youtu.be/4e6s1b4G35Y",
+                    vast_cost_micros=12_354,
+                ),
+                source=source, pipeline_version="test", state="review",
+                download_started_at=NOW, finished_at=NOW, charged_micros=79_021,
+                reserved_micros=333_334,
+            )
+            session.add(asset)
+            await session.commit()
+            asset_id, source_id = asset.id, source.id
+        await catalog_pilot._execute_locked(Namespace(import_only=True), manifest, settings, factory)
+        async with factory() as session:
+            asset = await session.get(CatalogAsset, asset_id)
+            source = await session.get(CatalogSource, source_id)
+            assert not (source.available or source.metadata_allowed or source.playback_allowed)
+            assert asset.charged_micros == 79_021
+            assert asset.state == "retired"
+            assert not root.exists()
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
