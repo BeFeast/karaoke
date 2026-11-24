@@ -39,7 +39,7 @@ export function App(props: {
   mySongs?: boolean;
   shelf?: CatalogShelf;
 }) {
-  const { authControl, catalogEnabled = false, mySongs = false, shelf } = props;
+  const { authControl, catalogEnabled = false, mySongs = true, shelf } = props;
   const [jobs, setJobs] = useState<JobOut[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [listError, setListError] = useState<string | null>(null);

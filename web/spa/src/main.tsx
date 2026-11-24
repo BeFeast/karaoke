@@ -42,7 +42,7 @@ function Routed({ config, authControl, catalogEnabled = false }: { config: Runti
     return <SettingsPage authControl={authControl} />;
   }
   return <App config={config} authControl={authControl} catalogEnabled={catalogEnabled}
-    mySongs={route.name === "my-songs"} shelf={route.name === "catalog" ? route.shelf : undefined} />;
+    mySongs={route.name !== "catalog"} shelf={route.name === "catalog" ? route.shelf : undefined} />;
 }
 
 function Boot({ children }: { children: React.ReactNode }) {

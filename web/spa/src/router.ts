@@ -7,6 +7,9 @@
 //
 // Routes:
 //   #/                     → dashboard (also the empty hash and `#`)
+//   #/my-songs             → personal library (same view as the dashboard)
+//   #/catalog              → catalog shelves
+//   #/catalog/:axis/:value → one catalog shelf
 //   #/job/:token           → item page for a single job
 //   #/settings             → settings page (ktx_ extension tokens)
 
@@ -19,7 +22,7 @@ export type Route =
   | { name: "item"; token: string }
   | { name: "settings" }
   | { name: "my-songs" }
-  | { name: "catalog"; shelf: CatalogShelf };
+  | { name: "catalog"; shelf?: CatalogShelf };
 
 function parseHash(hash: string): Route {
   // Strip a leading "#" and optional leading "/".
@@ -31,6 +34,7 @@ function parseHash(hash: string): Route {
     return { name: "item", token: decodeURIComponent(segments[1]) };
   }
   if (segments[0] === "my-songs") return { name: "my-songs" };
+  if (segments[0] === "catalog" && segments.length === 1) return { name: "catalog" };
   if (segments[0] === "catalog" && segments[2]) {
     const axis = segments[1];
     if (axis === "collection" || axis === "genre" || axis === "decade") {
@@ -86,7 +90,7 @@ export function goDashboard(): void {
 }
 
 export function catalogHash(shelf?: CatalogShelf): string {
-  return shelf ? `#/catalog/${shelf.axis}/${encodeURIComponent(shelf.value)}` : "#/";
+  return shelf ? `#/catalog/${shelf.axis}/${encodeURIComponent(shelf.value)}` : "#/catalog";
 }
 
 export const mySongsHash = "#/my-songs";

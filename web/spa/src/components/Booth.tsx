@@ -325,6 +325,10 @@ export function BoothScreen({
       setFocusPaste(false);
     }
   }, [mySongs, focusPaste]);
+  const pasteUrl = () => {
+    setFocusPaste(true);
+    navigate(mySongsHash);
+  };
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -400,10 +404,12 @@ export function BoothScreen({
           </nav>
         )}
         {inCatalog ? (
-          <CatalogBrowser query={catalogQuery} shelf={shelf} prepare={onCreate} pasteUrl={() => {
-            setFocusPaste(true);
-            navigate(mySongsHash);
-          }} />
+          <>
+            <button className="m-btn primary catalog-add-song" type="button" onClick={pasteUrl}>
+              + Добавить свою песню
+            </button>
+            <CatalogBrowser query={catalogQuery} shelf={shelf} prepare={onCreate} pasteUrl={pasteUrl} />
+          </>
         ) : (
           <div data-my-songs>
             <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)", padding: 16 }}>
