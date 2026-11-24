@@ -244,11 +244,21 @@ def check_player(evidence, scope, checks, samples):
                               and gains[1][1] - gains[0][1] >= expected
                               and abs(gains[1][0] - gains[0][0]) < 0.02 and gains[1][0] > 0.98)
             case "vocals_default_pct":
-                # 25% on a perceptual curve: -22.5 dB on the vocal stem.
+                # The first song starts at 50% (Oleg 2026-11-24, decision 2):
+                # on the perceptual curve that is -15 dB, gain ~0.178.
                 first = gains[0] if gains else None
                 observed = {"slider_pct": before.get("vocalsPct"), "gains": first}
                 passed = (before.get("vocalsPct") == expected and first is not None and len(first) == 2
-                          and first[0] > 0.98 and abs(first[1] - 10 ** (-22.5 / 20)) < 0.02)
+                          and first[0] > 0.98 and abs(first[1] - vocal_gain_for(expected)) < 0.02)
+            case "vocals_remembered_after_reload":
+                # The level chosen on the slider is the start level after a
+                # reload, even though the mic toggle muted it before reloading.
+                observed = samples["remembered"]
+                passed = bool(observed) and observed["chosen_pct"] not in (None, 0, 50) \
+                    and observed["muted_pct"] == 0 and observed["stored_pct"] == observed["chosen_pct"] \
+                    and observed["reloaded_pct"] == observed["chosen_pct"] \
+                    and observed["reloaded_gain"] is not None \
+                    and abs(observed["reloaded_gain"] - vocal_gain_for(observed["chosen_pct"])) < 0.02
             case "vocals_mute_toggle":
                 observed = samples["mute"]
                 passed = bool(observed) and observed["muted_gain"] is not None and observed["muted_gain"] < 0.005 \
@@ -358,6 +368,12 @@ async def timing_samples(tab, lyrics, duration):
     return samples
 
 
+def vocal_gain_for(pct):
+    """Vocal stem gain for an Original vocals percent: the SPA's perceptual
+    curve spans 30 dB between 1% and 100% (engineMath.gainsForLevel)."""
+    return 0.0 if pct <= 0 else 10 ** (30 * (pct / 100 - 1) / 20)
+
+
 def vocal_gain(snapshot):
     tracks = snapshot["tracks"]
     return round(tracks[1]["gain"], 4) if len(tracks) == 2 else None
@@ -378,6 +394,41 @@ async def mute_toggle(tab):
     return {"level_pct": level["vocalsPct"], "level_gain": vocal_gain(level),
             "muted_pct": muted["vocalsPct"], "muted_gain": vocal_gain(muted),
             "restored_pct": restored["vocalsPct"], "restored_gain": vocal_gain(restored)}
+
+
+async def remembered_after_reload(tab):
+    """Mute with the mic, reload, and expect the slider level chosen earlier
+    (the mix tap) back: the device remembers chosen levels, never the mute."""
+    chosen = await tab.js("karaokeVerify.snapshot()")
+    point = await tab.js('karaokeVerify.point("mic")')
+    if not point or not point["reachable"] or not await tab.js("karaokeVerify.keepVocals()"):
+        return {}
+    await tab.tap(point)
+    await asyncio.sleep(0.4)
+    muted = await tab.js("karaokeVerify.snapshot()")
+    stored = await tab.js("karaokeVerify.rememberedVocals()")
+    try:
+        await tab.call("Page.reload")
+        await asyncio.sleep(0.5)
+
+        async def ready():
+            value = await tab.js(
+                'document.readyState !== "loading" ? window.karaokeVerify?.snapshot() : null'
+            )
+            return value if value and value["ready"] and value["vocalsPct"] is not None else None
+
+        reloaded = await wait_for(ready, 35, "Player never became ready after reload")
+    finally:
+        with suppress(Exception):
+            await tab.js("karaokeVerify.keepVocals(false)")
+    # Web Audio sources (and their gain nodes) only exist after play.
+    play = await tab.js('karaokeVerify.point("play")')
+    if play and play["reachable"]:
+        await tab.tap(play)
+        await asyncio.sleep(1.2)
+    playing = await tab.js("karaokeVerify.snapshot()")
+    return {"chosen_pct": chosen["vocalsPct"], "muted_pct": muted["vocalsPct"], "stored_pct": stored,
+            "reloaded_pct": reloaded["vocalsPct"], "reloaded_gain": vocal_gain(playing)}
 
 
 async def scrub_snap(tab, lyrics, duration):
@@ -437,8 +488,12 @@ async def inspect_player(tab, evidence, scope, checks, lyrics):
     if after["lineCount"] and after["duration"]:
         timing = await timing_samples(tab, lyrics, after["duration"])
         await evidence.capture(tab, scope, "lyrics-playing")
+    remembered = {}
+    if "vocals_remembered_after_reload" in checks:
+        remembered = await remembered_after_reload(tab)
+        await evidence.capture(tab, scope, "after-reload")
     check_player(evidence, scope, checks, dict(
-        before=before, after=after, timing=timing, mix=gains, mute=mute, scrub=scrub,
+        before=before, after=after, timing=timing, mix=gains, mute=mute, scrub=scrub, remembered=remembered,
         controls={"play": bool(point and point["reachable"]), "mix": bool(mix and mix["reachable"]),
                   "scale": before["scale"], "native_audio_controls": before["controls"]},
     ))

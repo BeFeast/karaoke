@@ -31,7 +31,7 @@ import { Icon } from "./Icon";
 import { Sheet } from "./Sheet";
 import { LYRICS_SIZES, type LyricsSize, loadLyricsSize, saveLyricsSize } from "./stageLyricsModel";
 import { loadPref, type PrefKey, savePref } from "../lib/prefs";
-import { defaultVocalPct, saveDefaultVocalPct } from "../lib/vocals";
+import { rememberVocalPct, startVocalPct } from "../lib/vocals";
 import { feedbackHash } from "../router";
 
 const PREVIEW_PX: Record<LyricsSize, number> = { s: 24, m: 28, l: 34, perf: 34 };
@@ -40,7 +40,7 @@ const PREVIEW_PX: Record<LyricsSize, number> = { s: 24, m: 28, l: 34, perf: 34 }
 // preview line, the Original vocals start level, screen-on and count-in.
 function SingingSettings() {
   const [size, setSize] = useState<LyricsSize>(loadLyricsSize);
-  const [vocals, setVocals] = useState(defaultVocalPct);
+  const [vocals, setVocals] = useState(startVocalPct);
   const [prefs, setPrefs] = useState(() => ({ keepAwake: loadPref("keepAwake"), countIn: loadPref("countIn") }));
   const [help, setHelp] = useState(false);
   const toggle = (key: PrefKey, on: boolean) => {
@@ -74,7 +74,7 @@ function SingingSettings() {
             aria-valuetext={i18n("stage.vocalsValue", { n: vocals })}
             onChange={(event) => {
               const value = Number(event.target.value);
-              saveDefaultVocalPct(value);
+              rememberVocalPct(value);
               setVocals(value);
             }} />
         </label>

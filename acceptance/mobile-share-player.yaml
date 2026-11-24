@@ -10,12 +10,16 @@ action:
       lyric_font_size: {inactive_px: 16, active_px: 20}
       no_horizontal_scroll: true
       controls_reachable: true
-      # UI/UX v1 step 9: Original vocals starts at 25% (-22.5 dB on the vocal
-      # stem, backing at full gain), the mic toggles 0 and back, and a scrub
-      # release within 0.6 s of a line start lands on it.
-      vocals_default_pct: 25
+      # UI/UX v1 step 9 + decision 2 (Oleg 2026-11-24): the first song starts
+      # at Original vocals 50% (-15 dB on the vocal stem, gain ~0.178, backing
+      # at full gain), the mic toggles 0 and back, and a scrub release within
+      # 0.6 s of a line start lands on it. The level chosen on the slider is
+      # remembered per device: after a mic mute and a reload the song starts
+      # at that level again (the mute is not remembered).
+      vocals_default_pct: 50
       vocals_mute_toggle: true
       scrub_snaps_to_line: 0.6
+      vocals_remembered_after_reload: true
   - open: public_share
     assert:
       <<: *player

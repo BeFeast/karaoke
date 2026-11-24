@@ -1,15 +1,15 @@
 // The song lives above navigation (Sonereli UI/UX v1 step 8): one player for
 // the whole app. The Stage opens a song session here; minimizing the Stage or
 // switching tabs keeps it playing, and the mini-player above Add song shows
-// it. The provider also remembers the position for Continue singing, keeps
-// the per-song Original vocals level, and feeds the Media Session (lock
+// it. The provider also remembers the position for Continue singing, starts
+// each song at the device's remembered Original vocals level, and feeds the Media Session (lock
 // screen / Control Center: metadata, play/pause, ±5 s, seek).
 
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { fetchProtectedArtifact } from "../api";
 import type { LyricLine } from "../components/SyncedLyrics";
 import { coverUrl, saveLastPlayed } from "../lib/library";
-import { clampPct, saveSongVocalPct, songVocalPct } from "../lib/vocals";
+import { clampPct, DEFAULT_VOCAL_PCT, rememberVocalPct, startVocalPct } from "../lib/vocals";
 import { type KaraokePlayerApi, useKaraokePlayer } from "./useKaraokePlayer";
 
 export interface SongSession {
@@ -72,7 +72,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   playerRef.current = player;
   const sessionRef = useRef(session);
   sessionRef.current = session;
-  const lastOn = useRef(25);
+  const lastOn = useRef(DEFAULT_VOCAL_PCT);
 
   const open = useCallback((next: SongSession) => {
     const current = sessionRef.current;
@@ -83,26 +83,34 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       }
       return;
     }
-    const pct = songVocalPct(next.token);
-    lastOn.current = pct > 0 ? pct : 25;
+    // Every song starts at the level last chosen on this device (50% at
+    // first); a mute from the previous song does not carry over.
+    const pct = startVocalPct();
+    lastOn.current = pct > 0 ? pct : DEFAULT_VOCAL_PCT;
     playerRef.current.setVocalLevel(pct / 100);
     setSession(next);
   }, []);
 
   const close = useCallback(() => setSession(null), []);
 
-  const setVocalPct = useCallback((pct: number) => {
+  const applyVocalPct = useCallback((pct: number) => {
     const value = clampPct(pct);
     if (value > 0) lastOn.current = value;
     playerRef.current.setVocalLevel(value / 100);
-    const token = sessionRef.current?.token;
-    if (token) saveSongVocalPct(token, value);
+    return value;
   }, []);
 
+  // A level the user chose (slider, arrow keys): it becomes the start level
+  // for the next songs on this device.
+  const setVocalPct = useCallback((pct: number) => {
+    rememberVocalPct(applyVocalPct(pct));
+  }, [applyVocalPct]);
+
   const vocalPct = Math.round(player.vocalLevel * 100);
+  // The mic toggle mutes and restores without touching the remembered level.
   const toggleVocals = useCallback(() => {
-    setVocalPct(Math.round(playerRef.current.vocalLevel * 100) > 0 ? 0 : lastOn.current);
-  }, [setVocalPct]);
+    applyVocalPct(Math.round(playerRef.current.vocalLevel * 100) > 0 ? 0 : lastOn.current);
+  }, [applyVocalPct]);
 
   // Continue singing (step 4): remember the song and the position while it
   // plays, on every screen.
