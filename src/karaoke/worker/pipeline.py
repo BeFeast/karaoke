@@ -192,6 +192,17 @@ _ALIGN_COVERAGE_MIN_LINES = 10
 # this fraction of the curated record: a tiny faithful excerpt (6 matching
 # lines of a 60-line song) must not override the ASR floor wholesale.
 _ALIGN_FALLBACK_MIN_KEPT_RATIO = 0.25
+# A transcript whose language differs from the track's script hint is only
+# discounted as an ASR failure (#260: Hebrew decoded as English at p=0.456)
+# when whisper was unsure. A confident other-language transcript is evidence
+# about the audio, so the wrong-song guard still runs on it.
+_ASR_LANGUAGE_CONFIDENT = 0.8
+# Stems are the submitted audio split in two: their duration matches the mix
+# to the frame. More than this (seconds, or this share of the mix) means the
+# GPU returned another job's audio (the July R2 key collision, #250: a «Конь»
+# job shipped Creep's stems under «Конь» lyrics).
+_STEM_DURATION_TOLERANCE_S = 2.0
+_STEM_DURATION_TOLERANCE_SHARE = 0.02
 
 # YouTube soft-ban / bot-check fingerprints. When yt-dlp prints one of these we
 # back off and retry rather than failing immediately — the devbox residential
@@ -558,6 +569,40 @@ def _wav_to_mp3(src: Path, dest: Path) -> Path:
     return dest
 
 
+def _audio_duration(path: Path) -> float | None:
+    """Duration of an audio file in seconds via ffprobe, or None when it
+    cannot be measured (missing file, no ffprobe, unreadable stream)."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=60, check=False,
+        ).stdout.strip()
+        return float(out) if out else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _check_stems_match_mix(mix: Path, stems: dict[str, Path]) -> None:
+    """Refuse GPU stems that are not the submitted audio.
+
+    Separation never changes the length, so a stem whose duration differs from
+    the mix by more than a couple of seconds belongs to another job: shipping
+    it would put this song's lyrics over another song's audio. Durations that
+    cannot be measured are not judged.
+    """
+    expected = _audio_duration(mix)
+    if expected is None:
+        return
+    tolerance = max(_STEM_DURATION_TOLERANCE_S, _STEM_DURATION_TOLERANCE_SHARE * expected)
+    for name, path in stems.items():
+        got = _audio_duration(path)
+        if got is not None and abs(got - expected) > tolerance:
+            raise PipelineError(
+                f"GPU {name} stem is {got:.1f}s but the submitted audio is {expected:.1f}s: "
+                "the stems belong to another recording"
+            )
+
+
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
@@ -709,13 +754,21 @@ def _resolve_lyrics(
     # transcript is in the track's language (a wrong-language decode is an
     # ASR failure, not evidence against the reference).
     agreement = None
+    # Whether the transcript confirms the curated words: True / False, or
+    # None when there is no transcript fit to judge (none at all, or an
+    # unsure decode in another language). Only an explicit False blocks the
+    # coverage fallback in _select_lyrics.
+    confirmed: bool | None = None
     if curated and not lyrics.instrumental and asr:
         asr_text = " ".join(
             str(seg.get("text") or "") for seg in asr.get("segments") or [] if isinstance(seg, dict)
         )
         asr_lang = str(asr.get("language") or "") or None
-        if lang is None or asr_lang is None or asr_lang == lang:
+        if asr_text.strip() and (
+            lang is None or asr_lang is None or asr_lang == lang or _asr_language_confident(asr)
+        ):
             agreement = bigram_agreement(asr_text, lrc_to_plain(curated), lang)
+            confirmed = agreement is not None and agreement >= _REFERENCE_MIN_AGREEMENT
         if agreement is not None and agreement < _REFERENCE_MIN_AGREEMENT:
             _log.warning(
                 "reference rejected: ASR bigram agreement %.3f < %.2f", agreement, _REFERENCE_MIN_AGREEMENT
@@ -754,7 +807,7 @@ def _resolve_lyrics(
     )
     provenance = _select_lyrics(
         lyrics, exports_dir, whisper_lyrics_txt, aligned_lrc_path,
-        whisper_lyrics_json, aligned=aligned,
+        whisper_lyrics_json, aligned=aligned, reference_confirmed=confirmed,
     )
     selected = None
     if provenance["lrc_written"]:
@@ -905,6 +958,7 @@ def _select_lyrics(
     whisper_lyrics_json: Path | None = None,
     *,
     aligned: str | None = None,
+    reference_confirmed: bool | None = None,
 ) -> dict[str, object]:
     """Apply the lyrics precedence and write the chosen export files.
 
@@ -1024,12 +1078,19 @@ def _select_lyrics(
         # aligned output is expected to be shorter than the curated record.
         # What matters is that what it KEPT is faithful (>= 80% text match)
         # and substantial enough to beat the ASR floor (>= 6 lines).
+        # The aligner fits ANY text onto ANY vocal (job 144 in July: 26 of 34
+        # «Конь» lines "aligned" onto Creep's vocal stem), so its own output
+        # cannot vouch for the text. Once the curated timing failed, a
+        # transcript that could judge the words but did not confirm them
+        # (``reference_confirmed is False``: too few words to measure) sends
+        # the job to the ASR floor. No transcript at all keeps the fallback.
         if (
             align_coverage_reject is not None
             and aligned
             and aligner_total >= 6
             and aligner_total >= _ALIGN_FALLBACK_MIN_KEPT_RATIO * eligible
             and agreed_n >= 0.8 * aligner_total
+            and reference_confirmed is not False
         ):
             # lyrics.txt mirrors the trimmed LRC — the curated full text would
             # advertise lines the synced view (correctly) no longer has.
@@ -1258,6 +1319,15 @@ def _read_aligned_lrc(aligned_lrc_path: Path | None) -> str | None:
     if not body.strip() or not LRC_TIMESTAMP_RE.search(body):
         return None
     return body
+
+
+def _asr_language_confident(asr: dict) -> bool:
+    """True when whisper named the transcript's language with high
+    confidence (``language_probability`` >= :data:`_ASR_LANGUAGE_CONFIDENT`)."""
+    try:
+        return float(asr.get("language_probability")) >= _ASR_LANGUAGE_CONFIDENT
+    except (TypeError, ValueError):
+        return False
 
 
 def _read_whisper_segments(lyrics_json_path: Path | None) -> list[dict] | None:
@@ -1607,6 +1677,10 @@ async def run_real_job(
         exports_dir.mkdir(parents=True, exist_ok=True)
         karaoke_mp3 = exports_dir / "karaoke.mp3"
         vocals_mp3 = exports_dir / "vocals.mp3"
+        await asyncio.to_thread(
+            _check_stems_match_mix, mix_wav,
+            {"vocals": gpu.vocals_path, "instrumental": gpu.instrumental_path},
+        )
         await asyncio.to_thread(_wav_to_mp3, gpu.instrumental_path, karaoke_mp3)
         await asyncio.to_thread(_wav_to_mp3, gpu.vocals_path, vocals_mp3)
 

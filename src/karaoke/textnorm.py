@@ -175,6 +175,17 @@ def align(reference: Sequence, hypothesis: Sequence) -> list[Op]:
     return ops
 
 
+_OPTIONAL_LETTERS = str.maketrans({"ё": "е", "Ё": "Е"})
+
+
+def fold_optional_letters(text: str) -> str:
+    """Fold letters a language writes optionally: Russian/Belarusian «ё» is
+    usually written «е» (whisper does, lyric sites often do not), so «конём»
+    and «конем» are one word for a comparison. Other marks stay: «й», «ñ»,
+    «ç» are different letters, not optional ones."""
+    return text.translate(_OPTIONAL_LETTERS)
+
+
 def bigram_agreement(hypothesis: str, reference: str, lang: str | None = None) -> float | None:
     """Share of the hypothesis's word bigrams that occur anywhere in the
     reference (order- and repeat-insensitive), or ``None`` with fewer than
@@ -184,8 +195,8 @@ def bigram_agreement(hypothesis: str, reference: str, lang: str | None = None) -
     #280 bench an ASR transcript agrees with its own reference at >= 0.32
     (vanilla Hebrew) and with any other song of the set at <= 0.052.
     """
-    hyp = normalize(hypothesis, lang, strip_parenthetical=True).split()
-    ref = normalize(reference, lang, strip_parenthetical=True).split()
+    hyp = fold_optional_letters(normalize(hypothesis, lang, strip_parenthetical=True)).split()
+    ref = fold_optional_letters(normalize(reference, lang, strip_parenthetical=True)).split()
     pairs = list(zip(hyp, hyp[1:], strict=False))
     if len(pairs) < 10:
         return None

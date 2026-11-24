@@ -10,6 +10,10 @@ action:
       websocket_completed: 100
       real_gpu_job: runpod-
       synced_lyrics: true
+      # Curated lyrics must be confirmed by this job's own transcript (word
+      # bigram agreement >= 0.12; other songs measure <= 0.05). Catches
+      # another song's text, or this song's text over another song's audio.
+      lyrics_match_audio: 0.12
       # Processing (#/job/:token) shows the stages in pipeline order and ends on Start singing.
       processing_stages_in_order: true
       start_singing_visible: true
