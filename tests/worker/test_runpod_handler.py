@@ -686,6 +686,23 @@ def test_handler_retries_share_one_separation_and_leave_demucs_compatible(monkey
     assert "lyrics_json" not in result
 
 
+@pytest.mark.parametrize("bad_score, bad_rms", [(-4, 0.01), (-0.2, 0.0)])
+def test_sparse_ctc_rejects_the_complete_candidate_if_one_line_lacks_evidence(bad_score, bad_rms):
+    reference = "Soffia piano\nLuce calma"
+    words = [dict(text=text, start=i + 1, end=i + 1.4, score=-0.2, rms=0.01)
+             for i, text in enumerate(reference.split())]
+    lrc, diagnostics = handler._sparse_ctc_lrc(words, reference)
+    assert diagnostics["accepted"]
+    assert lrc.splitlines() == [
+        "[00:01.00]<00:01.00>Soffia <00:02.00>piano <00:02.40>",
+        "[00:03.00]<00:03.00>Luce <00:04.00>calma <00:04.40>",
+    ]
+    words[2].update(score=bad_score, rms=bad_rms)
+    lrc, diagnostics = handler._sparse_ctc_lrc(words, reference)
+    assert not lrc and not diagnostics["accepted"]
+    assert [line["accepted"] for line in diagnostics["lines"]] == [True, False]
+
+
 def test_retry_does_not_splice_across_unsafe_asr_segment(monkeypatch):
     diagnostics, transcript = _retry_fixture()
     first = _crop_transcript()["segments"][0]
@@ -1175,8 +1192,8 @@ def test_handler_forces_reference_language_once_on_the_same_stem(monkeypatch, in
         calls.append(("asr", path, language, model_name))
         return "", {"language": language or initial_language, "segments": [{"text": "sung lyrics"}]}
 
-    def align(path, text, language, diagnostics=None):
-        calls.append(("align", path, language))
+    def align(path, text, language, diagnostics=None, *, sparse_asr=False):
+        calls.append(("align", path, language, sparse_asr))
         return "[00:01.00]Soffia dolcemente", [None]
 
     monkeypatch.setattr(handler, "_transcribe", transcribe)
@@ -1189,7 +1206,7 @@ def test_handler_forces_reference_language_once_on_the_same_stem(monkeypatch, in
     stem = calls[0][1]
     assert result["lyrics_json"]["language"] == initial_language
     assert calls[0] == ("asr", stem, None, None)
-    assert calls[-1] == ("align", stem, "ita")
+    assert calls[-1] == ("align", stem, "ita", True)
     if initial_language == "es":
         assert calls[1:-1] == [("asr", stem, "it", handler._WHISPER_MODEL_NAME)]
         assert result["reference_asr_retry"]["language"] == "it"

@@ -124,6 +124,10 @@
       const words = active ? [...active.querySelectorAll("[data-lyric-word-start]")] : [];
       const lastStarted = words.findLastIndex((word) => parseFloat(
         word.style.getPropertyValue("--lyric-progress")) > 0);
+      const currentWord = words.find((word) => word.hasAttribute("data-now"));
+      const neighborWord = currentWord && (words[words.indexOf(currentWord) + 1] ?? words[words.indexOf(currentWord) - 1]);
+      const wordStyle = currentWord && getComputedStyle(currentWord);
+      const neighborStyle = neighborWord && getComputedStyle(neighborWord);
       const tracks = [...sources.entries()].filter(([node]) => node.context.state === "running");
       const [node, source] = tracks[0] ?? [];
       return {
@@ -148,6 +152,12 @@
         direction: active ? getComputedStyle((performance && legacyParts[0]) || active).direction : null,
         wordCount: words.length,
         lastStarted,
+        wordUnderlined: wordStyle?.textDecorationLine === "underline",
+        wordEmphasized: !!(wordStyle && neighborStyle && (
+          (wordStyle.transform !== "none" && wordStyle.transform !== neighborStyle.transform)
+          || wordStyle.fontWeight !== neighborStyle.fontWeight)),
+        wordMotionOK: !matchMedia("(prefers-reduced-motion: reduce)").matches
+          || wordStyle?.transitionDuration === "0s",
         time: node ? source.offset
           + Math.max(0, node.context.currentTime - source.when) * node.playbackRate.value : null,
       };

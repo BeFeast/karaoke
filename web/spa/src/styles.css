@@ -1017,8 +1017,10 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 .sn-lyrics .synced-lyrics-speech-tag { font-family: var(--sn-font-ui); font-size: 13px; font-style: normal; }
 .sn-lyrics .lyric-text { text-wrap: pretty; }
 .sn-lyrics .lyric-token { overflow: visible; white-space: normal; }
+.sn-lyrics .lyric-token-timed { transition: transform var(--sn-t-base) var(--sn-ease); }
 .sn-lyrics .lyric-token[data-now] {
   text-decoration: underline 3px var(--sn-cyan); text-underline-offset: 7px; text-decoration-skip-ink: none;
+  transform: scale(1.08);
 }
 .sn-lyrics .synced-lyrics-seek:focus-visible { box-shadow: none; outline: 3px solid var(--sn-cyan); outline-offset: 2px; }
 @media (hover: hover) {
@@ -1136,7 +1138,8 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 .sn-endcard { display: grid; gap: 16px; align-content: center; flex: 1; padding: 24px 20px; }
 .sn-end-title { font-size: 44px; line-height: 46px; text-align: center; }
 @media (prefers-reduced-motion: reduce) {
-  .sn-lyrics .synced-lyrics-seek, .sn-rail-track, .sn-rail-thumb { transition: none; }
+  .sn-lyrics .synced-lyrics-seek, .sn-lyrics .lyric-token-timed,
+  .sn-rail-track, .sn-rail-thumb { transition: none; }
   .sn-spinner { animation: none; }
 }
 .sn-lyrics .lyrics-text.sn-plain { background: none; border: 0; padding: 0; max-height: none; overflow: visible; font-family: var(--sn-font-ui); }

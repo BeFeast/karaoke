@@ -563,6 +563,8 @@ def _voiced_overlap(start: float, end: float, regions: list[tuple[float, float]]
 def _force_align_to_lrc(
     vocals_wav: Path, text: str, language: str,
     diagnostics: dict[str, Any] | None = None,
+    *,
+    sparse_asr: bool = False,
 ) -> tuple[str, list[float | None]]:
     """Force-align ``text`` against the ``vocals_wav`` stem → Enhanced LRC.
 
@@ -582,7 +584,7 @@ def _force_align_to_lrc(
         preprocess_text,
     )
 
-    model, tokenizer, device, dtype = _get_aligner()
+    model, tokenizer, _, _ = _get_aligner()
 
     audio_waveform = load_audio(str(vocals_wav), model.dtype, model.device)
     emissions, stride = generate_emissions(model, audio_waveform, batch_size=1)
@@ -592,6 +594,26 @@ def _force_align_to_lrc(
         romanize=True,
         language=language,
     )
+    sparse_alignment = ""
+    if sparse_asr:
+        try:
+            # A trailing star absorbs the outro instead of pinning the last
+            # lyric to the end of the recording. Reuse the MMS emissions.
+            tokens = [*tokens_starred, "<star>"]
+            segments, scores, blank = get_alignments(emissions, tokens, tokenizer)
+            spans = get_spans(tokens, segments, blank)
+            sparse_words = _sparse_ctc_words(text_starred, spans, scores, blank, stride, audio_waveform)
+            sparse_alignment, sparse_evidence = _sparse_ctc_lrc(sparse_words, text)
+        except Exception as exc:
+            sparse_evidence = {"accepted": False, "error": type(exc).__name__}
+            LOG.warning("sparse CTC alignment failed (%s); using regular alignment", type(exc).__name__)
+        if diagnostics is not None:
+            diagnostics["sparse_ctc"] = sparse_evidence
+        if sparse_alignment:
+            if diagnostics is not None:
+                diagnostics["raw_lrc"] = sparse_alignment
+            return sparse_alignment, [None] * len(sparse_alignment.splitlines())
+
     segments, scores, blank_token = get_alignments(
         emissions,
         tokens_starred,
@@ -604,6 +626,72 @@ def _force_align_to_lrc(
         word_timestamps, text, stride=stride, voiced=_voiced_regions(vocals_wav),
         diagnostics=diagnostics,
     )
+
+
+def _sparse_ctc_words(text_starred, spans, scores, blank, stride, waveform):
+    """Measure actual letter emissions, excluding padding, blanks and stars."""
+    audio = waveform.float().cpu().numpy()
+    words = []
+    for text, span in zip([*text_starred, "<star>"], spans, strict=True):
+        if text == "<star>":
+            continue
+        letters = [segment for segment in span if segment.label not in {blank, "<star>"}]
+        if not letters:
+            return []
+        start = letters[0].start * stride / 1000
+        # The pinned aligner stores inclusive frame indices. A sung word can
+        # occupy one frame, which postprocess_results reports as zero width.
+        end = min((letters[-1].end + 1) * stride / 1000, len(audio) / 16000)
+        samples = audio[round(start * 16000):round(end * 16000)]
+        peaks = [float(scores[seg.start:seg.end + 1].max()) for seg in letters]
+        words.append(dict(
+            text=text, start=start, end=end,
+            score=sum(peaks) / len(peaks),
+            rms=float((samples @ samples / len(samples)) ** 0.5) if len(samples) else 0,
+        ))
+    return words
+
+
+def _sparse_ctc_lrc(words: list[dict[str, Any]], text: str) -> tuple[str, dict[str, Any]]:
+    """Require acoustic support and usable timings for the complete reference.
+
+    Silero is a speech detector and can veto sustained singing; the fallback
+    checks letter posteriors and audible signal on the isolated vocal stem.
+    A partially timed reference would hide the rejected lines on Stage.
+    """
+    lines = [line.split() for line in text.splitlines() if line.strip()]
+    evidence: dict[str, Any] = {"accepted": False, "lines": []}
+    if [word["text"] for word in words] != [word for line in lines for word in line]:
+        evidence["reason"] = "reference_token_mismatch"
+        return "", evidence
+    offset = 0
+    previous_end = 0.0
+    output = []
+    for index, line in enumerate(lines):
+        timed = words[offset:offset + len(line)]
+        scores = [word["score"] for word in timed]
+        rms = min(word["rms"] for word in timed)
+        score = sum(scores) / len(scores)
+        timing_ok = True
+        for word in timed:
+            start, end = word["start"], word["end"]
+            timing_ok &= previous_end <= start < end <= start + 8
+            previous_end = end
+        starts = [word["start"] for word in timed]
+        timing_ok &= all(b - a <= 4 for a, b in zip(starts, starts[1:], strict=False))
+        timing_ok &= len(line) == 1 or len(" ".join(line[:-1])) <= 30 * (starts[-1] - starts[0])
+        accepted = (timing_ok and all(math.isfinite(value) for value in (*scores, rms))
+                    and score >= -1.5 and min(scores) >= -3 and rms >= 0.002)
+        evidence["lines"].append({
+            "index": index, "accepted": accepted, "timing_ok": timing_ok,
+            "mean_letter_logprob": round(score, 3), "worst_word_logprob": round(min(scores), 3),
+            "min_word_rms": round(rms, 5),
+        })
+        if accepted:
+            output.append(_enhanced_lrc_line(line, timed))
+        offset += len(line)
+    evidence["accepted"] = bool(lines) and len(output) == len(lines)
+    return ("\n".join(output) if evidence["accepted"] else ""), evidence
 
 
 def _word_timestamps_to_lrc(
@@ -824,6 +912,12 @@ def _norm_word(word: str) -> str:
 def _asr_words(transcript: dict[str, Any]) -> list[dict[str, Any]]:
     return [dict(w) for seg in transcript.get("segments", [])
             for w in seg.get("words", []) if _norm_word(str(w.get("word", "")))]
+
+
+def _sparse_transcript(transcript: dict[str, Any], reference: str) -> bool:
+    count = len(_asr_words(transcript))
+    duration = transcript.get("duration") or 0
+    return count * 5 < len(reference.split()) or (duration >= 30 and count * 12 < duration)
 
 
 def _matching_word_runs(text: str, words: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -1363,8 +1457,10 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         if want_align and vocals_path is not None:
             diagnostics: dict[str, Any] = {"schema_version": 1, "lines": [], "retries": []}
             try:
+                sparse = mode in ("both", "lyrics") and reference_lang and _sparse_transcript(lyrics_json, align_text)
                 lrc, line_scores = _force_align_to_lrc(
-                    vocals_path, align_text, align_lang, diagnostics=diagnostics
+                    vocals_path, align_text, align_lang, diagnostics=diagnostics,
+                    **({"sparse_asr": True} if sparse else {}),
                 )
                 if mode in ("both", "lyrics") and diagnostics.get("lines"):
                     # Reserve time for returning outputs; never extend the
