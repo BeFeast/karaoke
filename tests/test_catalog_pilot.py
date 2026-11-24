@@ -96,9 +96,9 @@ def test_priority_cooldown_and_reservations():
     prior.state = "ready"
     prior.finished_at = NOW - dt.timedelta(days=1)
     prior.download_started_at = prior.finished_at - COOLDOWN
-    assert check(attempts=[prior]) == "waiting_for_budget"
-    assert check(attempts=[prior], reserve=50_000) == "eligible"
-    assert check(attempts=[prior] * 4) == "waiting_for_budget"
+    assert check(attempts=[prior]) == "eligible"
+    assert check(attempts=[prior] * 5, reserve=350_000) == "eligible"
+    assert check(attempts=[prior] * 5, reserve=350_001) == "waiting_for_budget"
     prior.download_started_at = NOW.replace(hour=0) - dt.timedelta(minutes=10)
     prior.finished_at = NOW.replace(hour=0) + dt.timedelta(minutes=1)
     assert check(attempts=[prior]) == "waiting_for_budget"
@@ -117,8 +117,8 @@ def test_reservation_uses_observed_charges_and_stays_within_caps():
     assert admission(
         now=NOW, attempts=[CatalogAsset(
             source_id=1, charged_micros=900_000,
-            download_started_at=NOW - dt.timedelta(days=1),
-            finished_at=NOW - dt.timedelta(days=1), state="review",
+            download_started_at=NOW - COOLDOWN * 3,
+            finished_at=NOW - COOLDOWN * 2, state="review",
         )], foreground=False, paused=False, reserve=reservation([observed], 2),
     ) == "waiting_for_budget"
 
