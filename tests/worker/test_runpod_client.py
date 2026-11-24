@@ -828,3 +828,41 @@ def test_unknown_mode_is_refused_before_any_http(settings, tmp_path):
     with pytest.raises(RunpodError, match="unsupported mode"):
         RunpodClient(settings, http=rec).run(_mix_wav(tmp_path), tmp_path / "w", mode="demucs")
     assert rec.calls == []
+
+
+@pytest.mark.parametrize("dense_initial", [False, True])
+def test_reference_retry_preserves_dense_independent_contradiction(settings, tmp_path, dense_initial):
+    stem = tmp_path / "vocals.wav"
+    stem.write_bytes(b"RIFFstem")
+    reference = "Soffia dolcemente un venticello spirate nel mio cor mia dea Fortuna"
+    span = "[00:01.00]Soffia dolcemente"
+    first = ("When you were here before could not look you in the eye you are just like an angel"
+             if dense_initial else "Soy cementerio pensíame siempre")
+    output = {
+        "lyrics_txt": first,
+        "lyrics_json": {"language": "en" if dense_initial else "es", "language_probability": 0.99,
+                        "duration": 195, "segments": [{"text": first}]},
+        "reference_asr_retry": {"language": "it", "duration": 195,
+                                "segments": [{"text": "Soffia dolcemente"}]},
+        "aligned_lrc": span,
+        "aligned_diagnostics": {"retries": [{"outcome": "accepted"}]},
+    }
+    rec = _Recorder([
+        {"expect_in": "/run", "code": 200, "body": {"id": "rp-reference-retry"}},
+        {"expect_in": "/status/rp-reference-retry", "code": 200,
+         "body": {"status": "COMPLETED", "output": output}},
+    ])
+    result = RunpodClient(settings, http=rec).run(
+        stem, tmp_path / "work", align_text=reference, align_lang="ita", reference_lang="it", mode="lyrics",
+    )
+    assert rec.calls[0][2]["input"]["reference_lang"] == "it"
+    doc = json.loads(result.lyrics_json_path.read_text())
+    diagnostics = json.loads(result.aligned_diagnostics_path.read_text())
+    if dense_initial:
+        assert doc["language"] == "en"
+        assert result.lyrics_txt_path.read_text() == first
+        assert "retries" not in diagnostics
+    else:
+        assert doc["language"] == "it" and doc["reference_retry_from_language"] == "es"
+        assert result.lyrics_txt_path.read_text() == "Soffia dolcemente"
+        assert diagnostics["retries"][0]["outcome"] == "accepted"

@@ -71,7 +71,8 @@ def _fake_gpu(monkeypatch, calls, *, aligned=None, raw=None):
     from karaoke.worker.runpod_client import RunpodClient
     from karaoke.worker.vast_client import GpuJobResult
 
-    def run(self, stem, out_dir, *, align_text=None, align_lang=None, whisper_lang=None, mode="both"):
+    def run(self, stem, out_dir, *, align_text=None, align_lang=None, whisper_lang=None,
+            reference_lang=None, mode="both"):
         calls.append({"mode": mode, "stem": stem.name, "align_text": align_text, "whisper_lang": whisper_lang})
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "lyrics.json").write_text(_asr_json(SUNG, lambda s: s.replace("בתשע", "בתשה")), encoding="utf-8")

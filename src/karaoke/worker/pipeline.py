@@ -43,7 +43,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from karaoke.api import ws as ws_events
 from karaoke.catalog import PILOT_DOWNLOAD_GATE, PILOT_DOWNLOAD_GATE_NOTE, pilot_job_root
 from karaoke.db.models import Artifact, Job, JobStatus
-from karaoke.textnorm import bigram_agreement
+from karaoke.textnorm import bigram_agreement, tokens
 from karaoke.titles import derive_metadata
 from karaoke.uploads import UPLOAD_PREFIX, upload_display_name
 from karaoke.worker import job_cookies
@@ -81,6 +81,7 @@ from karaoke.worker.lyrics import (
     shift_lrc,
     whisper_segments_to_lrc,
 )
+from karaoke.worker.lyrics_evidence import asr_is_sparse, asr_language_confident, transcript_text
 from karaoke.worker.web_reference import WebReference, WebReferenceFinder
 
 _log = logging.getLogger(__name__)
@@ -192,11 +193,6 @@ _ALIGN_COVERAGE_MIN_LINES = 10
 # this fraction of the curated record: a tiny faithful excerpt (6 matching
 # lines of a 60-line song) must not override the ASR floor wholesale.
 _ALIGN_FALLBACK_MIN_KEPT_RATIO = 0.25
-# A transcript whose language differs from the track's script hint is only
-# discounted as an ASR failure (#260: Hebrew decoded as English at p=0.456)
-# when whisper was unsure. A confident other-language transcript is evidence
-# about the audio, so the wrong-song guard still runs on it.
-_ASR_LANGUAGE_CONFIDENT = 0.8
 # Stems are the submitted audio split in two: their duration matches the mix
 # to the frame. More than this (seconds, or this share of the mix) means the
 # GPU returned another job's audio (the July R2 key collision, #250: a «Конь»
@@ -747,27 +743,19 @@ def _resolve_lyrics(
 
     curated = lyrics.synced_lrc or lyrics.plain or lyrics.rejected_text
     asr = _read_json_object(whisper_lyrics_json)
-    # Wrong-song guard (#281): the curated text must share word bigrams with
-    # what the vocal stem actually says. The aligner fits ANY text onto the
-    # audio, so neither the coverage gate nor the #253 fallback can tell a
-    # different song of the same artist from the right one. Only when the
-    # transcript is in the track's language (a wrong-language decode is an
-    # ASR failure, not evidence against the reference).
+    reference_plain = lrc_to_plain(curated) if curated else ""
+    sparse_asr = bool(reference_plain and asr and not lyrics.instrumental and asr_is_sparse(asr, reference_plain))
+    # The aligner can fit unrelated lyrics onto a vocal stem. Only a
+    # substantial independent transcript can contradict the reference.
     agreement = None
-    # Whether the transcript confirms the curated words: True / False, or
-    # None when there is no transcript fit to judge (none at all, or an
-    # unsure decode in another language). Only an explicit False blocks the
-    # coverage fallback in _select_lyrics.
     confirmed: bool | None = None
-    if curated and not lyrics.instrumental and asr:
-        asr_text = " ".join(
-            str(seg.get("text") or "") for seg in asr.get("segments") or [] if isinstance(seg, dict)
-        )
+    if reference_plain and not lyrics.instrumental and asr and not sparse_asr:
+        asr_text = transcript_text(asr)
         asr_lang = str(asr.get("language") or "") or None
         if asr_text.strip() and (
-            lang is None or asr_lang is None or asr_lang == lang or _asr_language_confident(asr)
+            lang is None or asr_lang is None or asr_lang == lang or asr_language_confident(asr)
         ):
-            agreement = bigram_agreement(asr_text, lrc_to_plain(curated), lang)
+            agreement = bigram_agreement(asr_text, reference_plain, lang)
             confirmed = agreement is not None and agreement >= _REFERENCE_MIN_AGREEMENT
         if agreement is not None and agreement < _REFERENCE_MIN_AGREEMENT:
             _log.warning(
@@ -808,6 +796,7 @@ def _resolve_lyrics(
     provenance = _select_lyrics(
         lyrics, exports_dir, whisper_lyrics_txt, aligned_lrc_path,
         whisper_lyrics_json, aligned=aligned, reference_confirmed=confirmed,
+        sparse_reference=reference_plain if sparse_asr else None,
     )
     selected = None
     if provenance["lrc_written"]:
@@ -816,7 +805,7 @@ def _resolve_lyrics(
         # An earlier attempt must never leak a stale timed export into a new
         # untimed/instrumental result.
         (exports_dir / "lyrics.lrc").unlink(missing_ok=True)
-    if second_text and provenance["lyrics_source"] in _LRCLIB_DERIVED_SOURCES and curated:
+    if second_text and not sparse_asr and provenance["lyrics_source"] in _LRCLIB_DERIVED_SOURCES and curated:
         asr_pairs = [(word.text, word.start) for word in _asr_words(asr)]
         vote: dict[str, object] = {"secondary": "genius", "corrections": 0, "asr": 0, "dictionary": 0}
 
@@ -838,17 +827,25 @@ def _resolve_lyrics(
             selected = _voted(selected)
             (exports_dir / "lyrics.lrc").write_text(selected, encoding="utf-8")
         provenance["lyrics_word_vote"] = vote
-    selected, curated = _apply_reference_policy(
-        provenance, exports_dir, selected, curated, asr, web_reference, lang
-    )
+    if not sparse_asr:
+        selected, curated = _apply_reference_policy(
+            provenance, exports_dir, selected, curated, asr, web_reference, lang
+        )
     if llm is not None and provenance["lyrics_source"] in (SOURCE_WHISPER_ASR_SYNCED, SOURCE_WHISPER_ASR):
         selected = _apply_llm_correction(provenance, exports_dir, selected, llm, song, lang)
     quality = assess_lyrics(
         curated, strip_speech_lines(selected) if selected else selected, asr,
+        selected_plain=reference_plain if sparse_asr and selected is None else None,
         restored_lines=recovery.get("counts", {}).get("restored_lines", 0),
         repaired_timing_lines=recovery.get("counts", {}).get("repaired_timing_lines", 0),
         preservation_issues=recovery.get("preservation_issues"),
     )
+    if sparse_asr:
+        quality.update(status="needs_review", text_confidence="uncertain", timing_confidence="uncertain")
+        quality["issues"].append({
+            "code": "asr_transcript_sparse",
+            "detail": "The transcript is too sparse to verify the reference; review against the audio.",
+        })
     if provenance["instrumental"]:
         quality["status"] = "needs_review"
         quality["issues"] = [{"code": "instrumental_unverified", "detail": "Instrumental designation requires listening review."}]
@@ -959,6 +956,7 @@ def _select_lyrics(
     *,
     aligned: str | None = None,
     reference_confirmed: bool | None = None,
+    sparse_reference: str | None = None,
 ) -> dict[str, object]:
     """Apply the lyrics precedence and write the chosen export files.
 
@@ -1013,6 +1011,20 @@ def _select_lyrics(
     """
     lyrics_txt = exports_dir / "lyrics.txt"
     lyrics_lrc = exports_dir / "lyrics.lrc"
+
+    if sparse_reference is not None:
+        # Stage shows the timed text in preference to the plain export. Use
+        # timings only when alignment kept the complete reference.
+        has_full_alignment = bool(aligned and tokens(lrc_to_plain(aligned)) == tokens(sparse_reference))
+        lyrics_txt.write_text(sparse_reference, encoding="utf-8")
+        if has_full_alignment:
+            lyrics_lrc.write_text(aligned, encoding="utf-8")
+        return {
+            "lyrics_source": SOURCE_FORCED_ALIGNED if has_full_alignment else SOURCE_LRCLIB_PLAIN,
+            "synced": has_full_alignment,
+            "instrumental": False,
+            "lrc_written": has_full_alignment,
+        }
 
     align_coverage_reject: str | None = None
     if lyrics.synced_lrc:
@@ -1268,14 +1280,44 @@ def _script_lang_hint(*texts: str | None) -> str | None:
     return code if hits * 2 >= total_letters else None
 
 
-def _align_lang(source_meta: dict, hint: str | None = None) -> str:
+_REFERENCE_STOPWORDS = {
+    "en": "about again all and are because been don't from have into just know like only that the their them there they this what when where with would you your",
+    "es": "ahora algo aquí cada cómo cuando del donde ella ellos eres esta estoy hay mientras mucho nadie para pero porque puedo quiero sin sobre soy también tengo todo una vamos yo",
+    "it": "abbiamo anche ancora c'è chi dalla della dentro dove gli il l'amore lei mia mio nel nella nell' noi non ogni perché posso questa questo senza siamo sono sulla tuo tua un una voi voglio",
+    "fr": "avec avoir dans des elle encore entre est être eux jamais juste leurs mais même mes nous parce pas pendant pour quand quelle sans sont sur toujours tout très une vous",
+    "de": "aber alle auch auf aus bei bist dass dein deine dem den der dich doch ein eine für haben ich immer kann mein mich nicht noch nur sind über und uns von weil wenn wieder wir",
+    "pt": "agora ainda alguém aqui assim bem com como das demais depois dos ela estou isso mais mesmo minha muito nada não nosso onde pela pelo pra quando quero quem sem sempre tudo você uma",
+    "nl": "alle als ben bij dat deze dit door een echt geen haar heb het iets jij maar meer mijn naar nooit omdat onder onze soms toch veel voor waar want weer zijn",
+    "pl": "aby albo ale bardzo będzie bylo była czego czy dla do gdy gdzie jestem jeszcze już kiedy mnie może mojego mój nas nie nigdy oraz się tylko wiem zawsze że żeby",
+    "ru": "будет ведь ваши где даже если есть ещё для когда меня мне мог мой можем мы него нет она они оно себе тебе тебя тогда только уже хотя чего чтобы это я",
+    "uk": "аби буде були було від вона вони навіть мене мені мій мого може мої ніби нього немає оце певно після поки поруч проте тоді тут усього хіба чого щоби щоб яке якщо",
+}
+
+
+def _reference_language(text: str | None) -> str | None:
+    """Guess a reference's language, abstaining on short or ambiguous text."""
+    if not text:
+        return None
+    script = _script_lang_hint(text)
+    if script:
+        return script
+    # Count distinct markers so a repeated chorus cannot decide on one word.
+    words = set(re.findall(r"[^\W\d_]+(?:'[^\W\d_]+)*", text.casefold().replace("’", "'")))
+    ranked = sorted(
+        ((len(words.intersection(markers.split())), code) for code, markers in _REFERENCE_STOPWORDS.items()),
+        reverse=True,
+    )
+    (hits, code), (runner_up, _) = ranked[:2]
+    return code if hits >= 4 and hits - runner_up >= 2 else None
+
+
+def _align_lang(source_meta: dict, hint: str | None = None, *, reference: str | None = None) -> str:
     """Best-effort ISO-639-3 code for force-alignment from job metadata.
 
-    Accepts either an ISO-639-1 (``"en"``) or already-639-3 (``"eng"``) value
-    under ``language``/``lang``, then the caller-supplied script-derived
-    ``hint`` (#260); defaults to English when unknown/absent.
+    Prefer the reference language. Otherwise use the metadata's ISO-639-1
+    or ISO-639-3 value, then the script-derived hint (#260) or English.
     """
-    raw = source_meta.get("language") or source_meta.get("lang") or hint
+    raw = reference or source_meta.get("language") or source_meta.get("lang") or hint
     code = str(raw or "").strip().lower()
     if len(code) == 3:
         return code
@@ -1319,15 +1361,6 @@ def _read_aligned_lrc(aligned_lrc_path: Path | None) -> str | None:
     if not body.strip() or not LRC_TIMESTAMP_RE.search(body):
         return None
     return body
-
-
-def _asr_language_confident(asr: dict) -> bool:
-    """True when whisper named the transcript's language with high
-    confidence (``language_probability`` >= :data:`_ASR_LANGUAGE_CONFIDENT`)."""
-    try:
-        return float(asr.get("language_probability")) >= _ASR_LANGUAGE_CONFIDENT
-    except (TypeError, ValueError):
-        return False
 
 
 def _read_whisper_segments(lyrics_json_path: Path | None) -> list[dict] | None:
@@ -1567,16 +1600,14 @@ async def run_real_job(
             )
             lyrics = LyricsResult(source="none", rejected="script_mismatch")
         align_text: str | None = None
-        align_lang: str | None = None
         if lyrics.synced_lrc:
             align_text = lrc_to_plain(lyrics.synced_lrc)
-            align_lang = _align_lang(source_meta, hint=lang_hint)
         elif lyrics.plain and not lyrics.instrumental:
             align_text = lyrics.plain
-            align_lang = _align_lang(source_meta, hint=lang_hint)
         elif lyrics.rejected_text:
             align_text = lyrics.rejected_text
-            align_lang = _align_lang(source_meta, hint=lang_hint)
+        reference_lang = _reference_language(align_text)
+        align_lang = _align_lang(source_meta, lang_hint, reference=reference_lang) if align_text else None
 
         # Second reference (#281 word vote): Genius plain text, fetched only
         # when LRCLIB gave us words to vote on. Best-effort; kept on disk
@@ -1647,7 +1678,8 @@ async def run_real_job(
         if pilot:
             gpu = await asyncio.to_thread(
                 client.run, mix_wav, work_dir,
-                align_text=align_text, align_lang=align_lang, whisper_lang=lang_hint,
+                align_text=align_text, align_lang=align_lang, whisper_lang=lang_hint or reference_lang,
+                **({"reference_lang": reference_lang} if reference_lang else {}),
             )
         else:
             gpu = await _run_gpu_with_capacity_retry(
@@ -1659,7 +1691,8 @@ async def run_real_job(
                 work_dir,
                 align_text=align_text,
                 align_lang=align_lang,
-                whisper_lang=lang_hint,
+                whisper_lang=lang_hint or reference_lang,
+                reference_lang=reference_lang if _use_runpod(settings) else None,
             )
         # GPU window closed (the client destroyed the instance in its own
         # ``finally``): push the final cost, then the WS-only ``finalizing``
@@ -1700,6 +1733,7 @@ async def run_real_job(
         # stem. Otherwise, without a web reference yet, a quoted transcript
         # line is searched on the web.
         aligned_path, asr_json_path = gpu.aligned_lrc_path, gpu.lyrics_json_path
+        whisper_txt_path = gpu.lyrics_txt_path
         extra_gpu_cost = 0.0
         post_asr: str | None = None
         if (
@@ -1712,14 +1746,16 @@ async def run_real_job(
                 asr_doc, source_meta, canonical, lang_hint, settings
             )
             if hit is not None and hit_agreement is not None and hit_agreement >= _POST_ASR_MIN_AGREEMENT and _use_runpod(settings):
+                reference_lang = _reference_language(hit_text)
                 realign = await _run_gpu_with_capacity_retry(
                     session_factory, job_id, settings, client, gpu.vocals_path, work_dir / "realign",
-                    align_text=hit_text, align_lang=_align_lang(source_meta, hint=lang_hint),
-                    whisper_lang=lang_hint, mode="lyrics",
+                    align_text=hit_text, align_lang=_align_lang(source_meta, lang_hint, reference=reference_lang),
+                    whisper_lang=lang_hint or reference_lang, reference_lang=reference_lang, mode="lyrics",
                 )
                 extra_gpu_cost += realign.vast_cost
                 lyrics = hit
                 aligned_path, asr_json_path = realign.aligned_lrc_path, realign.lyrics_json_path
+                whisper_txt_path = realign.lyrics_txt_path
                 post_asr = f"lrclib ({hit_agreement:.2f})"
             elif web_reference is None and settings.web_reference_enabled:
                 for line in queries:
@@ -1733,11 +1769,11 @@ async def run_real_job(
             _resolve_lyrics,
             lyrics,
             exports_dir,
-            gpu.lyrics_txt_path,
+            whisper_txt_path,
             aligned_path,
             asr_json_path,
             second_text=second_text,
-            lang=lang_hint,
+            lang=reference_lang or lang_hint,
             web_reference=web_reference,
             llm=_llm_corrector(settings, lang_hint),
             song=_song_label(source_meta, title),
@@ -1766,13 +1802,13 @@ async def run_real_job(
         }
         # Whisper's detected language + confidence (#260) — only when the GPU
         # returned a readable lyrics.json, so old images keep the shape stable.
-        whisper_language = _read_whisper_language(gpu.lyrics_json_path)
+        whisper_language = _read_whisper_language(asr_json_path)
         if whisper_language is not None:
             metadata["whisper_language"] = whisper_language[0]
             if whisper_language[1] is not None:
                 metadata["whisper_language_probability"] = whisper_language[1]
         # Which Whisper model transcribed (#282, r11+ images write it).
-        whisper_model = (_read_json_object(gpu.lyrics_json_path) or {}).get("model")
+        whisper_model = (_read_json_object(asr_json_path) or {}).get("model")
         if isinstance(whisper_model, str) and whisper_model:
             metadata["whisper_model"] = whisper_model
         # Why an LRCLIB record was dropped (duration hard-reject, #148) — only
@@ -1895,6 +1931,7 @@ async def _run_gpu_with_capacity_retry(
     align_text: str | None,
     align_lang: str | None,
     whisper_lang: str | None = None,
+    reference_lang: str | None = None,
     mode: str = "both",
 ):
     """Run the GPU stage, auto-retrying transient RunPod capacity stalls.
@@ -1933,6 +1970,7 @@ async def _run_gpu_with_capacity_retry(
                     client.run, mix_wav, work_dir,
                     align_text=align_text, align_lang=align_lang,
                     whisper_lang=whisper_lang,
+                    **({"reference_lang": reference_lang} if reference_lang else {}),
                     **({"mode": mode} if mode != "both" else {}),
                 )
             )

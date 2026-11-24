@@ -1,0 +1,53 @@
+{
+  "reference_text": "Soffia dolcemente\nUn venticello\nSpirate nel mio cor\nMia dea Fortuna!\nSulla volta celeste\nC'è il mare eterno nella mia anima\nCon un sol fulmine\nCapirai tal leggenda\nQuando pensi a me, sempre\nBisbiglierò\nSulla volta celeste\nC'è il mare eterno nella mia anima\nOvunque tu vada\nOvunque io vada\nC'è il mio amor nella tua vita\nC'è l'amor nella tua giornata\nBasta un tuo sorriso\nUn tuo sol sorriso\nNon morirà l'alma mia, è immortal!\nNon serve versar lacrime",
+  "aligned_lrc": "[00:13.48]<00:13.48>Soffia <00:16.84>dolcemente <00:18.10>\n[02:31.86]<02:31.86>Un <02:32.26>tuo <02:32.92>sol <02:34.28>sorriso <02:36.58>\n[02:49.70]<02:49.70>Non <02:50.96>serve <02:52.44>versar <03:14.46>lacrime <03:14.58>",
+  "aligned_scores": [
+    -0.18699109035989503,
+    -0.08629805339131288,
+    -0.32980721255382645
+  ],
+  "asr": {
+    "dropped_degenerate_segments": 0,
+    "duration": 194.6,
+    "language": "es",
+    "language_detected": "es",
+    "language_detected_probability": 0.80224609375,
+    "language_probability": 1,
+    "model": "large-v3-turbo",
+    "segments": [
+      {
+        "avg_logprob": -0.5904947817325592,
+        "end": 82.31,
+        "no_speech_prob": 0,
+        "start": 13.23,
+        "text": " Soy cementerio, pensíame siempre",
+        "words": [
+          {
+            "end": 14.63,
+            "probability": 0.52685546875,
+            "start": 13.23,
+            "word": " Soy"
+          },
+          {
+            "end": 18.84,
+            "probability": 0.5428059895833334,
+            "start": 17.22,
+            "word": " cementerio,"
+          },
+          {
+            "end": 81.14,
+            "probability": 0.7369791666666666,
+            "start": 79.8,
+            "word": " pensíame"
+          },
+          {
+            "end": 82.31,
+            "probability": 0.94140625,
+            "start": 81.43,
+            "word": " siempre"
+          }
+        ]
+      }
+    ]
+  }
+}

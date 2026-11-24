@@ -1183,15 +1183,17 @@ async def test_run_real_job_uses_canonical_metadata_for_lrclib(tmp_path, monkeyp
 
         captured = {}
 
-        def fake_gpu_run(self, mix_wav, work_dir, *, align_text, align_lang, whisper_lang):
+        def fake_gpu_run(self, mix_wav, work_dir, *, align_text, align_lang, whisper_lang, reference_lang):
             captured["align_text"] = align_text
             captured["whisper_lang"] = whisper_lang
+            captured["reference_lang"] = reference_lang
             work_dir.mkdir(parents=True, exist_ok=True)
             (work_dir / "vocals.wav").write_bytes(b"x")
             (work_dir / "no_vocals.wav").write_bytes(b"x")
             (work_dir / "lyrics.txt").write_text("asr one\nasr two")
             (work_dir / "lyrics.json").write_text(
-                json.dumps({"language": "he", "language_probability": 0.9, "segments": []})
+                json.dumps({"language": "he", "language_probability": 0.9,
+                            "segments": [{"text": "שורה אחת שורה שתיים"}]})
             )
             return GpuJobResult(
                 vast_instance_id="fake-1",
@@ -1219,6 +1221,7 @@ async def test_run_real_job_uses_canonical_metadata_for_lrclib(tmp_path, monkeyp
 
         assert captured["align_text"] == "שורה אחת\nשורה שתיים"
         assert captured["whisper_lang"] == "he"
+        assert captured["reference_lang"] == "he"
         metadata = json.loads((tmp_path / "tok-canon" / "exports" / "metadata.json").read_text())
         assert metadata["track"] == "לאב סונג"  # producer credit stripped
         assert metadata["lyrics_source"] == "lrclib_synced"
@@ -1715,7 +1718,8 @@ async def test_run_real_job_post_asr_lrclib_hit_is_realigned_without_separation(
         monkeypatch.setattr(pipeline, "_LYRICS_SOURCE", LyricsSource(http=lrclib, retry_delays=(0,)))
         calls = []
 
-        def fake_gpu_run(self, mix_wav, work_dir, *, align_text, align_lang, whisper_lang, mode="both"):
+        def fake_gpu_run(self, mix_wav, work_dir, *, align_text, align_lang, whisper_lang,
+                         reference_lang=None, mode="both"):
             calls.append((mode, mix_wav.name, align_text is not None))
             work_dir.mkdir(parents=True, exist_ok=True)
             asr = _asr_doc(work_dir.parent / "asrtmp" / mode, _HE_SUNG)

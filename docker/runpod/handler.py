@@ -1282,6 +1282,11 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(whisper_lang, str):
             raise ValueError("whisper_lang must be a string")
         whisper_lang = whisper_lang.strip().lower() or None
+    reference_lang = job_input.get("reference_lang")
+    if reference_lang is not None and (
+        not isinstance(reference_lang, str) or not re.fullmatch(r"[a-z]{2}", reference_lang)
+    ):
+        raise ValueError("reference_lang must be an ISO-639-1 code")
     want_align = bool(align_text and align_text.strip()) and mode in ("demucs", "both", "lyrics")
 
     if audio_url:
@@ -1338,6 +1343,22 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
             lyrics_txt, lyrics_json = _transcribe(target, language=whisper_lang)
             result["lyrics_txt"] = lyrics_txt
             result["lyrics_json"] = lyrics_json
+            if want_align and reference_lang and lyrics_json.get("language") != reference_lang:
+                auto_language = lyrics_json.get("language")
+                budget = max(0.0, min(float(job_input.get("job_budget_s", 1200)), 1200))
+                deadline = min(time.monotonic() + 90, started + budget - 30)
+                if auto_language and time.monotonic() < deadline:
+                    try:
+                        _, forced = _transcribe(
+                            target, language=reference_lang, deadline=deadline,
+                            model_name=_whisper_model_for(reference_lang),
+                        )
+                        result["reference_asr_retry"] = forced
+                        if forced.get("segments"):
+                            lyrics_json = forced
+                        LOG.info("reference language retry: %s -> %s", auto_language, reference_lang)
+                    except Exception as exc:
+                        LOG.warning("reference language retry failed (%s); preserving first decode", exc)
 
         if want_align and vocals_path is not None:
             diagnostics: dict[str, Any] = {"schema_version": 1, "lines": [], "retries": []}
@@ -1352,7 +1373,7 @@ def handler(event: dict[str, Any]) -> dict[str, Any]:
                     deadline = min(time.monotonic() + 60, started + budget - 30)
                     try:
                         lrc, line_scores = _retry_problem_lines(
-                            vocals_path, diagnostics, result["lyrics_json"],
+                            vocals_path, diagnostics, lyrics_json,
                             lrc, line_scores, deadline=deadline,
                         )
                     except Exception as exc:  # retries cannot destroy valid baseline output

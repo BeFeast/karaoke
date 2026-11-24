@@ -324,6 +324,7 @@ def assess_lyrics(
     selected_lrc: str | None,
     asr: dict | None,
     *,
+    selected_plain: str | None = None,
     restored_lines: int = 0,
     repaired_timing_lines: int = 0,
     preservation_issues: list | None = None,
@@ -335,8 +336,9 @@ def assess_lyrics(
     """
     expected = _reference(curated_text)
     lines = _parse_aligner_lines(selected_lrc or "")
+    output_text = [line.norm for line in lines] if selected_lrc else _reference(selected_plain)
     issues: list[dict[str, Any]] = []
-    counts = dict(expected_lines=len(expected), matched_lines=0, output_lines=len(lines),
+    counts = dict(expected_lines=len(expected), matched_lines=0, output_lines=len(output_text),
                   missing_lines=len(expected), restored_lines=restored_lines,
                   repaired_timing_lines=repaired_timing_lines, expected_words=0,
                   matched_words=0, missing_words=0, extra_words=0, asr_unmatched_words=0,
@@ -349,16 +351,16 @@ def assess_lyrics(
         issue("asr_evidence_invalid", detail="Malformed ASR evidence requires review.")
     evidence = asr if isinstance(asr, dict) else {}
     reference_words = [word for line in expected for word in _tokens(line)]
-    output_words = [word for line in lines for word in _tokens(line.norm)]
+    output_words = [word for line in output_text for word in _tokens(line)]
     words, observation_conflicts = _compose_asr(asr)
     issues.extend(observation_conflicts)
     asr_tokens = [token for word in words for token in _tokens(word.text)]
-    if max(len(expected), len(lines)) > _MAX_LINES or max(len(reference_words), len(output_words), len(asr_tokens)) > _MAX_TOKENS:
+    if max(len(expected), len(output_text)) > _MAX_LINES or max(len(reference_words), len(output_words), len(asr_tokens)) > _MAX_TOKENS:
         issue("comparison_limit_exceeded", detail="Input requires review; comparison was not truncated.")
         return dict(schema_version=1, status="needs_review", text_confidence="uncertain",
                     timing_confidence="uncertain", counts=counts, issues=issues)
     if expected:
-        matched = _pairs([_tokens(line) for line in expected], [_tokens(line.norm) for line in lines])
+        matched = _pairs([_tokens(line) for line in expected], [_tokens(line) for line in output_text])
         indices = {i for i, _ in matched}
         counts.update(matched_lines=len(matched), missing_lines=len(expected) - len(matched))
         for i, text in enumerate(expected):
