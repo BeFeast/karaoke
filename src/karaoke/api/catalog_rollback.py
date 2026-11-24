@@ -10,14 +10,13 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import ORMExecuteState, with_loader_criteria
 
+from karaoke.catalog_identity import CATALOG_OWNER_LINK_PREFIX, PILOT_OWNER
 from karaoke.db.models import Job
 from karaoke.db.session import get_session, get_session_factory
 
 # The previous image has no ORM mapping for the nullable catalog foreign key.
 # Match the durable reserved owner and token prefixes used by this release.
 _SESSION_FLAG = "catalog_rollback_api"
-_PILOT_OWNER = "internal:catalog-pilot"
-_OWNER_LINK_PREFIX = "clerk."
 
 
 @event.listens_for(AsyncSession.sync_session_class, "do_orm_execute")
@@ -26,8 +25,8 @@ def _hide_catalog_jobs(state: ORMExecuteState) -> None:
         state.statement = state.statement.options(
             with_loader_criteria(
                 Job,
-                lambda row: (row.owner_subject != _PILOT_OWNER)
-                & ~row.job_token.startswith(_OWNER_LINK_PREFIX),
+                lambda row: (row.owner_subject != PILOT_OWNER)
+                & ~row.job_token.startswith(CATALOG_OWNER_LINK_PREFIX),
                 include_aliases=True,
             )
         )
@@ -36,7 +35,8 @@ def _hide_catalog_jobs(state: ORMExecuteState) -> None:
 async def _legacy_api_session() -> AsyncIterator[AsyncSession]:
     # Only dependency-injected HTTP sessions are filtered. The old worker's
     # rolling GPU budget queries still account for the underlying pilot jobs.
-    async with get_session_factory()() as session:
+    factory = get_session_factory()
+    async with factory() as session:
         session.info[_SESSION_FLAG] = True
         yield session
 

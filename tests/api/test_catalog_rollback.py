@@ -10,7 +10,8 @@ import os
 import sqlite3
 
 from karaoke.api.catalog_rollback import protect_legacy_api
-from karaoke.db.session import get_session
+from karaoke.db.session import get_session, get_session_factory
+from karaoke.worker.pipeline import _prior_24h_cost_micros
 
 from .test_auth import _sqlite_path, _unverified_jwt
 
@@ -39,6 +40,8 @@ def test_rollback_does_not_expose_catalog_rows(client):
             ],
         )
 
+        db.execute("UPDATE jobs SET vast_cost_micros = 12345 WHERE id = 1")
+
     admin = {"Authorization": "Bearer test-service-token"}
     for viewer in ({}, _headers("user_different_owner"), admin, _headers(owner)):
         for token in ("pilot-storage-token", "clerk.owner-link"):
@@ -55,5 +58,6 @@ def test_rollback_does_not_expose_catalog_rows(client):
             assert client.delete(f"/jobs/{job_id}", headers=viewer).status_code == 404
 
     assert client.get("/share/private-job-token", headers={"Accept": "application/json"}).status_code == 200
+    assert client.portal.call(_prior_24h_cost_micros, get_session_factory()) == 12345
     with sqlite3.connect(_sqlite_path()) as db:
         assert db.execute("SELECT COUNT(*) FROM jobs").fetchone() == (3,)

@@ -32,9 +32,11 @@ Event vocabulary (flat JSON objects; ``ts`` is an ISO-8601 UTC timestamp):
   ``"teardown"`` (GPU window closed, final cost known).
 * ``error``        — ``{type, job_id, error, ts}``.
 
-Auth: like the pre-#8 ``/ws``, these endpoints carry no auth handshake —
-events expose only job ids, stage names, progress and cost (never tokens,
-cookies or artifact contents). The owner-scoped surfaces stay on HTTP.
+The ordinary job protocol remains compatible with pre-#8 clients. Catalog
+owner links require the owning Clerk subject on both replay and live frames.
+Browser clients authenticate with the existing first frame on the global
+feed. Clients opening a protected per-job feed use the Authorization header.
+Pilot processing events are internal.
 """
 from __future__ import annotations
 
@@ -42,10 +44,14 @@ import asyncio
 import contextlib
 import datetime as dt
 import logging
+import secrets
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from sqlalchemy.exc import SQLAlchemyError
 
+from karaoke.api.auth import _bearer_token, _owner_from_clerk_claims, _validate_clerk_jwt
+from karaoke.catalog_identity import CATALOG_OWNER_LINK_PREFIX, PILOT_OWNER
 from karaoke.config import get_settings
 from karaoke.db.models import Job, JobStatus
 
@@ -392,20 +398,74 @@ def forget_job(job_id: int) -> None:
         get_hub().forget(job_id)
 
 
+async def _clerk_subject(token: str | None) -> str | None:
+    # A service bearer and an extension token do not authenticate catalog
+    # access. Bound the input before passing it to the Clerk JWT decoder.
+    if not token or len(token) > 8192 or not token.isascii() or token.count(".") != 2:
+        return None
+    settings = get_settings()
+    if secrets.compare_digest(token.encode(), settings.service_token.strip().encode()):
+        return None
+    # This signature also works in the previous release. This identity is
+    # used solely for Clerk catalog scopes, which have no email allowlist.
+    catalog_settings = settings.model_copy(update={"auth_allowed_emails": ""})
+    try:
+        claims = await asyncio.to_thread(_validate_clerk_jwt, token, catalog_settings)
+    except HTTPException:
+        return None
+    owner = _owner_from_clerk_claims(claims)
+    return owner.subject if owner is not None else None
+
+
+async def _load_job(job_id: int) -> Job | None:
+    from karaoke.db.session import get_session_factory
+
+    if not 0 < job_id <= 2_147_483_647:
+        return None
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            return await session.get(Job, job_id)
+    except (RuntimeError, SQLAlchemyError):
+        # Without a row (or a working DB), a cached event cannot prove its
+        # scope. In particular, never replay queued frames from a deleted link.
+        return None
+
+
+class _CatalogFeedAccess:
+    def __init__(self, subject: str | None) -> None:
+        self.subject = subject
+        # A job's owner and reserved identity are assigned before its first
+        # publication and never change. Cache scopes, not auth decisions.
+        self._scopes: dict[int, tuple[bool, str | None]] = {}
+
+    async def allows(self, job_id: int) -> bool:
+        scope = self._scopes.get(job_id)
+        if scope is None:
+            job = await _load_job(job_id)
+            if job is None:
+                return False
+            owner = (
+                job.owner_subject
+                if job.job_token.startswith(CATALOG_OWNER_LINK_PREFIX)
+                or getattr(job, "catalog_asset_id", None) is not None
+                else None
+            )
+            scope = (job.owner_subject == PILOT_OWNER, owner)
+            if len(self._scopes) >= _QUEUE_MAX:
+                self._scopes.clear()
+            self._scopes[job_id] = scope
+        internal, owner = scope
+        return not internal and (owner is None or owner == self.subject)
+
+
 # ---------------------------------------------------------------------------
 # replay
 # ---------------------------------------------------------------------------
 async def _db_stage_snapshot(job_id: int) -> dict[str, Any] | None:
     """Synthesize a ``stage_change`` from the Job row (hub cache miss —
     e.g. the first subscriber after a process restart)."""
-    from karaoke.db.session import get_session_factory
-
-    try:
-        factory = get_session_factory()
-    except RuntimeError:  # pragma: no cover - engine not initialised
-        return None
-    async with factory() as session:
-        job = await session.get(Job, job_id)
+    job = await _load_job(job_id)
     if job is None:
         return None
     return make_stage_event(
@@ -418,15 +478,18 @@ async def _send_replay(
     hub: ProgressHub,
     job_id: int,
     send_lock: asyncio.Lock,
+    access: _CatalogFeedAccess,
 ) -> bool:
     """Replay the latest stage + heartbeat for ``job_id`` on connect.
 
-    Returns False (after sending an ``error`` event) when the job is unknown
-    to both the hub and the DB — the caller should close the socket.
+    Returns False (after sending an ``error`` event) when the job does not
+    exist or is hidden from this connection.
     """
-    stage = hub.latest_stage(job_id)
-    if stage is None:
-        stage = await _db_stage_snapshot(job_id)
+    stage = None
+    if await access.allows(job_id):
+        stage = hub.latest_stage(job_id)
+        if stage is None:
+            stage = await _db_stage_snapshot(job_id)
     if stage is None:
         async with send_lock:
             await websocket.send_json(make_error_event(job_id, "job not found"))
@@ -456,12 +519,13 @@ async def _run_until_disconnect(*coros) -> None:
 
 @ws_router.websocket("/ws")
 async def websocket_feed(websocket: WebSocket) -> None:
-    """Global broadcast feed (all jobs, all event types).
+    """Global broadcast feed of ordinary and owner-visible job events.
 
     Back-compat: a client may send ``{"action": "subscribe", "job_id": N}``
     (the pre-#8 protocol) at any time to narrow the feed to one job; the
     server replies with that job's replay frames first.
     """
+    access = _CatalogFeedAccess(await _clerk_subject(_bearer_token(websocket)))
     await websocket.accept()
     hub = get_hub()
     queue = hub.subscribe(None)
@@ -474,19 +538,31 @@ async def websocket_feed(websocket: WebSocket) -> None:
                 msg = await websocket.receive_json()
             except ValueError:
                 continue  # ignore non-JSON frames (e.g. wscat keystrokes)
-            job_id = msg.get("job_id") if isinstance(msg, dict) else None
-            if isinstance(job_id, int):
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("action") == "auth":
+                token = msg.get("token")
+                async with send_lock:
+                    access.subject = None
+                subject = await _clerk_subject(token if isinstance(token, str) else None)
+                async with send_lock:
+                    access.subject = subject
+                continue
+            job_id = msg.get("job_id")
+            if type(job_id) is int:
                 state["filter"] = job_id
-                await _send_replay(websocket, hub, job_id, send_lock)
+                await _send_replay(websocket, hub, job_id, send_lock, access)
 
     async def _pump() -> None:
         while True:
             event = await queue.get()
-            target = state["filter"]
-            if target is not None and event.get("job_id") != target:
+            job_id = event.get("job_id")
+            if not isinstance(job_id, int):
                 continue
             async with send_lock:
-                await websocket.send_json(event)
+                target = state["filter"]
+                if (target is None or target == job_id) and await access.allows(job_id):
+                    await websocket.send_json(event)
 
     try:
         await _run_until_disconnect(_recv(), _pump())
@@ -501,12 +577,13 @@ async def websocket_feed(websocket: WebSocket) -> None:
 @ws_router.websocket("/ws/{job_id}")
 async def websocket_job_feed(websocket: WebSocket, job_id: int) -> None:
     """Per-job feed: replay the latest stage/heartbeat, then stream live."""
+    access = _CatalogFeedAccess(await _clerk_subject(_bearer_token(websocket)))
     await websocket.accept()
     hub = get_hub()
     queue = hub.subscribe(job_id)
     send_lock = asyncio.Lock()
     try:
-        if not await _send_replay(websocket, hub, job_id, send_lock):
+        if not await _send_replay(websocket, hub, job_id, send_lock, access):
             return
 
         async def _recv() -> None:

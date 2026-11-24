@@ -44,12 +44,12 @@ from karaoke.api.lyrics_review import revision, save_review, snapshot
 from karaoke.api.preflight import match_url
 from karaoke.api.ws import forget_job, publish_stage
 from karaoke.catalog import (
-    PILOT_OWNER,
     lock_download_admission,
     pilot_job_root,
     ready_assets,
     ready_for_url,
 )
+from karaoke.catalog_identity import CATALOG_OWNER_LINK_PREFIX, PILOT_OWNER
 from karaoke.config import Settings, get_settings
 from karaoke.db.models import CatalogAsset, Job, JobStatus
 from karaoke.db.session import get_session, get_session_factory
@@ -421,7 +421,7 @@ async def create_job(
     if asset is not None:
         track = asset.source.recording.track
         job = Job(
-            job_token="clerk." + secrets.token_urlsafe(24),
+            job_token=CATALOG_OWNER_LINK_PREFIX + secrets.token_urlsafe(24),
             owner_subject=owner.subject,
             owner_email=owner.email,
             owner_display_name=owner.display_name,

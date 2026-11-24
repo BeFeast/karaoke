@@ -21,13 +21,13 @@ from sqlalchemy.orm import joinedload
 from karaoke.api.lyrics_review import revision, snapshot
 from karaoke.catalog import (
     PILOT_DOWNLOAD_GATE_NOTE,
-    PILOT_OWNER,
     PIPELINE_VERSION,
     YOUTUBE_ID,
     lock_download_admission,
     pilot_job_root,
     youtube_url,
 )
+from karaoke.catalog_identity import PILOT_OWNER
 from karaoke.config import Settings, get_settings
 from karaoke.db.models import (
     CatalogAsset,

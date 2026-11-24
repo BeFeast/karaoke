@@ -11,7 +11,6 @@ from sqlalchemy.orm import joinedload
 
 from karaoke.db.models import CatalogAsset, CatalogRecording, CatalogSource, Job, JobStatus
 
-PILOT_OWNER = "internal:catalog-pilot"
 PIPELINE_VERSION = "1"
 YOUTUBE_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 DOWNLOAD_ADMISSION_LOCK = 0x534F4E4552454C4A

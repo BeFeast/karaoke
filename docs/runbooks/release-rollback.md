@@ -138,10 +138,11 @@ this deploy. Until then, cut releases manually with the script.
 ## Rollback across the catalog migration
 
 The first catalog deploy prepares an image named
-`karaoke:<previous-version>-schema-0005-guard` before switching the running service
+`karaoke:<previous-version>-schema-0005-ws` before switching the running service
 from the previous v0.45.x release. The image keeps that release's server and
 SPA and adds the catalog migration so its entrypoint can recognize the new
 database revision. The companion also hides pilot and catalog-linked jobs
-from all job and share requests. The normal `--rollback <previous-version>` command picks
+from legacy job and share requests. Its WebSocket router also checks the
+Clerk subject for catalog owner links and keeps pilot events internal. The normal `--rollback <previous-version>` command picks
 the prepared image and recreates through Dockhand. The catalog migration
 and tables stay in place. The next catalog deploy can reuse them.

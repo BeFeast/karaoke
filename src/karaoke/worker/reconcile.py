@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from karaoke.catalog import PILOT_OWNER
+from karaoke.catalog_identity import PILOT_OWNER
 from karaoke.config import Settings
 from karaoke.db.models import Job, JobStatus
 from karaoke.worker import scheduler

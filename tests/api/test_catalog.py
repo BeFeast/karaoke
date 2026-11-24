@@ -6,7 +6,8 @@ import sqlite3
 
 import pytest
 
-from karaoke.catalog import PILOT_OWNER, youtube_id
+from karaoke.catalog import youtube_id
+from karaoke.catalog_identity import PILOT_OWNER
 from karaoke.config import reset_settings_for_tests
 
 from .test_auth import _sqlite_path, _unverified_jwt
