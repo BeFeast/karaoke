@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.49.0] - 2026-11-24
+
+_Bump: minor_
+
+- Show Processing on the job route and restyle My songs (#369).
+
 ## [v0.48.0] - 2026-11-24
 
 _Bump: minor_
