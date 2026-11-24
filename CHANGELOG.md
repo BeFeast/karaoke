@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.50.0] - 2026-11-24
+
+_Bump: minor_
+
+- Restyle the catalog with one-tap Prepare (#371).
+
 ## [v0.49.0] - 2026-11-24
 
 _Bump: minor_
