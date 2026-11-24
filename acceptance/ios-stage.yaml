@@ -1,0 +1,20 @@
+target: ios
+test: testStagePlaybackAndHebrewLyrics
+state:
+  authenticated_owner: fixture_clerk_user
+  song: completed_two_stem_fixture
+action:
+  - open: my_songs
+  - open: stage
+    assert:
+      playback_advances: true
+      backing_gain_changes: true
+      vocals_gain_changes: true
+      long_active_hebrew_line_wraps: true
+      active_line_scrolls_into_view: true
+  - pause: stage
+  - seek: 0.75
+    assert:
+      active_line_follows_seek: true
+evidence:
+  - ios-stage-hebrew

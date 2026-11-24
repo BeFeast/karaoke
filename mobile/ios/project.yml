@@ -1,0 +1,85 @@
+name: Sonereli
+options:
+  createIntermediateGroups: true
+  minimumXcodeGenVersion: 2.43.0
+  deploymentTarget:
+    iOS: "17.0"
+
+packages:
+  Clerk:
+    url: https://github.com/clerk/clerk-ios
+    exactVersion: 1.5.0
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: 0.1.0
+    CURRENT_PROJECT_VERSION: 1
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: $(SONERELI_TEAM_ID)
+
+targets:
+  Sonereli:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes: [Info.plist, Sonereli.entitlements]
+      - Shared
+    dependencies:
+      - target: SonereliShare
+        embed: true
+        codeSign: true
+      - package: Clerk
+        product: ClerkKit
+      - package: Clerk
+        product: ClerkKitUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.befeast.sonereli
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/Sonereli.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+  SonereliShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Share
+        excludes: [Info.plist, SonereliShare.entitlements]
+      - Shared
+    settings:
+      base:
+        PRODUCT_NAME: SonereliShare
+        PRODUCT_BUNDLE_IDENTIFIER: com.befeast.sonereli.share
+        INFOPLIST_FILE: Share/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Share/SonereliShare.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+
+  SonereliUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: Sonereli
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.befeast.sonereli.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Sonereli
+
+schemes:
+  Sonereli:
+    build:
+      targets:
+        Sonereli: all
+        SonereliUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets: [SonereliUITests]
+    archive:
+      config: Release

@@ -1,0 +1,36 @@
+name: ios-app
+
+on:
+  pull_request:
+    paths: ["mobile/ios/**", "acceptance/ios-*.yaml", "scripts/verify", ".forgejo/workflows/ios-app.yml"]
+  push:
+    branches: [main]
+    paths: ["mobile/ios/**", "acceptance/ios-*.yaml", "scripts/verify", ".forgejo/workflows/ios-app.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: ios-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulator:
+    # The corporate M4 runner is retired. The T3 lane runs the same command
+    # until a macOS runner is registered and enabled for this repository.
+    if: vars.SONERELI_MACOS_RUNNER == 'enabled'
+    runs-on: macos
+    timeout-minutes: 40
+    env:
+      SONERELI_XCODEGEN_MIRROR: ${{ github.server_url }}/api/packages/BeFeast/generic
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build and verify on the simulator
+        run: scripts/verify ios
+      - name: Export simulator evidence
+        if: always()
+        uses: https://data.forgejo.org/forgejo/upload-artifact@v4
+        with:
+          name: sonereli-ios-verification
+          path: mobile/ios/.build-ci/
+          include-hidden-files: true

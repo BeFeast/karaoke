@@ -1,0 +1,20 @@
+target: ios
+test: testShareConfirmationProgressAndSing
+state:
+  authenticated_owner: fixture_clerk_user
+  share_inbox: youtube_url
+action:
+  - open: confirm
+    assert:
+      explicit_confirmation_required: true
+  - submit: youtube_url
+    assert:
+      progress_appears: true
+      sing_available_on_completion: true
+  - open: stage
+    assert:
+      stems_loaded: true
+evidence:
+  - ios-share-confirm
+  - ios-share-progress
+  - ios-share-stage
