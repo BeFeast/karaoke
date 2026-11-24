@@ -51,6 +51,7 @@ final class SonereliUITests: XCTestCase {
         XCTAssertEqual(result, .completed,
                        "Expected the Hebrew line at 14 seconds, observed time \(sought). \(app.debugDescription)")
 
+        app.sliders["stage.seek"].adjust(toNormalizedSliderPosition: 0.20)
         play.tap()
         XCTAssertEqual(play.label, "Пауза")
         let beforeBackground = app.staticTexts["stage.elapsed"].label

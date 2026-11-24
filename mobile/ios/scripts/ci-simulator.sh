@@ -61,7 +61,8 @@ case "$action" in
     : "${SONERELI_QA_TICKET_FILE:?Set the path to a one-use Clerk QA ticket file}"
     : "${SONERELI_QA_SUBJECT:?Set the Clerk QA user ID}"
     : "${SONERELI_QA_YOUTUBE_URL:?Set an authorized source for the one live job}"
-    export TEST_RUNNER_SONERELI_QA_TICKET="$(cat "$SONERELI_QA_TICKET_FILE")"
+    TEST_RUNNER_SONERELI_QA_TICKET="$(cat "$SONERELI_QA_TICKET_FILE")"
+    export TEST_RUNNER_SONERELI_QA_TICKET
     export TEST_RUNNER_SONERELI_QA_SUBJECT="$SONERELI_QA_SUBJECT"
     export TEST_RUNNER_SONERELI_QA_YOUTUBE_URL="$SONERELI_QA_YOUTUBE_URL"
     selection=(-only-testing:"$live_test")

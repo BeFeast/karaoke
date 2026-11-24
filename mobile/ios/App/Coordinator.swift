@@ -180,7 +180,8 @@ struct Coordinator: SongsAPI {
     func subscribe(to id: Int, receive: (JobEvent) -> Bool) async throws {
         var endpoint = URLComponents(url: Self.origin.appendingPathComponent("ws/\(id)"), resolvingAgainstBaseURL: false)!
         endpoint.scheme = "wss"
-        let socket = Self.session.webSocketTask(with: endpoint.url!)
+        let handshake = try await request(to: endpoint.url!)
+        let socket = Self.session.webSocketTask(with: handshake)
         socket.resume()
         defer { socket.cancel(with: .goingAway, reason: nil) }
         try await withTaskCancellationHandler {
