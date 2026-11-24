@@ -6,6 +6,7 @@ import SwiftUI
 struct SonereliApp: App {
     init() {
         SongAssets.clearPreviousRun()
+        SonereliAppearance.apply()
         #if DEBUG
         ShareInbox.resetFixture()
         if LiveVerification.active, let video = LiveVerification.video {
@@ -22,14 +23,40 @@ struct SonereliApp: App {
         WindowGroup {
             RootView()
                 .preferredColorScheme(.dark)
-                .tint(SonereliColor.pink)
+                .tint(Color.snPink)
         }
     }
 }
 
-enum SonereliColor {
-    static let background = Color(red: 8 / 255, green: 9 / 255, blue: 13 / 255)
-    static let pink = Color(red: 1, green: 45 / 255, blue: 170 / 255)
+enum SonereliAppearance {
+    static func apply() {
+        let tab = UITabBarAppearance()
+        tab.configureWithOpaqueBackground()
+        tab.backgroundColor = UIColor(Color.snBlackout)
+        tab.shadowColor = UIColor(Color.snDivider)
+        let item = UITabBarItemAppearance()
+        let font = UIFont(name: "Inter-SemiBold", size: 12) ?? .systemFont(ofSize: 12, weight: .semibold)
+        item.normal.iconColor = UIColor(Color.snMuted)
+        item.normal.titleTextAttributes = [.foregroundColor: UIColor(Color.snMuted), .font: font]
+        item.selected.iconColor = UIColor(Color.snPink)
+        item.selected.titleTextAttributes = [.foregroundColor: UIColor(Color.snPink), .font: font]
+        tab.stackedLayoutAppearance = item
+        tab.inlineLayoutAppearance = item
+        tab.compactInlineLayoutAppearance = item
+        UITabBar.appearance().standardAppearance = tab
+        UITabBar.appearance().scrollEdgeAppearance = tab
+
+        let nav = UINavigationBarAppearance()
+        nav.configureWithTransparentBackground()
+        nav.backgroundColor = UIColor(Color.snBlackout)
+        nav.titleTextAttributes = [
+            .foregroundColor: UIColor(Color.snText),
+            .font: UIFont(name: "Inter-SemiBold", size: 17) ?? .systemFont(ofSize: 17, weight: .semibold),
+        ]
+        UINavigationBar.appearance().standardAppearance = nav
+        UINavigationBar.appearance().scrollEdgeAppearance = nav
+        UINavigationBar.appearance().compactAppearance = nav
+    }
 }
 
 private struct RootView: View {
@@ -38,18 +65,22 @@ private struct RootView: View {
     @State private var attempt = 0
     #if DEBUG
     @State private var fixtureSignedIn = false
+    @State private var fixturePrefs: Prefs?
     private let useFixture = ProcessInfo.processInfo.arguments.contains("--ui-test-fixture")
     #endif
 
     var body: some View {
         #if DEBUG
         if useFixture {
-            if fixtureSignedIn {
-                SongsView(api: FixtureCoordinator(), signOut: { fixtureSignedIn = false })
+            if fixtureSignedIn, let fixturePrefs {
+                AppShell(api: FixtureCoordinator(), prefs: fixturePrefs, signOut: { fixtureSignedIn = false })
             } else {
                 signInCover {
-                    Button("Войти", action: { fixtureSignedIn = true })
-                        .buttonStyle(.borderedProminent)
+                    Button(L10n.t("action.signIn"), action: {
+                        fixturePrefs = Prefs.fixture()
+                        fixtureSignedIn = true
+                    })
+                        .buttonStyle(.snPrimary)
                         .accessibilityIdentifier("auth.fixtureSignIn")
                 }
             }
@@ -69,13 +100,16 @@ private struct RootView: View {
                 signInCover {
                     if let connectionError {
                         Text(connectionError)
-                        Button("Повторить") {
+                            .font(SnFont.body)
+                            .foregroundStyle(Color.snMuted)
+                        Button(L10n.t("action.retry")) {
                             self.connectionError = nil
                             attempt += 1
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.snPrimary)
                     } else {
-                        ProgressView("Подключение")
+                        ProgressView(L10n.t("auth.connecting"))
+                            .tint(Color.snCyan)
                     }
                 }
             }
@@ -89,7 +123,7 @@ private struct RootView: View {
             } catch is CancellationError {
                 return
             } catch {
-                connectionError = "Не удалось подключиться к Sonereli. Проверьте сеть."
+                connectionError = L10n.t("auth.offline")
             }
         }
     }
@@ -98,6 +132,7 @@ private struct RootView: View {
 private struct ClerkGate: View {
     @Environment(Clerk.self) private var clerk
     @State private var showingSignIn = false
+    @State private var prefs = Prefs()
     #if DEBUG
     @State private var liveSignInFailed = false
     #endif
@@ -111,15 +146,15 @@ private struct ClerkGate: View {
 
     var body: some View {
         if signedIn, let user = clerk.user {
-            SongsView(api: Coordinator(), signOut: { try await clerk.auth.signOut() })
+            AppShell(api: Coordinator(), prefs: prefs, signOut: { try await clerk.auth.signOut() })
                 .id(user.id)
         } else {
             signInCover {
                 #if DEBUG
                 if LiveVerification.active {
-                    if liveSignInFailed { Text("Не удалось войти в тестовый аккаунт.") }
-                    Button("Войти") { Task { await signInWithTestTicket() } }
-                        .buttonStyle(.borderedProminent)
+                    if liveSignInFailed { Text(L10n.t("auth.testFailed")).foregroundStyle(Color.snError) }
+                    Button(L10n.t("action.signIn")) { Task { await signInWithTestTicket() } }
+                        .buttonStyle(.snPrimary)
                         .accessibilityIdentifier("auth.liveSignIn")
                 } else {
                     signInButton
@@ -135,7 +170,7 @@ private struct ClerkGate: View {
     }
 
     private var signInButton: some View {
-        Button("Войти") { showingSignIn = true }.buttonStyle(.borderedProminent)
+        Button(L10n.t("action.signIn")) { showingSignIn = true }.buttonStyle(.snPrimary)
     }
 
     #if DEBUG
@@ -161,19 +196,21 @@ private struct ClerkGate: View {
 @MainActor
 private func signInCover<Content: View>(@ViewBuilder content: () -> Content) -> some View {
     VStack(spacing: 24) {
+        Spacer()
         Image("BrandMark")
             .resizable()
             .scaledToFit()
-            .frame(width: 80, height: 80)
+            .frame(width: 88, height: 88)
             .accessibilityHidden(true)
-        Text("Sonereli").font(.largeTitle.bold())
-        Text("Пойте под любимые песни")
-            .font(.title3)
-            .foregroundStyle(.secondary)
+        SnDisplay(text: "Sonereli", size: 44)
+        Text(L10n.t("auth.tagline"))
+            .font(SnFont.inter(18, .medium, relativeTo: .title3))
+            .foregroundStyle(Color.snMuted)
+        Spacer()
         content()
     }
     .multilineTextAlignment(.center)
     .padding(24)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(SonereliColor.background.ignoresSafeArea())
+    .background(Color.snBlackout.ignoresSafeArea())
 }

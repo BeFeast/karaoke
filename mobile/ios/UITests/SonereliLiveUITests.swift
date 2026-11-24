@@ -15,7 +15,7 @@ final class SonereliLiveUITests: XCTestCase {
         let signIn = app.buttons["auth.liveSignIn"]
         if signIn.waitForExistence(timeout: 10) { signIn.tap() }
 
-        let confirm = app.buttons["confirm.submit"]
+        let confirm = app.buttons["add.submit"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 30), "Clerk owner and share inbox did not load.")
         confirm.tap()
         XCTAssertTrue(app.descendants(matching: .any)["job.progress"].waitForExistence(timeout: 15))
@@ -26,7 +26,9 @@ final class SonereliLiveUITests: XCTestCase {
         sing.tap()
 
         let play = app.buttons["stage.playPause"]
-        XCTAssertTrue(play.waitForExistence(timeout: 90), "Both stems and lyrics did not load.")
+        XCTAssertTrue(play.waitForExistence(timeout: 30))
+        let loaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in play.isEnabled }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [loaded], timeout: 90), .completed, "Both stems and lyrics did not load.")
         let vocals = app.sliders["stage.vocals"]
         vocals.adjust(toNormalizedSliderPosition: 0.5)
         play.tap()
