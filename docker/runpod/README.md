@@ -52,6 +52,12 @@ as transliterated-Latin gibberish at p=0.456). The coordinator derives the
 hint from the dominant Unicode script of the video title/artist/track.
 Old images ignore the key.
 
+`reference_lang` (optional, r15+): language of `align_text` as an ISO-639-1
+code. If the first decode chose a different language, the worker attempts
+one forced decode on the same audio within the job budget. The original
+output stays in `lyrics_json`; `reference_asr_retry` carries the alternative
+for the coordinator to evaluate.
+
 ### Output
 
 | field             | demucs | whisper | both |

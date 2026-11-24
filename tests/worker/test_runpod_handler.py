@@ -1167,6 +1167,36 @@ def test_handler_lyrics_mode_skips_separation_and_aligns_the_input_stem(monkeypa
     assert "vocals_b64" not in result and "vocals_uploaded" not in result
 
 
+@pytest.mark.parametrize("initial_language", ["es", "it"])
+def test_handler_forces_reference_language_once_on_the_same_stem(monkeypatch, initial_language):
+    calls = []
+
+    def transcribe(path, language=None, *, deadline=None, model_name=None):
+        calls.append(("asr", path, language, model_name))
+        return "", {"language": language or initial_language, "segments": [{"text": "sung lyrics"}]}
+
+    def align(path, text, language, diagnostics=None):
+        calls.append(("align", path, language))
+        return "[00:01.00]Soffia dolcemente", [None]
+
+    monkeypatch.setattr(handler, "_transcribe", transcribe)
+    monkeypatch.setattr(handler, "_force_align_to_lrc", align)
+    monkeypatch.setattr(handler, "_gpu_model_name", lambda: "test")
+    result = handler.handler({"input": {
+        "audio_base64": "dm9jYWxz", "mode": "lyrics", "align_text": "Soffia dolcemente",
+        "reference_lang": "it", "align_lang": "ita",
+    }})
+    stem = calls[0][1]
+    assert result["lyrics_json"]["language"] == initial_language
+    assert calls[0] == ("asr", stem, None, None)
+    assert calls[-1] == ("align", stem, "ita")
+    if initial_language == "es":
+        assert calls[1:-1] == [("asr", stem, "it", handler._WHISPER_MODEL_NAME)]
+        assert result["reference_asr_retry"]["language"] == "it"
+    else:
+        assert not calls[1:-1] and "reference_asr_retry" not in result
+
+
 def test_handler_rejects_unknown_mode():
     import base64
     with pytest.raises(ValueError, match="unknown mode"):

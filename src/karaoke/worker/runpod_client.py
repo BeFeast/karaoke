@@ -40,6 +40,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from karaoke.worker.lyrics_evidence import prefer_reference_retry, transcript_text
 from karaoke.worker.vast_client import GpuJobResult
 
 RUNPOD_REST = "https://api.runpod.ai/v2"
@@ -220,6 +221,7 @@ class RunpodClient:
         align_text: str | None = None,
         align_lang: str | None = None,
         whisper_lang: str | None = None,
+        reference_lang: str | None = None,
         mode: str = "both",
     ) -> GpuJobResult:
         """Submit one job and pull back the artifacts.
@@ -234,8 +236,8 @@ class RunpodClient:
         ``aligned_lrc``. ``align_lang`` is an ISO-639-3 code. ``whisper_lang``
         (#260) is an ISO-639-1 hint forcing the Whisper transcription language
         (r10+ handler; auto-detect misread Hebrew as English). All are passed
-        through verbatim; the handler ignores keys it predates, so each is
-        safe against an old image (we just get the old behavior).
+        through verbatim. A known ``reference_lang`` lets a newer handler
+        force one extra decode when the first chose a different language.
         """
         api_key = self.settings.runpod_api_key.get_secret_value().strip()
         endpoint_id = self.settings.runpod_endpoint_id.strip()
@@ -280,6 +282,8 @@ class RunpodClient:
             run_input["align_text"] = align_text
             if align_lang and align_lang.strip():
                 run_input["align_lang"] = align_lang
+            if reference_lang:
+                run_input["reference_lang"] = reference_lang
         # Recovery probes share the existing wall/cost budget, never extend it.
         rate = float(self.settings.runpod_hourly_rate_estimate or 0.68)
         cost_ceiling_s = max_job_cost / rate * 3600 if max_job_cost > 0 else wall_ceiling
@@ -399,6 +403,21 @@ class RunpodClient:
                 if last_status == "COMPLETED":
                     terminal = True
                     output = st.get("output") or {}
+                    retry = output.pop("reference_asr_retry", None)
+                    initial = output.get("lyrics_json")
+                    if align_text and isinstance(retry, dict) and isinstance(initial, dict):
+                        if prefer_reference_retry(initial, retry, align_text):
+                            output["lyrics_json"] = dict(
+                                retry, reference_retry_from_language=initial.get("language"),
+                            )
+                            output["lyrics_txt"] = transcript_text(retry)
+                        else:
+                            diagnostics = output.get("aligned_diagnostics")
+                            if isinstance(diagnostics, dict):
+                                # The handler's recovery crops used the forced
+                                # language. Keep the separate baseline alignment.
+                                diagnostics.pop("retries", None)
+                                diagnostics.pop("retry_budget", None)
                     return self._materialise(
                         output, work_dir, job_id, last_execution_ms, wall
                     )

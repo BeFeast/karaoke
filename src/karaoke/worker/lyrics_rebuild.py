@@ -231,14 +231,18 @@ async def rebuild_lyrics(
                     latin_artist=canonical.artist if canonical else None, lang=lang_hint,
                 )
 
+        reference_lang = p._reference_language(align_text)
         prior = await p._prior_24h_cost_micros(session_factory)
         gpu = await asyncio.to_thread(
             _gpu_lyrics_pass, settings, prior, vocals, run_dir,
-            align_text=align_text, align_lang=p._align_lang(source_meta, hint=lang_hint) if align_text else None,
-            whisper_lang=lang_hint,
+            align_text=align_text,
+            align_lang=p._align_lang(source_meta, lang_hint, reference=reference_lang) if align_text else None,
+            whisper_lang=lang_hint or reference_lang,
+            **({"reference_lang": reference_lang} if reference_lang else {}),
         )
         cost = gpu.vast_cost
         aligned_path, asr_path = gpu.aligned_lrc_path, gpu.lyrics_json_path
+        whisper_txt_path = gpu.lyrics_txt_path
         post_asr = None
 
         if reference_text:
@@ -273,13 +277,17 @@ async def rebuild_lyrics(
                     asr_doc, source_meta, canonical, lang_hint, settings
                 )
                 if hit is not None and agreement is not None and agreement >= p._POST_ASR_MIN_AGREEMENT:
+                    reference_lang = p._reference_language(hit_text)
                     realign = await asyncio.to_thread(
                         _gpu_lyrics_pass, settings, prior + round(cost * 1_000_000), vocals, run_dir / "realign",
-                        align_text=hit_text, align_lang=p._align_lang(source_meta, hint=lang_hint), whisper_lang=lang_hint,
+                        align_text=hit_text, align_lang=p._align_lang(source_meta, lang_hint, reference=reference_lang),
+                        whisper_lang=lang_hint or reference_lang,
+                        **({"reference_lang": reference_lang} if reference_lang else {}),
                     )
                     cost += realign.vast_cost
                     lyrics = hit
                     aligned_path, asr_path = realign.aligned_lrc_path, realign.lyrics_json_path
+                    whisper_txt_path = realign.lyrics_txt_path
                     post_asr = f"lrclib ({agreement:.2f})"
                 elif web_reference is None and settings.web_reference_enabled:
                     for line in queries:
@@ -289,8 +297,8 @@ async def rebuild_lyrics(
                             break
             prov = await asyncio.to_thread(
                 p._resolve_lyrics,
-                lyrics, out, gpu.lyrics_txt_path, aligned_path, asr_path,
-                second_text=second_text, lang=lang_hint, web_reference=web_reference,
+                lyrics, out, whisper_txt_path, aligned_path, asr_path,
+                second_text=second_text, lang=reference_lang or lang_hint, web_reference=web_reference,
                 llm=p._llm_corrector(settings, lang_hint), song=p._song_label(source_meta, title),
             )
             if post_asr:

@@ -8,6 +8,8 @@ Regression fixtures from production (tests/fixtures/lyrics/):
   English song.
 * job 148 — the real «Конь» TV cut: right text, studio timings that miss, a
   transcript that collapsed to two segments and writes ё as е.
+* job 612 — an Italian song decoded to four Spanish words; sparse ASR
+  cannot veto an otherwise usable reference.
 
 The rules under test hold for any language: a record that already failed a
 check (curated timing coverage, duration) needs the transcript's confirmation
@@ -29,11 +31,18 @@ import pytest
 from karaoke.textnorm import bigram_agreement, fold_optional_letters
 from karaoke.worker.lyrics import (
     SOURCE_FORCED_ALIGNED,
+    SOURCE_LRCLIB_PLAIN,
     SOURCE_LRCLIB_SYNCED,
     LyricsResult,
     lrc_to_plain,
 )
-from karaoke.worker.pipeline import PipelineError, _check_stems_match_mix, _resolve_lyrics
+from karaoke.worker.lyrics_evidence import asr_is_sparse
+from karaoke.worker.pipeline import (
+    PipelineError,
+    _check_stems_match_mix,
+    _reference_language,
+    _resolve_lyrics,
+)
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "lyrics"
 
@@ -95,18 +104,15 @@ def test_job144_kon_lyrics_on_creep_audio_fall_to_the_transcript(tmp_path):
 
 
 def test_job144_with_too_short_a_transcript_does_not_ship_the_alignment(tmp_path):
-    """The transcript is in a judgeable language but has fewer than 10 word
-    bigrams, so it cannot confirm the record. The curated timing already
-    failed (coverage 1/12): the aligner's output alone is no evidence, so the
-    job takes the transcript instead of Russian words over an English song.
-    Before this change the #241 fallback shipped it as forced_aligned."""
+    """A deliberately truncated transcript can't judge the words. The
+    incomplete alignment still can't provide timings for the full text."""
     fx = _fixture("job144_kon_on_creep.json")
     short = dict(fx["asr"], segments=fx["asr"]["segments"][:1])
     exports, whisper_txt, aligned, asr_json = _stage(tmp_path, fx, asr=short)
     prov = _resolve_lyrics(_curated(fx), exports, whisper_txt, aligned, asr_json, lang=None)
-    assert prov["lyrics_source"].startswith("whisper_asr")
-    assert prov["lyrics_lrclib_rejected"].startswith("align_coverage_low")
-    assert "конём" not in _shipped(exports)
+    assert prov["lyrics_source"] == SOURCE_LRCLIB_PLAIN
+    assert not (exports / "lyrics.lrc").exists()
+    assert prov["lyrics_quality"]["status"] == "needs_review"
 
 
 def test_a_confident_transcript_in_another_language_still_judges_the_record(tmp_path):
@@ -168,6 +174,44 @@ def test_e_with_diaeresis_is_the_same_word_for_the_guard():
     # transcript without folding «конем» / «конём», 0.94 with it.
     assert fold_optional_letters("Мы пойдём с конём") == "Мы пойдем с конем"
     assert fold_optional_letters("Ёлка й ñ") == "Елка й ñ"
+
+
+@pytest.mark.parametrize("use_alignment", [False, True])
+def test_job612_preserves_all_italian_lyrics_with_sparse_spanish_asr(tmp_path, use_alignment):
+    fx = _fixture("job612_italian_sparse_asr.json")
+    reference = fx["reference_text"]
+    assert _reference_language(reference) == "it"
+    exports, whisper_txt, aligned, asr_json = _stage(tmp_path, fx)
+    (exports / "lyrics.lrc").write_text("[00:01.00]Stale lyrics")
+    prov = _resolve_lyrics(
+        LyricsResult(plain=reference, source="lrclib_search"), exports, whisper_txt,
+        aligned if use_alignment else None, asr_json, lang="it",
+    )
+    assert prov["lyrics_source"] == SOURCE_LRCLIB_PLAIN
+    assert prov["synced"] is False
+    assert _shipped(exports) == reference
+    assert prov["lyrics_quality"]["status"] == "needs_review"
+    assert prov["lyrics_quality"]["counts"]["matched_words"] == 80
+    assert "asr_transcript_sparse" in {issue["code"] for issue in prov["lyrics_quality"]["issues"]}
+
+
+def test_sparse_asr_keeps_full_alignment_and_marks_it_for_review(tmp_path):
+    fx = _fixture("job612_italian_sparse_asr.json")
+    ref = "Soffia dolcemente\nUn venticello"
+    fx["aligned_lrc"] = "[00:13.48]Soffia dolcemente\n[00:20.26]Un venticello"
+    fx["aligned_scores"] = [None, None]
+    exports, whisper_txt, aligned, asr_json = _stage(tmp_path, fx)
+    prov = _resolve_lyrics(
+        LyricsResult(plain=ref, source="lrclib_search"), exports, whisper_txt, aligned, asr_json, lang="it",
+    )
+    assert asr_is_sparse(fx["asr"], ref)  # Sparse by recording duration.
+    assert prov["lyrics_source"] == SOURCE_FORCED_ALIGNED
+    assert _shipped(exports) == ref
+    assert prov["lyrics_quality"]["status"] == "needs_review"
+
+
+def test_reference_language_abstains_for_ambiguous_text():
+    assert _reference_language("la la la no no no") is None
 
 
 # -- stems that are not the submitted audio ----------------------------------------
