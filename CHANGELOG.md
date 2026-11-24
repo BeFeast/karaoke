@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.45.2] - 2026-11-24
+
+_Bump: patch_
+
+- Add in-app feedback to Sonereli (#346).
+
 ## [v0.45.1] - 2026-11-24
 
 _Bump: patch_
