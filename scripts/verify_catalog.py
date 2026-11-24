@@ -15,6 +15,10 @@ from verify_cdp import VerifyError, open_tab, wait_for
 
 from karaoke.catalog import youtube_id
 
+CATALOG_TAB = '.catalog-tabs a[href="#/catalog"]'
+SONG_LINK = 'input[aria-label="Song link"]'
+ADD_SONG = ".catalog-add-song"
+
 
 def check(evidence, scope, step, **observed):
     for name, expected in step["assert"].items():
@@ -100,8 +104,8 @@ async def clerk_tab(args, evidence, profile, script, owner=1):
             }})()""")
             if not signed_in:
                 raise VerifyError(f"Clerk QA sign-in failed for account #{owner}")
-            await wait_for(lambda: tab.js("!!document.querySelector('.catalog-search')"), 25,
-                           "Signed-in catalog search not visible")
+            await wait_for(lambda: tab.js("!!document.querySelector('.catalog-tabs')"), 25,
+                           "Signed-in Booth tabs not visible")
             me = await clerk_api(tab, "/me")
             if me["status"] != 200 or me["body"].get("state") != "clerk_user":
                 raise VerifyError(f"Coordinator did not authenticate QA account #{owner} as Clerk")
@@ -133,6 +137,17 @@ async def click(tab, selector):
         15, f"Control not reachable ({selector.split('href=')[0][:55]})",
     )
     await tab.tap(point)
+
+
+async def visible_in_viewport(tab, selector):
+    return await tab.js(f"""(() => {{
+        const el = document.querySelector({json.dumps(selector)});
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && r.left >= 0 && r.top >= 0
+            && r.right <= innerWidth && r.bottom <= innerHeight
+            && el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2));
+    }})()""")
 
 
 async def type_into(tab, selector, text):
@@ -175,6 +190,36 @@ async def cleanup(api, job, args, evidence, scope, linked):
         evidence.check(scope, "private_job_removed", True, result, passed)
 
 
+async def verify_add_song(args, evidence, scenario, script):
+    first_load, catalog_step = scenario["action"]
+    for profile in scenario["state"]["profiles"]:
+        scope = f"{profile}.add-song"
+        async with clerk_tab(args, evidence, profile, script) as (tab, _):
+            await tab.navigate(f"{args.target}/app/")
+            song_link_visible = await wait_for(lambda: visible_in_viewport(tab, SONG_LINK), 25,
+                                               "Song link input missing on first load of /app/")
+            check(evidence, scope, first_load, song_link_visible=song_link_visible,
+                  viewport=await tab.js("[document.documentElement.clientWidth, innerHeight]"),
+                  my_songs_selected=await tab.js("""!!document.querySelector(
+                      '.catalog-tabs a[href="#/my-songs"][aria-current="page"]'
+                  )"""))
+            await evidence.capture(tab, scope, "first-load")
+            await click(tab, CATALOG_TAB)
+            add_song_visible = await wait_for(lambda: visible_in_viewport(tab, ADD_SONG), 15,
+                                              "Add song button missing from the catalog viewport")
+            await wait_for(lambda: tab.js("!!document.querySelector('.catalog-browser:not(:has(.catalog-skeleton))')"),
+                           15, "Catalog did not finish loading")
+            await evidence.capture(tab, scope, "catalog")
+            await click(tab, ADD_SONG)
+            link_focused = await wait_for(
+                lambda: tab.js(f"""location.hash === "#/my-songs"
+                    && document.activeElement?.matches({json.dumps(SONG_LINK)})"""),
+                15, "Add song did not focus the Song link input",
+            )
+            check(evidence, scope, catalog_step,
+                  add_song_button_visible=add_song_visible, add_song_focuses_link=link_focused)
+
+
 async def verify_ready(args, api, evidence, scenario, script, inspect_player):
     booth, search, start, submit, personal_stage = scenario["action"]
     for profile in scenario["state"]["profiles"]:
@@ -184,6 +229,7 @@ async def verify_ready(args, api, evidence, scenario, script, inspect_player):
             song = await ready_fixture(tab, "he" if profile == "iphone" else "en")
             card = f'.catalog-card[data-catalog-song="{song["id"]}"]'
             try:
+                await click(tab, CATALOG_TAB)
                 await wait_for(lambda: tab.js("!!document.querySelector('.catalog-shelf-scroll')"), 15, "No catalog shelves")
                 layout = await tab.js(f"""(() => {{
                     const shelves = [...document.querySelectorAll('.catalog-shelf-scroll')];
@@ -276,6 +322,7 @@ async def verify_miss(args, api, evidence, scenario, script, inspect_player):
             if not identifier or any(youtube_id(song["source_url"]) == identifier for song in catalog):
                 raise VerifyError("The configured private miss source must be outside the catalog")
             before = (await clerk_api(tab, "/jobs"))["body"]
+            await click(tab, CATALOG_TAB)
             await type_into(tab, ".catalog-search", "No catalog fixture " + uuid.uuid4().hex[:8])
             paste = await wait_for(lambda: tab.js("!!document.querySelector('.catalog-empty button')"), 15,
                                    "Search miss did not offer the URL fallback")
@@ -311,6 +358,7 @@ async def verify_miss(args, api, evidence, scenario, script, inspect_player):
             await click(tab, link)
             await inspect_player(tab, evidence, f"{scope}.sing", start["assert"], lyrics)
         async with clerk_tab(args, evidence, second, script, owner=2) as (tab, other_subject):
+            await click(tab, CATALOG_TAB)
             if other_subject == subject:
                 raise VerifyError("The two Clerk QA tickets resolved to the same account")
             title = final["track"] or final["title"]

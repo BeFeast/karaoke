@@ -4,7 +4,7 @@ state:
   private_url: https://www.youtube.com/watch?v=e-ORhEE9VVg
   profiles: [iphone, android]
 action:
-  - search: title_outside_catalog
+  - search: title_outside_catalog_from_catalog_tab
     assert:
       no_matching_recording_visible: true
       paste_url_action_visible: true

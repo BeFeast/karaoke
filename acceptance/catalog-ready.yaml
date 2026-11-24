@@ -4,7 +4,7 @@ state:
   profiles: [iphone, android]
   search_languages: [he, en]
 action:
-  - open: booth
+  - open: catalog_tab
     assert:
       ready_recording_visible: true
       primary_shelves_visible: true

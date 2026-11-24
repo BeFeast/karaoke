@@ -972,6 +972,15 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   font: inherit;
 }
 
+.catalog-add-song {
+  min-height: 44px;
+  padding: 8px 12px;
+  margin-bottom: 16px;
+  justify-content: center;
+  font-size: 1rem;
+  line-height: 1.5rem;
+}
+
 .catalog-shelf-heading {
   justify-content: space-between;
   margin-bottom: 8px;
@@ -1031,6 +1040,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 }
 
 .catalog-card:focus-visible,
+.catalog-add-song:focus-visible,
 .catalog-search:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

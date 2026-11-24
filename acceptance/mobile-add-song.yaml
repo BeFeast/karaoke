@@ -1,0 +1,13 @@
+state:
+  authenticated_owner: clerk_user
+  profiles: [iphone]
+action:
+  - open: /app/
+    assert:
+      viewport: [390, 844]
+      my_songs_selected: true
+      song_link_visible: true
+  - open: catalog_tab
+    assert:
+      add_song_button_visible: true
+      add_song_focuses_link: true
