@@ -602,7 +602,10 @@ def _force_align_to_lrc(
             tokens = [*tokens_starred, "<star>"]
             segments, scores, blank = get_alignments(emissions, tokens, tokenizer)
             spans = get_spans(tokens, segments, blank)
-            sparse_words = _sparse_ctc_words(text_starred, spans, scores, blank, stride, audio_waveform)
+            # The library rounds its reported stride up to a millisecond.
+            # Keep full precision so the last lines do not drift on long songs.
+            frame_ms = audio_waveform.numel() * 1000 / (16000 * emissions.shape[0])
+            sparse_words = _sparse_ctc_words(text_starred, spans, scores, blank, frame_ms, audio_waveform)
             sparse_alignment, sparse_evidence = _sparse_ctc_lrc(sparse_words, text)
         except Exception as exc:
             sparse_evidence = {"accepted": False, "error": type(exc).__name__}
@@ -667,6 +670,7 @@ def _sparse_ctc_lrc(words: list[dict[str, Any]], text: str) -> tuple[str, dict[s
     offset = 0
     previous_end = 0.0
     output = []
+    strong_lines = 0
     for index, line in enumerate(lines):
         timed = words[offset:offset + len(line)]
         scores = [word["score"] for word in timed]
@@ -680,17 +684,24 @@ def _sparse_ctc_lrc(words: list[dict[str, Any]], text: str) -> tuple[str, dict[s
         starts = [word["start"] for word in timed]
         timing_ok &= all(b - a <= 4 for a, b in zip(starts, starts[1:], strict=False))
         timing_ok &= len(line) == 1 or len(" ".join(line[:-1])) <= 30 * (starts[-1] - starts[0])
+        worst = min(scores)
+        # Speech-trained MMS is less certain about sustained singing. Allow a
+        # weak word on a voiced, coherent line when the rest of the reference
+        # corroborates it. Every line must still clear the lower floors.
         accepted = (timing_ok and all(math.isfinite(value) for value in (*scores, rms))
-                    and score >= -1.5 and min(scores) >= -3 and rms >= 0.002)
+                    and score >= -2.75 and worst >= -6 and rms >= 0.002)
+        strong = accepted and score >= -1.5 and worst >= -3
+        strong_lines += int(strong)
         evidence["lines"].append({
-            "index": index, "accepted": accepted, "timing_ok": timing_ok,
-            "mean_letter_logprob": round(score, 3), "worst_word_logprob": round(min(scores), 3),
+            "index": index, "accepted": accepted, "strong": strong, "timing_ok": timing_ok,
+            "mean_letter_logprob": round(score, 3), "worst_word_logprob": round(worst, 3),
             "min_word_rms": round(rms, 5),
         })
         if accepted:
             output.append(_enhanced_lrc_line(line, timed))
         offset += len(line)
-    evidence["accepted"] = bool(lines) and len(output) == len(lines)
+    evidence["strong_lines"] = strong_lines
+    evidence["accepted"] = len(output) == len(lines) and strong_lines * 2 > len(lines)
     return ("\n".join(output) if evidence["accepted"] else ""), evidence
 
 

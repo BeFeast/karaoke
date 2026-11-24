@@ -686,7 +686,7 @@ def test_handler_retries_share_one_separation_and_leave_demucs_compatible(monkey
     assert "lyrics_json" not in result
 
 
-@pytest.mark.parametrize("bad_score, bad_rms", [(-4, 0.01), (-0.2, 0.0)])
+@pytest.mark.parametrize("bad_score, bad_rms", [(-6.5, 0.01), (-0.2, 0.0)])
 def test_sparse_ctc_rejects_the_complete_candidate_if_one_line_lacks_evidence(bad_score, bad_rms):
     reference = "Soffia piano\nLuce calma"
     words = [dict(text=text, start=i + 1, end=i + 1.4, score=-0.2, rms=0.01)
@@ -701,6 +701,19 @@ def test_sparse_ctc_rejects_the_complete_candidate_if_one_line_lacks_evidence(ba
     lrc, diagnostics = handler._sparse_ctc_lrc(words, reference)
     assert not lrc and not diagnostics["accepted"]
     assert [line["accepted"] for line in diagnostics["lines"]] == [True, False]
+
+
+def test_sparse_ctc_requires_strong_support_for_most_lines():
+    reference = "Soffia piano\nLuce calma\nMare eterno"
+    words = [dict(text=text, start=i + 1, end=i + 1.4, score=-0.2, rms=0.02)
+             for i, text in enumerate(reference.split())]
+    words[2]["score"] = -4
+    lrc, diagnostics = handler._sparse_ctc_lrc(words, reference)
+    assert lrc and diagnostics["strong_lines"] == 2
+    words[4]["score"] = -4
+    lrc, diagnostics = handler._sparse_ctc_lrc(words, reference)
+    assert not lrc and not diagnostics["accepted"]
+    assert all(line["accepted"] for line in diagnostics["lines"])
 
 
 def test_retry_does_not_splice_across_unsafe_asr_segment(monkeypatch):

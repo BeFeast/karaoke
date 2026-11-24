@@ -24,7 +24,7 @@ from typing import Any
 
 API_BASE = "https://api.runpod.io/v2"
 HEALTH_BASE = "https://api.runpod.ai/v2"
-IMAGE = "ghcr.io/befeast/karaoke-runpod:cuda12.4-r16"
+IMAGE = "ghcr.io/befeast/karaoke-runpod:cuda12.4-r17"
 USER_AGENT = "karaoke-provision/0.2"
 REQUEST_TIMEOUT_S = 30
 
