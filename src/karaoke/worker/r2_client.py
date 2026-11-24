@@ -12,6 +12,8 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import hmac
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -31,6 +33,35 @@ def _signing_key(secret: str, date: str, region: str, service: str) -> bytes:
     k_region = _hmac(k_date, region)
     k_service = _hmac(k_region, service)
     return _hmac(k_service, "aws4_request")
+
+
+# R2 answers a burst with HTTP 429 (and the odd 5xx); one job failed on it
+# mid-GPU-stage on 2026-11-24. Both calls are idempotent (PUT of the same
+# bytes to a fresh key, GET of a presigned URL), so retry a few times.
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+_RETRY_ATTEMPTS = 3
+_RETRY_MAX_DELAY_S = 10.0
+
+
+def _retry_delay(exc: urllib.error.HTTPError, attempt: int) -> float:
+    try:
+        retry_after = float(exc.headers.get("Retry-After", ""))
+    except (AttributeError, TypeError, ValueError):
+        retry_after = 0.0
+    return min(_RETRY_MAX_DELAY_S, max(retry_after, 2.0 * 2**attempt))
+
+
+def urlopen_retry(request: urllib.request.Request | str, *, timeout: float, sleep=time.sleep):
+    """``urllib.request.urlopen`` with a bounded retry on 429/5xx."""
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            return urllib.request.urlopen(request, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in _RETRY_STATUSES or attempt == _RETRY_ATTEMPTS - 1:
+                raise
+            exc.close()
+            sleep(_retry_delay(exc, attempt))
+    raise AssertionError("unreachable")
 
 
 def _split_endpoint(endpoint_url: str) -> tuple[str, str]:
@@ -93,7 +124,7 @@ def upload_object(
             "Content-Length": str(len(body)),
         },
     )
-    with urllib.request.urlopen(req, timeout=300) as resp:
+    with urlopen_retry(req, timeout=300) as resp:
         if resp.status not in (200, 201, 204):
             raise RuntimeError(f"R2 PUT {url} returned HTTP {resp.status}")
 
