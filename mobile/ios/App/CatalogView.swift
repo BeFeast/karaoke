@@ -335,10 +335,17 @@ private struct CatalogCard: View {
         let state = CardModel.state(of: song, library: library, actions: actions)
         VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .bottomTrailing) {
-                GeometryReader { geo in
-                    SongCover(title: song.title, url: song.coverURL, size: geo.size.width, radius: 14)
+                if let width {
+                    SongCover(title: song.title, url: song.coverURL, size: width, radius: 14)
+                } else {
+                    Color.clear
+                        .aspectRatio(1, contentMode: .fit)
+                        .overlay {
+                            GeometryReader { geo in
+                                SongCover(title: song.title, url: song.coverURL, size: geo.size.width, radius: 14)
+                            }
+                        }
                 }
-                .aspectRatio(1, contentMode: .fit)
                 if state == .ready {
                     Image(systemName: "play.fill")
                         .font(.system(size: 16, weight: .bold))

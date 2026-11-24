@@ -26,6 +26,7 @@ final class SonereliUITests: XCTestCase {
         XCTAssertLessThanOrEqual(lyric.frame.width, app.frame.width)
         let elapsed = app.staticTexts["stage.elapsed"]
         XCTAssertNotEqual(elapsed.label, "0:00")
+        Thread.sleep(forTimeInterval: 0.6)
         capture(app, name: "ios-stage-hebrew")
 
         play.tap()
@@ -151,6 +152,7 @@ final class SonereliUITests: XCTestCase {
         let hebrewPlay = waitForStage(app)
         hebrewPlay.tap()
         XCTAssertTrue(wait(timeout: 6) { Self.element(app, "stage.lyric.1").isSelected })
+        Thread.sleep(forTimeInterval: 0.6)
         capture(app, name: "14-stage-hebrew-rtl")
     }
 
