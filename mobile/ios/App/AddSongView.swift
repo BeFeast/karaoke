@@ -249,6 +249,7 @@ struct AddSongView: View {
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.snSurface))
+        .accessibilityElement(children: .combine)
         .accessibilityIdentifier("add.alreadyReady")
     }
 

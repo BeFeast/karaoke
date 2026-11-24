@@ -86,7 +86,6 @@ struct AppShell: View {
             }
             .tabItem { Label(L10n.t("tab.mySongs"), systemImage: "music.note.list") }
             .tag(AppTab.songs)
-            .accessibilityIdentifier("tab.songs")
 
             NavigationStack(path: $router.catalogPath) {
                 CatalogView()

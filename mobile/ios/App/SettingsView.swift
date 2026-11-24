@@ -210,6 +210,7 @@ struct FeedbackView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 32)
+                        .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("feedback.sent")
                     } else {
                         form

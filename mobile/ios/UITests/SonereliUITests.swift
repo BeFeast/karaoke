@@ -115,7 +115,7 @@ final class SonereliUITests: XCTestCase {
         capture(app, name: "06-catalog-prepare-one-tap")
         let search = app.textFields["catalog.search"]
         search.tap()
-        search.typeText("glow")
+        search.typeText("glow\n")
         XCTAssertTrue(element(app, "catalog.song.4").waitForExistence(timeout: 5))
         capture(app, name: "07-catalog-search")
 

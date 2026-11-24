@@ -69,6 +69,7 @@ struct CatalogView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 32)
+                .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("catalog.noResults")
             } else if !search.isEmpty {
                 Text(page.songs.count == 1 ? L10n.t("catalog.countOne") : L10n.t("catalog.count", ["n": page.songs.count]))
@@ -184,6 +185,7 @@ private struct ShelfSection: View {
             }
         }
         .padding(.top, 8)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("catalog.shelf.\(shelf.value)")
     }
 

@@ -40,7 +40,6 @@ struct StageView: View {
             }
         }
         .statusBarHidden(performance)
-        .accessibilityIdentifier("stage")
     }
 
     private var topBar: some View {
@@ -178,6 +177,7 @@ struct SyncedLyricsView: View {
                 .init(color: .black, location: 0.9), .init(color: .clear, location: 1),
             ], startPoint: .top, endPoint: .bottom)
         )
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("stage.lyrics")
         .overlay(alignment: .bottom) {
             if !follow, active != nil {
@@ -324,6 +324,7 @@ private struct UnsyncedLyrics: View {
             }
             .padding(20)
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("stage.unsynced")
     }
 }
