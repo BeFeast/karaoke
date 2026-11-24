@@ -276,6 +276,8 @@ async def verify_ready(args, api, evidence, scenario, script, inspect_player):
                         names: [...document.querySelectorAll('.catalog-shelf h2')].map(el => el.textContent),
                         noPageScroll: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) <= width + 1,
                         shelfScroll: shelves.some(el => el.scrollWidth > el.clientWidth + 1),
+                        searchDirAuto: document.querySelector('.catalog-search')?.getAttribute('dir') === 'auto',
+                        addPinned: !!document.querySelector('.sn-add-song'),
                         viewport: [width, window.innerHeight],
                     }};
                 }})()""")
@@ -288,7 +290,8 @@ async def verify_ready(args, api, evidence, scenario, script, inspect_player):
                       ready_recording_visible=layout["ready"],
                       primary_shelves_visible={"Hebrew hits", "English hits"} <= set(layout["names"]),
                       shelves_scroll_independently=layout["noPageScroll"] and layout["shelfScroll"],
-                      viewport=layout["viewport"], full_shelf_link_works=opened)
+                      viewport=layout["viewport"], full_shelf_link_works=opened,
+                      search_dir_auto=layout["searchDirAuto"], add_song_pinned=layout["addPinned"])
                 catalog = (await clerk_api(tab, "/catalog"))["body"]["songs"]
                 for language in scenario["state"]["search_languages"]:
                     match = song if song["language"] == language else next(
@@ -339,7 +342,7 @@ def search_term(song):
 
 async def check_search(tab, song, evidence, scope, step):
     language = song["language"]
-    card = f'.catalog-grid [data-catalog-song="{song["id"]}"]'
+    card = f'.catalog-results [data-catalog-song="{song["id"]}"]'
     await type_into(tab, ".catalog-search", search_term(song))
     details = await wait_for(lambda: tab.js(f"document.querySelector({json.dumps(card)})?.textContent"),
                              15, f"Partial {language} search did not match its catalog recording")
@@ -347,7 +350,8 @@ async def check_search(tab, song, evidence, scope, step):
           matching_recording_visible=song["title"] in details,
           recording_version_visible=song["version"] in details,
           shelves_replaced_by_results=await tab.js("!document.querySelector('.catalog-shelf')"),
-          action_matches_readiness=("Sing" if song["stage_token"] else "Prepare") in details)
+          action_matches_readiness=await tab.js(f"document.querySelector({json.dumps(card)})?.dataset.state")
+          == ("ready" if song["stage_token"] else "prepare"))
     await evidence.capture(tab, scope, f"search-{language}")
 
 
@@ -408,7 +412,7 @@ async def verify_miss(args, api, evidence, scenario, script, inspect_player):
                 raise VerifyError("The two Clerk QA tickets resolved to the same account")
             title = final["track"] or final["title"]
             await type_into(tab, ".catalog-search", title[:120])
-            await wait_for(lambda: tab.js("!!document.querySelector('.catalog-empty, .catalog-grid')"), 15,
+            await wait_for(lambda: tab.js("!!document.querySelector('.catalog-empty, .catalog-results')"), 15,
                            "Second owner's catalog search did not load")
             result = (await clerk_api(tab, "/catalog?q=" + quote(title)))["body"]
             jobs = (await clerk_api(tab, "/jobs"))["body"]
