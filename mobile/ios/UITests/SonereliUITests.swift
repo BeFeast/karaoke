@@ -38,12 +38,16 @@ final class SonereliUITests: XCTestCase {
         let paused = app.staticTexts["stage.elapsed"].label
         XCTAssertEqual(play.label, "Играть")
         app.sliders["stage.seek"].adjust(toNormalizedSliderPosition: 0.75)
-        XCTAssertNotEqual(app.staticTexts["stage.elapsed"].label, paused)
+        let sought = app.staticTexts["stage.elapsed"].label
+        XCTAssertNotEqual(sought, paused)
+        XCTAssertTrue(["0:14", "0:15", "0:16", "0:17"].contains(sought),
+                      "Expected a seek to approximately 15 seconds, observed \(sought).")
         let afterSeek = app.staticTexts["stage.lyric.4"]
         let seekSelected = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in afterSeek.exists && afterSeek.isSelected }, object: nil
         )
-        XCTAssertEqual(XCTWaiter.wait(for: [seekSelected], timeout: 4), .completed)
+        XCTAssertEqual(XCTWaiter.wait(for: [seekSelected], timeout: 4), .completed,
+                       "Expected the Hebrew line at 14 seconds, observed time \(sought).")
     }
 
     @MainActor

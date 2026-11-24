@@ -157,7 +157,6 @@ struct StageView: View {
                 }
             )
             .accessibilityLabel("Позиция")
-            .accessibilityValue(timeLabel(position))
             .accessibilityIdentifier("stage.seek")
 
             HStack {
