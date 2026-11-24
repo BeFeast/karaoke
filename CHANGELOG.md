@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Each `vX.Y.Z`
 section is generated per release from the merged pull-request titles in the
 tag range. See the README "Releases" section for how a release is cut.
 
+## [v0.46.4] - 2026-11-24
+
+_Bump: patch_
+
+- Redact settings secrets and add a read-only catalog ledger (#360).
+
 ## [v0.46.3] - 2026-11-24
 
 _Bump: patch_
