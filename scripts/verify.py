@@ -23,6 +23,7 @@ from verify_catalog import (
     verify_miss,
     verify_my_songs,
     verify_ready,
+    verify_settings,
     verify_shared,
 )
 from verify_cdp import VerifyError, open_tab, origin, wait_for
@@ -464,7 +465,7 @@ async def inspect_long_lines(tab, evidence, scope, checks, lyrics, performance):
             if not point:
                 raise VerifyError("Performance control is unreachable")
             await tab.tap(point)
-        await wait_for(lambda: tab.js('!!document.querySelector(\'[aria-label="Exit performance mode"]\')'),
+        await wait_for(lambda: tab.js('!!document.querySelector(\'.sn-perf, [aria-label="Exit performance mode"]\')'),
                        8, "Performance view did not open")
 
     snapshot = f"karaokeVerify.lyricLayout({json.dumps(performance)})"
@@ -480,8 +481,9 @@ async def inspect_long_lines(tab, evidence, scope, checks, lyrics, performance):
             sizes.append(sample)
 
     await tab.js(f"karaokeVerify.seekLyric({longest})")
-    play = ('document.querySelector(\'[aria-label="Exit performance mode"]\').parentElement'
-            '.parentElement.querySelector(\'button[aria-label="Play"]\')'
+    play = ('(document.querySelector(".sn-perf [data-sn-play]") ?? document.querySelector('
+            '\'[aria-label="Exit performance mode"]\').parentElement'
+            '.parentElement.querySelector(\'button[aria-label="Play"]\'))'
             if performance else f'document.querySelector({json.dumps(PLAY_BUTTON)})')
     point = await tab.element_point(play)
     if not point:
@@ -864,6 +866,8 @@ async def run(args, directory):
                     await verify_my_songs(args, evidence, scenario, SCRIPT)
                 elif name == "mobile-mini-player":
                     await verify_mini_player(args, evidence, scenario, SCRIPT)
+                elif name == "mobile-settings":
+                    await verify_settings(args, evidence, scenario, SCRIPT)
                 elif "authenticated_owner" in state:
                     for profile in state["profiles"]:
                         await submit(args, api, evidence, scenario, profile, bearer)

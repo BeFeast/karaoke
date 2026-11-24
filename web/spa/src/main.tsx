@@ -9,13 +9,14 @@ import { getConfig, type RuntimeConfig, setTokenGetter } from "./api";
 import { SonereliMark } from "./components/marks";
 import { PlayerProvider } from "./player/PlayerProvider";
 import { SettingsPage } from "./components/SettingsPage";
+import { FeedbackPage } from "./components/FeedbackPage";
 import { Stage } from "./components/Stage";
 import { SignInScreen, UserAvatar } from "./components/SignInWall";
 import { clerkStageToken, navigate, settingsHash, useRoute } from "./router";
 // Self-hosted Sonereli webfonts (UI/UX v1 step 0), no external font <link>:
 // Inter = UI and lyrics (latin + cyrillic for the Russian UI), Anton = display
 // titles (latin only; Russian titles fall back to Inter), Noto Sans Hebrew =
-// Hebrew lyrics and titles. Geist Mono stays until the step 11 cleanup.
+// Hebrew lyrics and titles. No monospace webfont (step 11).
 import "@fontsource/inter/latin-400.css";
 import "@fontsource/inter/latin-500.css";
 import "@fontsource/inter/latin-600.css";
@@ -28,10 +29,6 @@ import "@fontsource/anton/latin-400.css";
 import "@fontsource/noto-sans-hebrew/hebrew-400.css";
 import "@fontsource/noto-sans-hebrew/hebrew-600.css";
 import "@fontsource/noto-sans-hebrew/hebrew-700.css";
-import "@fontsource/geist-mono/latin-400.css";
-import "@fontsource/geist-mono/latin-500.css";
-import "@fontsource/geist-mono/latin-600.css";
-import "@fontsource/geist-mono/latin-700.css";
 import "./styles.css";
 
 // Routes between the dashboard (App), the stage room (/app/#/job/:token) and
@@ -43,6 +40,9 @@ function Routed({ config, authControl, catalogEnabled = false }: { config: Runti
   const route = useRoute();
   if (route.name === "item") {
     return <Stage key={route.token} token={route.token} startAt={route.startAt} publicBaseUrl={config.public_base_url} />;
+  }
+  if (route.name === "feedback") {
+    return <FeedbackPage catalogEnabled={catalogEnabled} baseUrl={config.feedback_base_url} />;
   }
   if (route.name === "settings") {
     return <SettingsPage authControl={authControl} catalogEnabled={catalogEnabled} />;

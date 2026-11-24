@@ -622,3 +622,60 @@ async def verify_mini_player(args, evidence, scenario, script):
                             "still_playing": opened["time"] is not None and opened["time"] > (sample["time"] or 0)},
                            line_matches(rows, opened["time"] or 0, active)
                            and opened["time"] is not None and opened["time"] > (sample["time"] or 0))
+
+
+SETTINGS_STATE = """(() => ({
+    size: document.querySelector('.sn-segmented [aria-checked=true]')?.textContent?.trim() ?? null,
+    vocals: Number(document.querySelector('.sn-range')?.value ?? NaN),
+    switches: [...document.querySelectorAll('.sn-set-section .sn-switch')].map(el => el.checked),
+}))()"""
+
+
+async def verify_settings(args, evidence, scenario, script):
+    step = scenario["action"][0]
+    for profile in scenario["state"]["profiles"]:
+        scope = f"{profile}.settings"
+        async with clerk_tab(args, evidence, profile, script) as (tab, _):
+            song = await ready_fixture(tab)
+            await tab.navigate(f"{args.target}/app/#/settings")
+            await wait_for(lambda: tab.js("!!document.querySelector('.sn-segmented')"), 20, "Singing settings missing")
+            await click(tab, ".sn-segmented [role=radio]:nth-child(3)")
+            await tab.js("""(() => {
+                const range = document.querySelector('.sn-range');
+                const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                set.call(range, '40'); range.dispatchEvent(new Event('input', {bubbles: true}));
+            })()""")
+            await click(tab, ".sn-set-section .sn-attach:nth-of-type(2) .sn-switch")
+            before = await tab.js(SETTINGS_STATE)
+            await evidence.capture(tab, scope, "settings")
+            await tab.call("Page.reload")
+            await wait_for(lambda: tab.js("!!document.querySelector('.sn-segmented')"), 20, "Settings missing after reload")
+            after = await tab.js(SETTINGS_STATE)
+            evidence.check(scope, "settings_persist_after_reload", step["assert"]["settings_persist_after_reload"],
+                           {"before": before, "after": after},
+                           before == after and after["size"] == "L" and after["vocals"] == 40)
+
+            await tab.navigate(f"{args.target}/app/#/job/{quote(song['stage_token'], safe='')}")
+            await wait_for(lambda: tab.js("window.karaokeVerify?.snapshot().ready"), 40, "Stage player never became ready")
+            stage = await tab.js("""(() => ({
+                size: document.querySelector('.sn-lyrics')?.dataset.size ?? null,
+                vocals: Number(document.querySelector('[data-sn-vocals]')?.getAttribute('aria-valuenow')),
+            }))()""")
+            # The verifier clears the per-song vocals memory on load, so the
+            # Stage starts from the Settings default.
+            evidence.check(scope, "stage_uses_settings", step["assert"]["stage_uses_settings"], stage,
+                           stage == {"size": "l", "vocals": 40})
+
+            await tab.navigate(f"{args.target}/app/#/feedback")
+            topics = await wait_for(lambda: tab.js("document.querySelectorAll('.sn-chips .sn-chip').length || null"),
+                                    20, "Feedback screen missing")
+            await click(tab, ".sn-chips .sn-chip:nth-child(1)")
+            pressed = await tab.js("document.querySelector('.sn-chips .sn-chip:nth-child(1)').getAttribute('aria-pressed')")
+            attach = await tab.js("[...document.querySelectorAll('.sn-attach .sn-switch')].map(el => el.checked)")
+            await evidence.capture(tab, scope, "feedback")
+            evidence.check(scope, "feedback_screen", step["assert"]["feedback_screen"],
+                           {"topics": topics, "topic_pressed": pressed, "attach_state_screenshot": attach},
+                           topics == 5 and pressed == "true" and attach == [True, False])
+            # Leave the profile as found: M, 25%, screen on, count-in on.
+            await tab.js("""(() => { for (const key of ['sonereli-lyrics-size', 'sonereli-vocals-default',
+                'sonereli-keep-awake', 'sonereli-count-in']) localStorage.removeItem(key); })()""")

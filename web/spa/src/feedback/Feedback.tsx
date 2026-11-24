@@ -23,6 +23,28 @@ export function FeedbackButton() {
   );
 }
 
+/** POST one report to the pomoi feedback contract (#344); returns the issue receipt. */
+export async function postFeedback(form: FormData, baseUrl?: string): Promise<Receipt> {
+  // Public share pages bootstrap without /config. Resolve their override
+  // before sending so a config failure cannot send to the wrong endpoint.
+  const configured = baseUrl ?? (await getConfig()).feedback_base_url;
+  const response = await fetch(`${(configured || DEFAULT_BASE).replace(/\/+$/, "")}/api/feedback/karaoke`, {
+    method: "POST",
+    body: form,
+    credentials: "omit",
+    redirect: "error",
+    referrerPolicy: "no-referrer",
+    signal: AbortSignal.timeout(40_000),
+  });
+  if (response.status !== 201) throw new Error("Feedback was rejected");
+  const { issue_number, issue_url } = await response.json();
+  const url = new URL(issue_url);
+  if (!Number.isSafeInteger(issue_number) || issue_number <= 0 || url.protocol !== "https:") {
+    throw new Error("Invalid feedback receipt");
+  }
+  return { number: issue_number, url: url.href };
+}
+
 export function FeedbackProvider({ baseUrl, children }: { baseUrl?: string; children: ReactNode }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -110,24 +132,7 @@ export function FeedbackProvider({ baseUrl, children }: { baseUrl?: string; chil
         }
       }
 
-      // Public share pages bootstrap without /config. Resolve their override
-      // before sending so a config failure cannot send to the wrong endpoint.
-      const configured = baseUrl ?? (await getConfig()).feedback_base_url;
-      const response = await fetch(`${(configured || DEFAULT_BASE).replace(/\/+$/, "")}/api/feedback/karaoke`, {
-        method: "POST",
-        body: form,
-        credentials: "omit",
-        redirect: "error",
-        referrerPolicy: "no-referrer",
-        signal: AbortSignal.timeout(40_000),
-      });
-      if (response.status !== 201) throw new Error("Feedback was rejected");
-      const { issue_number, issue_url } = await response.json();
-      const url = new URL(issue_url);
-      if (!Number.isSafeInteger(issue_number) || issue_number <= 0 || url.protocol !== "https:") {
-        throw new Error("Invalid feedback receipt");
-      }
-      setReceipt({ number: issue_number, url: url.href });
+      setReceipt(await postFeedback(form, baseUrl));
     } catch {
       setError("Could not send feedback. Your draft is still here. Please try again.");
     } finally {

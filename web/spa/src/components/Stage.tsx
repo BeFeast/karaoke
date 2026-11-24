@@ -13,6 +13,7 @@ import { useOpenFeedback } from "../feedback/Feedback";
 import { t } from "../i18n";
 import { artifactHref, artifactView, canRetryJob, statusMeta } from "../jobStatus";
 import { coverUrl } from "../lib/library";
+import { loadPref } from "../lib/prefs";
 import { sourceDisplay } from "../lib/source";
 import { usePlayerSession } from "../player/PlayerProvider";
 import type { KaraokePlayerApi } from "../player/useKaraokePlayer";
@@ -21,10 +22,8 @@ import { connectJobSocket, isTerminal, type WsJobStatus } from "../ws";
 import { Icon } from "./Icon";
 import { LyricsRebuild, LyricsReviewEditor } from "./LyricsQuality";
 import { SonereliMark } from "./marks";
-import { Perf } from "./Perf";
 import { Processing, stageIndex } from "./Processing";
 import { Sheet } from "./Sheet";
-import { timeLines } from "./stage-core";
 import { StageDock } from "./StageDock";
 import { StageLyrics } from "./StageLyrics";
 import { LYRICS_SIZES, type LyricsSize, loadLyricsSize, saveLyricsSize } from "./stageLyricsModel";
@@ -319,7 +318,6 @@ function StageBody({ payload, token, shared, protectedStage, lyrics, onLyricsSav
   }, [open, token, title, payload.artist, payload.source_url, payload.duration, instrumental?.href, vocals?.href,
     protectedStage, shared, sung]);
   const player = session?.token === token ? sessionPlayer : IDLE_PLAYER;
-  const timed = useMemo(() => timeLines(sung, payload.duration), [sung, payload.duration]);
   const reducedMotion = useMemo(
     () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
     [],
@@ -331,6 +329,7 @@ function StageBody({ payload, token, shared, protectedStage, lyrics, onLyricsSav
   };
   const [sheet, setSheet] = useState<SheetName>(null);
   const [perf, setPerf] = useState(false);
+  const countIn = loadPref("countIn");
   const [toast, setToast] = useState<string | null>(null);
   const moreRef = useRef<HTMLButtonElement | null>(null);
   const openFeedback = useOpenFeedback();
@@ -344,9 +343,10 @@ function StageBody({ payload, token, shared, protectedStage, lyrics, onLyricsSav
     player.seek(startAt);
   }, [player.ready, player.seek, startAt]);
 
-  // Keep the screen awake while singing.
+  // Keep the screen awake while singing (Settings), and always in Performance view.
+  const keepAwake = perf || (player.playing && loadPref("keepAwake"));
   useEffect(() => {
-    if (!player.playing || !navigator.wakeLock) return;
+    if (!keepAwake || !navigator.wakeLock) return;
     let cancelled = false;
     let pending = false;
     let lock: WakeLockSentinel | undefined;
@@ -370,13 +370,17 @@ function StageBody({ payload, token, shared, protectedStage, lyrics, onLyricsSav
       document.removeEventListener("visibilitychange", keepScreenOn);
       void lock?.release().catch(() => {});
     };
-  }, [player.playing]);
+  }, [keepAwake]);
 
   // Desktop keys: Space play/pause, ←/→ ±5 s. Not while typing or in a sheet.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
-      if (sheet || perf || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (perf && e.key === "Escape") {
+        setPerf(false);
+        return;
+      }
+      if (sheet || e.metaKey || e.ctrlKey || e.altKey) return;
       if (el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.closest("dialog"))) return;
       if (e.key === " " && el?.tagName !== "BUTTON") {
         e.preventDefault();
@@ -455,6 +459,34 @@ function StageBody({ payload, token, shared, protectedStage, lyrics, onLyricsSav
     </div>
   );
 
+  if (perf) {
+    // Performance view: lyrics centered and larger, × / play / mic, no scrub
+    // (no accidental seeks), the screen stays on.
+    return (
+      <div className="sn-app sn-stage sn-perf" role="dialog" aria-label={t("stage.perf")}>
+        <div className="sn-stage-main">
+          <StageLyrics lines={lines} duration={payload.duration} plain={lyrics?.plain ?? null}
+            currentTime={player.currentTime} onSeek={player.seek} size="perf" reducedMotion={reducedMotion}
+            noLyrics={noLyrics} countIn={countIn} />
+        </div>
+        <div className="sn-perf-bar">
+          <button type="button" className="sn-iconbtn sn-perf-btn" onClick={() => setPerf(false)}
+            aria-label={t("stage.perfExit")} data-sn-perf-exit="">
+            <Icon name="x" size={24} />
+          </button>
+          <button type="button" className="sn-play sn-play-perf" onClick={player.playPause} disabled={!player.ready}
+            data-sn-play="" aria-label={player.playing ? t("stage.pause") : t("stage.play")}>
+            <Icon name={player.playing ? "pause" : "play"} size={28} />
+          </button>
+          <button type="button" className="sn-iconbtn sn-perf-btn" onClick={toggleVocals} disabled={!player.hasVocals}
+            aria-label={t("stage.vocalsMute")} aria-pressed={vocalPct === 0} data-sn-mic="">
+            <Icon name={vocalPct > 0 ? "mic" : "micoff"} size={24} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`sn-app sn-stage${shared ? " shared-stage" : ""}`}>
       <StageTop shared={shared} title={title} artist={payload.artist} onMore={onMore} />
@@ -471,7 +503,7 @@ function StageBody({ payload, token, shared, protectedStage, lyrics, onLyricsSav
         ) : (
           <StageLyrics lines={lines} duration={payload.duration} plain={lyrics?.plain ?? null}
             currentTime={player.currentTime} onSeek={player.seek} size={size} reducedMotion={reducedMotion}
-            noLyrics={noLyrics} />
+            noLyrics={noLyrics} countIn={countIn} />
         )}
       </div>
       {instrumental && (
@@ -551,10 +583,6 @@ function StageBody({ payload, token, shared, protectedStage, lyrics, onLyricsSav
         </Sheet>
       )}
 
-      {perf && (
-        <Perf player={player} title={title} artist={payload.artist} lines={timed} plain={lyrics?.plain ?? null}
-          onExit={() => setPerf(false)} reducedMotion={reducedMotion} />
-      )}
       <Toast message={toast} onDone={() => setToast(null)} />
     </div>
   );
