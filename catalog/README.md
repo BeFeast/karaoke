@@ -47,7 +47,7 @@ HTTP 403, HTTP 429, and bot-gate failures pause the pilot. Once the issue is
 resolved, use `--resume` with `--run` to process subsequent recordings.
 Failed attempts are retained and never retried automatically.
 
-The lifetime and UTC-day caps are each $1.00. The reservation is 1.5 times the
+The lifetime cap is $5.00, and the UTC-day cap is $1.00. The reservation is 1.5 times the
 largest observed completed ledger charge, rounded up, with a $0.05 floor. It
 must also cover at least 30 seconds of GPU execution and the 120-second
 startup and billing allowance at the verified hourly ceiling. The ceiling

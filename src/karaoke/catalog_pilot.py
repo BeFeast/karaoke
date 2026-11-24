@@ -45,7 +45,7 @@ from karaoke.worker.runpod_client import RUNPOD_REST, TERMINAL_STATES
 from karaoke.worker.scheduler import _has_runpod, _use_runpod
 
 MAX_SONGS = 30
-TOTAL_MICROS = 1_000_000
+TOTAL_MICROS = 5_000_000
 DAILY_MICROS = 1_000_000
 COOLDOWN = dt.timedelta(minutes=5, seconds=1)
 EXECUTION_SECONDS = 480

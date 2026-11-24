@@ -1,7 +1,7 @@
 # Exercise the pilot controls with an isolated database, fake time, and stub providers.
 state:
   catalog_fixture: pilot_manifest_with_duplicate_video_id
-  pilot_budget: {total_usd: 1.00, daily_usd: 1.00}
+  pilot_budget: {total_usd: 5.00, daily_usd: 1.00}
   profiles: [desktop]
   cooldown_fixture: prior_pilot_download_started_299_seconds_before_fake_now
 action:
