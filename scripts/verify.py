@@ -132,6 +132,9 @@ class Coordinator:
     async def lyrics(self, job):
         return (await self.request("GET", f"{route(job)}/lyrics", private=False)).json()
 
+    async def metadata(self, job):
+        return (await self.request("GET", f"{route(job)}/metadata.json", private=False)).json()
+
     async def fixture(self, state, reused):
         if fixture_id := reused or state.get("fixture_job"):
             jobs = [await self.status({"id": fixture_id})]
@@ -830,6 +833,16 @@ async def submit(args, api, evidence, scenario, profile, bearer):
                 count = sum(not line.get("speech") for line in lyrics.get("lines") or [])
                 check("synced_lyrics", {"synced": lyrics["synced"], "sung_lines": count},
                       lyrics["synced"] == checks["synced_lyrics"] and count >= 2)
+                if "lyrics_match_audio" in checks:
+                    # Wrong-song guard: curated lyrics ship only when the
+                    # transcript of this job's own vocal stem confirms them.
+                    meta = await api.metadata(job)
+                    source = meta.get("lyrics_source")
+                    agreement = meta.get("lyrics_reference_agreement")
+                    curated = source in {"lrclib_synced", "forced_aligned", "lrclib_plain", "asr_reference_corrected"}
+                    check("lyrics_match_audio", {"lyrics_source": source, "reference_agreement": agreement,
+                                                 "match_variant": meta.get("lyrics_match_variant")},
+                          not curated or (agreement is not None and agreement >= checks["lyrics_match_audio"]))
                 async def ready_state():
                     await watch_processing(tab, evidence, scope, seen)
                     return seen and seen[-1] == "ready"
