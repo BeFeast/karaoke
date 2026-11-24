@@ -15,7 +15,6 @@ from verify_cdp import VerifyError, open_tab, wait_for
 
 from karaoke.catalog import youtube_id
 
-
 CATALOG_TAB = '.catalog-tabs a[href="#/catalog"]'
 SONG_LINK = 'input[aria-label="Song link"]'
 ADD_SONG = ".catalog-add-song"
@@ -225,7 +224,8 @@ async def verify_ready(args, api, evidence, scenario, script, inspect_player):
                 await evidence.capture(tab, scope, "shelves")
                 await click(tab, ADD_SONG)
                 link_focused = await wait_for(
-                    lambda: tab.js(f"document.activeElement?.matches({json.dumps(SONG_LINK)})"),
+                    lambda: tab.js(f"""location.hash === "#/my-songs"
+                        && document.activeElement?.matches({json.dumps(SONG_LINK)})"""),
                     15, "Add song did not focus the Song link input",
                 )
                 await click(tab, CATALOG_TAB)
