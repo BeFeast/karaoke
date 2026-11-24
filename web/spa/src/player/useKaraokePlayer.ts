@@ -29,6 +29,7 @@ export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5] as const;
 export interface KaraokePlayerOptions {
   /** Same-origin URL of the instrumental stem (audio + waveform). */
   instrumentalUrl: string;
+  fetchStem?: (url: string, signal?: AbortSignal) => Promise<Response>;
   /** Same-origin URL of the vocals stem, if present. */
   vocalsUrl: string | null;
   /** Waveform container element. */
@@ -86,7 +87,7 @@ export interface KaraokePlayerApi extends KaraokePlayerState {
 }
 
 export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
-  const { instrumentalUrl, vocalsUrl, container, colors, reducedMotion, waveHeight = 96 } = opts;
+  const { instrumentalUrl, vocalsUrl, fetchStem, container, colors, reducedMotion, waveHeight = 96 } = opts;
 
   const [state, setState] = useState<KaraokePlayerState>({
     ready: false,
@@ -132,7 +133,7 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
     }
     ctxRef.current = ctx;
 
-    DualStemEngine.load({ instrumentalUrl, vocalsUrl, ctx, signal: abort.signal })
+    DualStemEngine.load({ instrumentalUrl, vocalsUrl, fetchStem, ctx, signal: abort.signal })
       .then((loaded) => {
         if (disposed) {
           loaded.dispose();
@@ -216,7 +217,7 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
     // Re-create only when the source URLs change. Color/motion changes are
     // applied via setOptions in a separate effect to avoid rebuilding.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [container, instrumentalUrl, vocalsUrl]);
+  }, [container, instrumentalUrl, vocalsUrl, fetchStem]);
 
   // ── Live-apply color changes (theme toggle) without rebuilding ───────────
   useEffect(() => {

@@ -40,6 +40,7 @@ export interface StemEngineLoadOptions {
   ctx: AudioContext;
   /** Aborts the in-flight stem fetches (component unmount). */
   signal?: AbortSignal;
+  fetchStem?: (url: string, signal?: AbortSignal) => Promise<Response>;
 }
 
 export interface ABRegion {
@@ -47,9 +48,9 @@ export interface ABRegion {
   b: number | null;
 }
 
-async function fetchDecode(url: string, ctx: AudioContext, signal?: AbortSignal): Promise<AudioBuffer> {
-  // Stems are same-origin, so no crossOrigin/CORS dance — a plain fetch.
-  const res = await fetch(url, { signal });
+async function fetchDecode(url: string, opts: StemEngineLoadOptions): Promise<AudioBuffer> {
+  const { ctx, signal, fetchStem } = opts;
+  const res = fetchStem ? await fetchStem(url, signal) : await fetch(url, { signal });
   if (!res.ok) throw new Error(`stem fetch failed: HTTP ${res.status} for ${url}`);
   const bytes = await res.arrayBuffer();
   return await ctx.decodeAudioData(bytes);
@@ -81,8 +82,8 @@ export class DualStemEngine {
 
   static async load(opts: StemEngineLoadOptions): Promise<DualStemEngine> {
     const [instBuf, vocBuf] = await Promise.all([
-      fetchDecode(opts.instrumentalUrl, opts.ctx, opts.signal),
-      opts.vocalsUrl ? fetchDecode(opts.vocalsUrl, opts.ctx, opts.signal) : Promise.resolve(null),
+      fetchDecode(opts.instrumentalUrl, opts),
+      opts.vocalsUrl ? fetchDecode(opts.vocalsUrl, opts) : Promise.resolve(null),
     ]);
     return new DualStemEngine(opts.ctx, instBuf, vocBuf);
   }

@@ -12,10 +12,14 @@
 
 import { useEffect, useState } from "react";
 
+export type CatalogShelf = { axis: "collection" | "genre" | "decade"; value: string };
+
 export type Route =
   | { name: "dashboard" }
   | { name: "item"; token: string }
-  | { name: "settings" };
+  | { name: "settings" }
+  | { name: "my-songs" }
+  | { name: "catalog"; shelf: CatalogShelf };
 
 function parseHash(hash: string): Route {
   // Strip a leading "#" and optional leading "/".
@@ -25,6 +29,17 @@ function parseHash(hash: string): Route {
 
   if (segments[0] === "job" && segments[1]) {
     return { name: "item", token: decodeURIComponent(segments[1]) };
+  }
+  if (segments[0] === "my-songs") return { name: "my-songs" };
+  if (segments[0] === "catalog" && segments[2]) {
+    const axis = segments[1];
+    if (axis === "collection" || axis === "genre" || axis === "decade") {
+      try {
+        return { name: "catalog", shelf: { axis, value: decodeURIComponent(segments[2]) } };
+      } catch {
+        return { name: "dashboard" };
+      }
+    }
   }
   if (segments[0] === "settings") {
     return { name: "settings" };
@@ -68,4 +83,14 @@ export function navigate(hash: string): void {
 /** Go back to the dashboard route. */
 export function goDashboard(): void {
   navigate("#/");
+}
+
+export function catalogHash(shelf?: CatalogShelf): string {
+  return shelf ? `#/catalog/${shelf.axis}/${encodeURIComponent(shelf.value)}` : "#/";
+}
+
+export const mySongsHash = "#/my-songs";
+
+export function clerkStageToken(token: string): boolean {
+  return token.startsWith("cat.") || token.startsWith("clerk.");
 }

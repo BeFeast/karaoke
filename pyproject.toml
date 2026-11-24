@@ -37,6 +37,7 @@ dependencies = [
 
 [project.scripts]
 karaoke = "karaoke:main"
+karaoke-catalog-pilot = "karaoke.catalog_pilot:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]

@@ -1,3 +1,4 @@
+import { CatalogBrowser } from "./Catalog";
 // KARAOKE — the Booth: live dashboard on #/ (Marquee port, #153).
 // Literal port of design/claude-export/proto/booth.jsx (BoothScreen :82-150,
 // PRunningCard :58-80, infra strip :141-146) plus the filter-chip pattern from
@@ -12,14 +13,14 @@
 // board), so these are responsive adaptations with existing tokens/recipes
 // only; the desktop branches are the untouched port.
 
+import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 import { FeedbackButton } from "../feedback/Feedback";
-import { type CSSProperties, type ReactNode, useRef, useState } from "react";
 import type { JobOut, JobStatus } from "../api";
 import { canRetryJob, type JobFilter, statusMeta } from "../jobStatus";
 import { costDollars, fmtDuration, formatRelativeTime, type JobSort } from "../lib/jobListUtils";
 import { usePhoneLayout } from "../lib/layout";
 import { sourceDisplay } from "../lib/source";
-import { itemHash } from "../router";
+import { catalogHash, type CatalogShelf, mySongsHash, navigate, itemHash } from "../router";
 import { MBulbs, MDuetWave, SonereliMark, MWipe } from "./marks";
 
 export interface JobActions {
@@ -272,6 +273,9 @@ export function BoothScreen({
   actions,
   onClearFailed,
   authControl,
+  catalogEnabled,
+  mySongs,
+  shelf,
   children,
 }: {
   /** Filtered + sorted rows to render. */
@@ -300,6 +304,9 @@ export function BoothScreen({
   actions: JobActions;
   onClearFailed: () => void;
   authControl?: ReactNode;
+  catalogEnabled: boolean;
+  mySongs: boolean;
+  shelf: CatalogShelf | null;
   /** Overlays (ConfirmDialog) rendered inside the booth's token scope. */
   children?: ReactNode;
 }) {
@@ -308,6 +315,16 @@ export function BoothScreen({
   // re-lays-out. The desktop row keeps its single-line layout.
   const phone = usePhoneLayout();
   const [url, setUrl] = useState("");
+  const [catalogQuery, setCatalogQuery] = useState("");
+  const [focusPaste, setFocusPaste] = useState(false);
+  const urlRef = useRef<HTMLInputElement>(null);
+  const inCatalog = catalogEnabled && !mySongs;
+  useEffect(() => {
+    if (mySongs && focusPaste) {
+      urlRef.current?.focus();
+      setFocusPaste(false);
+    }
+  }, [mySongs, focusPaste]);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -342,7 +359,7 @@ export function BoothScreen({
   // on phone it drops flex: 1 (a column child stretches full width instead)
   // and the primary action grows to fill its row.
   const urlInput = (
-    <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste a song link…"
+    <input ref={urlRef} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste a song link…"
       onKeyDown={(e) => e.key === "Enter" && doSubmit()}
       disabled={busy || uploading} autoComplete="off" spellCheck={false} aria-label="Song link"
       style={{ flex: phone ? undefined : 1, minWidth: 0, padding: "10px 13px", border: "1px solid var(--border)", borderRadius: "var(--radius)", background: "var(--bg)", color: "var(--fg)", fontSize: 14, fontFamily: "var(--font-mono)", outline: "none" }}></input>
@@ -370,6 +387,25 @@ export function BoothScreen({
       <MarqueeTopBar authControl={authControl} />
 
       <div style={{ flex: 1, padding: "24px 24px 16px", maxWidth: 780, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {inCatalog && (
+          <input className="catalog-search" type="search" value={catalogQuery} maxLength={200}
+            onChange={(event) => setCatalogQuery(event.target.value)}
+            aria-label="Поиск по каталогу" placeholder="Название или исполнитель" />
+        )}
+        {catalogEnabled && (
+          <nav className="catalog-tabs" aria-label="Выбор библиотеки">
+            <a className="m-btn" href={catalogHash()} aria-current={inCatalog ? "page" : undefined}
+              onClick={() => setCatalogQuery("")}>Каталог</a>
+            <a className="m-btn" href={mySongsHash} aria-current={mySongs ? "page" : undefined}>Мои песни</a>
+          </nav>
+        )}
+        {inCatalog ? (
+          <CatalogBrowser query={catalogQuery} shelf={shelf} prepare={onCreate} pasteUrl={() => {
+            setFocusPaste(true);
+            navigate(mySongsHash);
+          }} />
+        ) : (
+          <div data-my-songs>
         <div style={{ background: "var(--bg-card)", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-lg)", padding: 16 }}>
           <h1 style={{ margin: "0 0 16px", fontFamily: "var(--font-display)", fontSize: 24, lineHeight: "32px", textWrap: "balance" }}>Choose a song and sing</h1>
           {phone ? (
@@ -452,6 +488,9 @@ export function BoothScreen({
                 <CompactRow key={j.id} job={j} actions={actions} />
               ),
             )}
+          </div>
+        )}
+
           </div>
         )}
 

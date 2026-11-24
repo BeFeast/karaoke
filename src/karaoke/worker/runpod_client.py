@@ -179,11 +179,15 @@ class RunpodClient:
         prior_24h_cost_micros: int = 0,
         http: Callable[..., tuple[int, dict]] | None = None,
         r2_uploader: Callable[..., str] | None = None,
+        execution_timeout_s: int | None = None,
+        on_submitted: Callable[[str], None] | None = None,
     ) -> None:
         self.settings = settings
         self.prior_24h_cost_micros = prior_24h_cost_micros
         self._http = http or _http
         self._r2_uploader = r2_uploader
+        self._execution_timeout_s = execution_timeout_s
+        self._on_submitted = on_submitted
         self._r2_put_urls: dict[str, str] = {}
         self._r2_output_keys: dict[str, str] = {}
 
@@ -291,6 +295,12 @@ class RunpodClient:
         health_url = f"{RUNPOD_REST}/{endpoint_id}/health"
 
         job_id: str | None = None
+        payload: dict[str, Any] = {"input": run_input}
+        if self._execution_timeout_s is not None:
+            timeout_ms = self._execution_timeout_s * 1000
+            # Provider-side limits also apply after the coordinator exits.
+            payload["policy"] = {"executionTimeout": timeout_ms, "ttl": timeout_ms}
+            run_input["job_budget_s"] = self._execution_timeout_s
         terminal = False
         started = time.monotonic()
         last_status: str | None = None
@@ -303,7 +313,7 @@ class RunpodClient:
                 "POST",
                 run_url,
                 api_key,
-                {"input": run_input},
+                payload,
                 timeout=request_timeout,
             )
             if code not in (200, 201) or not body.get("id"):
@@ -324,6 +334,8 @@ class RunpodClient:
                     f"runpod /run failed: HTTP {code} body={body!r}"
                 )
             job_id = str(body["id"])
+            if self._on_submitted is not None:
+                self._on_submitted(job_id)
 
             # --- poll until terminal --------------------------------------
             while True:
@@ -603,7 +615,11 @@ class RunpodClient:
             )
 
         # Prefer RunPod's reported execution time; fall back to wall clock.
-        seconds = max(execution_ms / 1000.0, wall_seconds)
+        seconds = (
+            execution_ms / 1000.0
+            if self._execution_timeout_s is not None and execution_ms > 0
+            else max(execution_ms / 1000.0, wall_seconds)
+        )
         rate = float(self.settings.runpod_hourly_rate_estimate or 0.68)
         cost = seconds / 3600.0 * rate
 
