@@ -972,7 +972,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   font: inherit;
 }
 
-.m-btn.catalog-add-song {
+.catalog-add-song {
   min-height: 44px;
   padding: 8px 12px;
   margin-bottom: 16px;
