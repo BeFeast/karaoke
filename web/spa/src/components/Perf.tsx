@@ -20,7 +20,7 @@
 //     wipe + MBulbs gap countdown derive from real timestamps); no synced
 //     data → centered plain text, no fake timing.
 //   * Readable phone/desktop sizes stay fixed while lyrics wrap.
-//     ◐ shares the stage room's persisted day/night theme (token classes).
+//     (Day/Night removed in Sonereli UI/UX v1: one dark room.)
 //   * Token resolutions (audit item 4): perf.jsx:40 radial background blends
 //     var(--bg-soft) → var(--bg) (day & night resolve via the room's token
 //     set); perf.jsx:52 lyric text-shadow → var(--glow) (green bake,
@@ -35,7 +35,6 @@ import { FeedbackButton } from "../feedback/Feedback";
 import { usePhoneLayout } from "../lib/layout";
 import { railPct } from "../player/engineMath";
 import type { KaraokePlayerApi } from "../player/useKaraokePlayer";
-import type { StageTheme } from "../theme";
 import { LyricText } from "./LyricText";
 import { MBulbs, PlaybackIcon, SonereliMark } from "./marks";
 import { PlainLyrics } from "./SyncedLyrics";
@@ -60,14 +59,11 @@ export interface PerfProps {
   lines: TimedLine[];
   /** Plain lyrics text for the no-synced-data fallback. */
   plain: string | null;
-  /** The stage room's persisted ◐ theme. */
-  theme: StageTheme;
-  onToggleTheme: () => void;
   onExit: () => void;
   reducedMotion: boolean;
 }
 
-export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme, onExit, reducedMotion }: PerfProps) {
+export function Perf({ player, title, artist, lines, plain, onExit, reducedMotion }: PerfProps) {
   const phone = usePhoneLayout();
   const [idle, setIdle] = useState(false);
   const timer = useRef<number | undefined>(undefined);
@@ -119,7 +115,6 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
     window.addEventListener("pointerup", up);
   };
 
-  const day = theme === "day";
   const fade: CSSProperties = { opacity: idle ? 0 : 1, transition: reducedMotion ? undefined : "opacity .5s" };
   const m = phone
     ? { neighbor: 20, active: 24, gap: 12, pad: "0 24px", lh: 1.2 }
@@ -127,7 +122,7 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
 
   return (
     <div
-      className={day ? "m-booth" : "m-stage"}
+      className="m-stage"
       onPointerMove={poke}
       onPointerDown={poke}
       style={{
@@ -160,7 +155,6 @@ export function Perf({ player, title, artist, lines, plain, theme, onToggleTheme
         </span>
         <span style={{ flex: 1 }}></span>
         <span style={{ whiteSpace: "nowrap" }}>{fmtTime(player.currentTime)} / {fmtTime(player.duration)}</span>
-        <button className="m-btn sm ghost" type="button" title="Day / night" onClick={onToggleTheme}>◐</button>
         <button className="m-btn sm ghost" type="button" onClick={onExit} aria-label="Exit performance mode">
           {phone ? "✕" : "esc ✕"}
         </button>
