@@ -1,11 +1,11 @@
 // Runs before page scripts. Observe the Web Audio timeline and gains without
 // replacing playback, bypassing the user gesture, or modifying the app state.
 (() => {
-  // Every run starts from the Original vocals defaults (25%, step 9): the
-  // per-song memory in this persistent browser profile must not leak in.
+  // Every run starts from the Original vocals default (step 9): the per-song
+  // memory in this persistent browser profile must not leak in. The Settings
+  // default itself is left alone (mobile-settings restores it when done).
   try {
     localStorage.removeItem("sonereli-vocals-by-song");
-    localStorage.removeItem("sonereli-vocals-default");
   } catch {
     /* storage unavailable */
   }
@@ -60,6 +60,8 @@
     },
 
     lyricLayout(performance) {
+      // v0.53+: Performance view is the Stage lyrics list in a larger preset.
+      if (performance && select(".sn-perf")) performance = false;
       const list = lyricsList();
       const rows = [...list.children];
       const current = rows.find((row) => row.getAttribute("aria-current") === "true");

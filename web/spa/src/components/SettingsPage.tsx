@@ -27,6 +27,82 @@ import { t as i18n } from "../i18n";
 import { Shell } from "./Shell";
 import { ConfirmDialog, type ConfirmState } from "./ConfirmDialog";
 import { Toast } from "./Toast";
+import { Icon } from "./Icon";
+import { Sheet } from "./Sheet";
+import { LYRICS_SIZES, type LyricsSize, loadLyricsSize, saveLyricsSize } from "./stageLyricsModel";
+import { loadPref, type PrefKey, savePref } from "../lib/prefs";
+import { defaultVocalPct, saveDefaultVocalPct } from "../lib/vocals";
+import { feedbackHash } from "../router";
+
+const PREVIEW_PX: Record<LyricsSize, number> = { s: 24, m: 28, l: 34, perf: 34 };
+
+// Singing + Help (Sonereli UI/UX v1 step 10): lyrics size with a live
+// preview line, the Original vocals start level, screen-on and count-in.
+function SingingSettings() {
+  const [size, setSize] = useState<LyricsSize>(loadLyricsSize);
+  const [vocals, setVocals] = useState(defaultVocalPct);
+  const [prefs, setPrefs] = useState(() => ({ keepAwake: loadPref("keepAwake"), countIn: loadPref("countIn") }));
+  const [help, setHelp] = useState(false);
+  const toggle = (key: PrefKey, on: boolean) => {
+    savePref(key, on);
+    setPrefs((value) => ({ ...value, [key]: on }));
+  };
+  return (
+    <>
+      <section className="sn-set-section" aria-labelledby="set-singing">
+        <h2 id="set-singing">{i18n("settings.singing")}</h2>
+        <div className="sn-set-stack">
+          <span className="sn-label">{i18n("stage.size")}</span>
+          <div className="sn-segmented" role="radiogroup" aria-label={i18n("stage.size")}>
+            {LYRICS_SIZES.map((value) => (
+              <button key={value} type="button" role="radio" aria-checked={size === value}
+                className={size === value ? "is-on" : undefined}
+                onClick={() => {
+                  saveLyricsSize(value);
+                  setSize(value);
+                }}>{value.toUpperCase()}</button>
+            ))}
+          </div>
+          <p className="sn-preview" style={{ fontSize: PREVIEW_PX[size], lineHeight: 1.2 }}>{i18n("settings.preview")}</p>
+        </div>
+        <label className="sn-set-stack">
+          <span style={{ display: "flex", justifyContent: "space-between" }}>
+            <span className="sn-label">{i18n("settings.vocalsStart")}</span>
+            <span className="sn-vocals-pct">{vocals}%</span>
+          </span>
+          <input type="range" className="sn-range" min={0} max={100} step={5} value={vocals}
+            aria-valuetext={i18n("stage.vocalsValue", { n: vocals })}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              saveDefaultVocalPct(value);
+              setVocals(value);
+            }} />
+        </label>
+        <label className="sn-attach">
+          <span className="sn-grow">{i18n("settings.keepAwake")}</span>
+          <input type="checkbox" className="sn-switch" checked={prefs.keepAwake} onChange={(e) => toggle("keepAwake", e.target.checked)} />
+        </label>
+        <label className="sn-attach">
+          <span className="sn-grow">{i18n("settings.countIn")}</span>
+          <input type="checkbox" className="sn-switch" checked={prefs.countIn} onChange={(e) => toggle("countIn", e.target.checked)} />
+        </label>
+      </section>
+      <section className="sn-set-section" aria-labelledby="set-help">
+        <h2 id="set-help">{i18n("settings.help")}</h2>
+        <a className="sn-set-row" href={feedbackHash}>
+          <Icon name="msg" /><span className="sn-grow">{i18n("settings.feedback")}</span><Icon name="right" size={20} />
+        </a>
+        <button type="button" className="sn-set-row" onClick={() => setHelp(true)}>
+          <Icon name="share" /><span className="sn-grow">{i18n("settings.youtube")}</span><Icon name="right" size={20} />
+        </button>
+      </section>
+      <Sheet open={help} title={i18n("settings.youtube")} onClose={() => setHelp(false)}>
+        <p className="sn-lead">{i18n("add.youtubeHint")}</p>
+      </Sheet>
+      <h2 className="sn-section">{i18n("settings.shortcuts")}</h2>
+    </>
+  );
+}
 
 const K_REPO = "https://github.com/BeFeast/karaoke";
 
@@ -187,6 +263,7 @@ export function SettingsPage({ authControl, catalogEnabled = false }: { authCont
   return (
     <Shell tab="settings" title={i18n("tab.settings")} catalogEnabled={catalogEnabled}
       actions={<><FeedbackButton />{authControl}</>}>
+      <SingingSettings />
       <div className="m-booth sn-legacy" style={{ display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", flexDirection: "column" }}>
           <div className="m-mono" style={{ fontSize: 11.5, color: "var(--muted)" }}>{active} active stage pass{active === 1 ? "" : "es"}</div>

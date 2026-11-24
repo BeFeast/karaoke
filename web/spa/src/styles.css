@@ -1317,3 +1317,54 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 .sn-mini .sn-t2 { font-size: 13px; line-height: 18px; }
 .sn-mini-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--sn-track); }
 .sn-mini-progress > i { display: block; height: 100%; background: var(--sn-cyan); }
+
+/* ─── Performance view (UI/UX v1 step 10) ─── */
+.sn-lyrics[data-size="perf"] { --ly-a: 34px; --ly-a-lh: 40px; --ly-n: 26px; --ly-n-lh: 34px; --ly: 22px; --ly-lh: 30px; }
+.sn-lyrics[data-size="perf"] .synced-lyrics-line,
+.sn-lyrics[data-size="perf"] .synced-lyrics-seek { text-align: center; }
+.sn-lyrics[data-size="perf"] .sn-cue { justify-content: center; }
+.sn-perf .sn-stage-main { padding-top: env(safe-area-inset-top, 0px); }
+.sn-perf-bar {
+  flex: none; display: flex; align-items: center; justify-content: space-between;
+  width: 100%; max-width: 760px; margin: 0 auto; padding: 8px 16px calc(env(safe-area-inset-bottom, 0px) + 12px);
+}
+.sn-perf-btn { width: 48px; height: 48px; background: var(--sn-raised); }
+.sn-perf-btn[aria-pressed="true"] { color: var(--sn-muted); }
+.sn-play-perf { width: 60px; height: 60px; }
+
+/* ─── Settings · Singing and Feedback screen (step 10) ─── */
+.sn-set-section { display: grid; gap: 4px; margin: 8px 0 24px; }
+.sn-set-section > h2 { font-size: 20px; line-height: 26px; font-weight: 700; margin: 0 0 8px; }
+.sn-set-row {
+  display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 6px 0;
+  border-top: 1px solid var(--sn-divider); color: inherit; text-decoration: none; background: none;
+  border-left: 0; border-right: 0; border-bottom: 0; width: 100%; font: inherit; text-align: start; cursor: pointer;
+}
+.sn-set-row > .sn-ic:last-child { color: var(--sn-muted); }
+.sn-set-stack { display: grid; gap: 10px; padding: 12px 0; border-top: 1px solid var(--sn-divider); }
+.sn-preview { font-weight: 700; color: var(--sn-pink); overflow-wrap: anywhere; }
+.sn-switch {
+  appearance: none; -webkit-appearance: none; flex: none; width: 51px; height: 31px; margin: 0;
+  border-radius: var(--sn-r-pill); background: var(--sn-track); position: relative; cursor: pointer;
+  transition: background var(--sn-t-base) var(--sn-ease);
+}
+.sn-switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%;
+  background: var(--sn-text); transition: transform var(--sn-t-base) var(--sn-ease);
+}
+.sn-switch:checked { background: var(--sn-pink); }
+.sn-switch:checked::after { transform: translateX(20px); }
+.sn-range { width: 100%; accent-color: var(--sn-pink); min-height: 32px; }
+.sn-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.sn-chip {
+  min-height: 44px; padding: 8px 14px; border-radius: var(--sn-r-pill); border: 1px solid var(--sn-boundary);
+  background: transparent; color: var(--sn-text); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
+}
+.sn-chip[aria-pressed="true"] { background: var(--sn-raised); border-color: var(--sn-cyan); color: var(--sn-cyan); }
+.sn-textarea {
+  width: 100%; min-height: 120px; padding: 12px 14px; border-radius: var(--sn-r-md); resize: vertical;
+  background: var(--sn-surface); border: 1px solid var(--sn-boundary); color: var(--sn-text); font: inherit;
+}
+.sn-textarea:focus { outline: none; border-color: var(--sn-cyan); box-shadow: 0 0 0 1px var(--sn-cyan); }
+.sn-attach { display: flex; align-items: center; gap: 12px; min-height: 56px; border-top: 1px solid var(--sn-divider); }
+.sn-attach-sub { display: block; font-size: 13px; line-height: 18px; color: var(--sn-muted); }

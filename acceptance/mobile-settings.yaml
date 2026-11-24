@@ -1,0 +1,12 @@
+state:
+  authenticated_owner: clerk_user
+  catalog_fixture: ready_recording_with_synced_lyrics
+  profiles: [iphone]
+action:
+  # UI/UX v1 step 10: Singing settings survive a reload and reach the Stage;
+  # Feedback is its own screen with one-tap topics.
+  - open: settings
+    assert:
+      settings_persist_after_reload: true
+      stage_uses_settings: true
+      feedback_screen: true

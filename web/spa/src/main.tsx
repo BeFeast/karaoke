@@ -9,6 +9,7 @@ import { getConfig, type RuntimeConfig, setTokenGetter } from "./api";
 import { SonereliMark } from "./components/marks";
 import { PlayerProvider } from "./player/PlayerProvider";
 import { SettingsPage } from "./components/SettingsPage";
+import { FeedbackPage } from "./components/FeedbackPage";
 import { Stage } from "./components/Stage";
 import { SignInScreen, UserAvatar } from "./components/SignInWall";
 import { clerkStageToken, navigate, settingsHash, useRoute } from "./router";
@@ -43,6 +44,9 @@ function Routed({ config, authControl, catalogEnabled = false }: { config: Runti
   const route = useRoute();
   if (route.name === "item") {
     return <Stage key={route.token} token={route.token} startAt={route.startAt} publicBaseUrl={config.public_base_url} />;
+  }
+  if (route.name === "feedback") {
+    return <FeedbackPage catalogEnabled={catalogEnabled} baseUrl={config.feedback_base_url} />;
   }
   if (route.name === "settings") {
     return <SettingsPage authControl={authControl} catalogEnabled={catalogEnabled} />;

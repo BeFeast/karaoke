@@ -96,9 +96,9 @@ export const MIN_ACTIVE_PX = 20;
  * Wrapped text height grows roughly with the square of the font size (more
  * rows, each taller), hence the square root.
  */
-export function fitFontPx(fontPx: number, height: number, available: number): number {
+export function fitFontPx(fontPx: number, height: number, available: number, minPx = MIN_ACTIVE_PX): number {
   if (height <= available || height <= 0) return fontPx;
-  return Math.max(MIN_ACTIVE_PX, Math.floor(fontPx * Math.sqrt(available / height)));
+  return Math.max(minPx, Math.floor(fontPx * Math.sqrt(available / height)));
 }
 
 /** Room for the active line below the anchor. */
@@ -106,9 +106,11 @@ export function fitRoom(viewportHeight: number): number {
   return viewportHeight * (1 - FOLLOW_ANCHOR) - FIT_MARGIN;
 }
 
-/** Lyrics size presets (spec table, px). */
-export type LyricsSize = "s" | "m" | "l";
+/** Lyrics size presets (spec table, px); "perf" is Performance view. */
+export type LyricsSize = "s" | "m" | "l" | "perf";
 export const LYRICS_SIZES: LyricsSize[] = ["s", "m", "l"];
+/** Performance view never fits its active line below this. */
+export const PERF_MIN_ACTIVE_PX = 24;
 const SIZE_KEY = "sonereli-lyrics-size";
 
 export function loadLyricsSize(): LyricsSize {

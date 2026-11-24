@@ -22,6 +22,7 @@ export type Route =
   | { name: "dashboard" }
   | { name: "item"; token: string; startAt?: number }
   | { name: "settings" }
+  | { name: "feedback" }
   | { name: "add"; url: string }
   | { name: "my-songs" }
   | { name: "catalog"; shelf?: CatalogShelf };
@@ -54,6 +55,7 @@ function parseHash(hash: string): Route {
       }
     }
   }
+  if (segments[0] === "feedback") return { name: "feedback" };
   if (segments[0] === "settings") {
     return { name: "settings" };
   }
@@ -101,6 +103,8 @@ export function itemHash(token: string, startAt?: number): string {
   const base = `#/job/${encodeURIComponent(token)}`;
   return startAt && startAt > 0 ? `${base}?t=${Math.floor(startAt * 10) / 10}` : base;
 }
+
+export const feedbackHash = "#/feedback";
 
 /** Build the in-app (hash) link for the settings page. */
 export function settingsHash(): string {

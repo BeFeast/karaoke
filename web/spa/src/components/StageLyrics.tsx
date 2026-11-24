@@ -21,6 +21,7 @@ import {
   cueCountdown,
   fitFontPx,
   fitRoom,
+  PERF_MIN_ACTIVE_PX,
   type LyricCue,
   lineRoles,
   lyricCues,
@@ -31,7 +32,7 @@ import { activeLineIndex, detectLyricsDirection, detectTextDirection, type Lyric
 const FOLLOW_MS = 280;
 const easeOut = (p: number) => 1 - (1 - p) ** 3;
 
-export function StageLyrics({ lines, duration, plain, currentTime, onSeek, size, reducedMotion, noLyrics }: {
+export function StageLyrics({ lines, duration, plain, currentTime, onSeek, size, reducedMotion, noLyrics, countIn = true }: {
   /** Parsed LRC lines (speech lines included); empty = unsynced. */
   lines: LyricLine[];
   duration: number | null;
@@ -43,6 +44,8 @@ export function StageLyrics({ lines, duration, plain, currentTime, onSeek, size,
   reducedMotion: boolean;
   /** Rendered when there are no lyrics at all. */
   noLyrics: React.ReactNode;
+  /** Settings: the intro count-in cue before the first line. */
+  countIn?: boolean;
 }) {
   if (lines.length === 0) {
     if (plain?.trim()) {
@@ -58,19 +61,21 @@ export function StageLyrics({ lines, duration, plain, currentTime, onSeek, size,
     return <div className="sn-lyrics sn-lyrics-none">{noLyrics}</div>;
   }
   return <SyncedStageLyrics lines={lines} duration={duration} currentTime={currentTime} onSeek={onSeek}
-    size={size} reducedMotion={reducedMotion} />;
+    size={size} reducedMotion={reducedMotion} countIn={countIn} />;
 }
 
-function SyncedStageLyrics({ lines, duration, currentTime, onSeek, size, reducedMotion }: {
+function SyncedStageLyrics({ lines, duration, currentTime, onSeek, size, reducedMotion, countIn }: {
   lines: LyricLine[];
   duration: number | null;
   currentTime: number;
   onSeek: (time: number) => void;
   size: LyricsSize;
   reducedMotion: boolean;
+  countIn: boolean;
 }) {
   const timed = useMemo(() => timeLines(lines, duration), [lines, duration]);
-  const cues = useMemo(() => lyricCues(lines, timed), [lines, timed]);
+  const cues = useMemo(() => lyricCues(lines, timed).filter((cue) => countIn || cue.kind !== "intro"),
+    [lines, timed, countIn]);
   const cueBefore = useMemo(() => new Map(cues.map((cue) => [cue.before, cue])), [cues]);
   const direction = useMemo(() => detectLyricsDirection(lines), [lines]);
   const active = activeLineIndex(lines, currentTime);
@@ -151,7 +156,8 @@ function SyncedStageLyrics({ lines, duration, currentTime, onSeek, size, reduced
     button.style.transition = "none";
     button.style.fontSize = `${finalPx}px`;
     button.style.lineHeight = `${finalLh}px`;
-    const fit = fitFontPx(finalPx, button.offsetHeight, fitRoom(list.clientHeight));
+    const fit = fitFontPx(finalPx, button.offsetHeight, fitRoom(list.clientHeight),
+      size === "perf" ? PERF_MIN_ACTIVE_PX : undefined);
     button.style.fontSize = "";
     button.style.lineHeight = "";
     button.style.transition = "";
