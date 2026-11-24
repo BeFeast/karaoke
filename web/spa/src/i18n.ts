@@ -110,6 +110,7 @@ const STRINGS = {
   "err.prepare": ["We couldn’t prepare this song. Try again or choose another version.", "Не удалось подготовить песню. Повтори попытку или выбери другую версию."],
   "catalog.search": ["Search the catalog", "Поиск по каталогу"],
   "catalog.placeholder": ["Song or artist · שיר או אמן", "Песня или исполнитель · שיר או אמן"],
+  "mini.open": ["Open {title}", "Открыть «{title}»"],
   "stage.minimize": ["Minimize player", "Свернуть плеер"],
   "stage.more": ["Song options", "Действия с песней"],
   "stage.lyrics": ["Lyrics", "Текст песни"],

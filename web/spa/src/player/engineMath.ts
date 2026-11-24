@@ -26,18 +26,19 @@ export function positionAt(now: number, seg: PlaySegment, duration: number): num
   return Math.max(0, Math.min(duration, raw));
 }
 
+/** Original vocals span this many dB between 1% and 100% (UI/UX v1 step 9). */
+export const VOCAL_RANGE_DB = 30;
+
 /**
- * Equal-power crossfade between the stems. `level` 0 = instrumental only,
- * 1 = vocals only; the endpoints are EXACT (a solo preset must fully mute the
- * other stem — the additive law this replaces held the instrumental at 0.75
- * gain on the "vocals" preset, which is the #113 "still plays instruments"
- * bug). In between, cos/sin keeps perceived loudness roughly constant.
+ * Stem gains for an Original vocals level (0 = off … 1 = full). The backing
+ * track always plays at full gain; the vocal stem rides a perceptual (dB)
+ * curve, so 25% is a faint guide voice and 100% is the original recording.
+ * 0 mutes the vocals exactly.
  */
 export function gainsForLevel(level: number): { inst: number; voc: number } {
   const l = Math.max(0, Math.min(1, level));
   if (l <= 0) return { inst: 1, voc: 0 };
-  if (l >= 1) return { inst: 0, voc: 1 };
-  return { inst: Math.cos((l * Math.PI) / 2), voc: Math.sin((l * Math.PI) / 2) };
+  return { inst: 1, voc: 10 ** ((VOCAL_RANGE_DB * (l - 1)) / 20) };
 }
 
 /**

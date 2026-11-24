@@ -506,7 +506,10 @@ async def verify_my_songs(args, evidence, scenario, script):
                          and abs(stored["position"] - stopped_at) <= 1.5)
             check(evidence, scope, sing, position_saved=saved)
 
+            # A fresh app open: a song still open in this tab shows the
+            # mini-player instead of the Continue card (UI/UX v1 step 8).
             await tab.js("location.hash = '#/my-songs'")
+            await tab.call("Page.reload")
             card = await wait_for(lambda: tab.js("!!document.querySelector('.sn-resume .sn-resume-play')"), 15,
                                   "Continue singing card missing on My songs")
             title = await tab.js("document.querySelector('.sn-resume .sn-t1')?.textContent")
@@ -532,3 +535,90 @@ async def verify_my_songs(args, evidence, scenario, script):
                 elif name == "resumed_within_s":
                     evidence.check(scope, name, expected, {"saved_s": position, "resumed_s": resumed, "drift_s": drift},
                                    drift is not None and drift <= expected)
+
+
+def sung_starts(lyrics):
+    """(start, text) of the sung lines; a word-timed line starts at its first
+    word when that is up to 2 s before the line tag (the SPA's parseLrc rule)."""
+    rows = []
+    for line in lyrics.get("lines") or []:
+        if line.get("speech"):
+            continue
+        first = (line.get("words") or [{"t": line["t"]}])[0]["t"]
+        rows.append((min(first, line["t"]) if line["t"] - first <= 2 else line["t"], line["text"].strip()))
+    return sorted(rows)
+
+
+def line_at(rows, time):
+    current = None
+    for start, text in rows:
+        if start <= time:
+            current = text
+    return current
+
+
+def line_matches(rows, time, text, slack=0.35):
+    """The shown line is the line at `time` (or at the edge of a boundary)."""
+    return text is not None and text in {line_at(rows, time), line_at(rows, time - slack), line_at(rows, time + slack)}
+
+
+async def verify_mini_player(args, evidence, scenario, script):
+    play, expand = scenario["action"]
+    for profile in scenario["state"]["profiles"]:
+        scope = f"{profile}.mini-player"
+        async with clerk_tab(args, evidence, profile, script) as (tab, _):
+            song = await ready_fixture(tab)
+            token = quote(song["stage_token"], safe="")
+            lyrics = await clerk_api(tab, f"/share/{token}/lyrics")
+            rows = sung_starts(lyrics["body"] or {})
+            if len(rows) < 3:
+                raise VerifyError("The catalog fixture has too few synced lines")
+            await tab.navigate(f"{args.target}/app/#/job/{token}")
+            await wait_for(lambda: tab.js("window.karaokeVerify?.snapshot().ready"), 40, "Stage player never became ready")
+            # Start on the second sung line so the mini-player has a line to show.
+            await click(tab, ".synced-lyrics-line:nth-child(2) .synced-lyrics-seek")
+            await click(tab, "[data-sn-play]")
+            await asyncio.sleep(2)
+            await evidence.capture(tab, scope, "stage-playing")
+            await click(tab, "[data-sn-minimize]")
+            await wait_for(lambda: tab.js("!!document.querySelector('[data-sn-mini]')"), 15,
+                           "Minimize did not show the mini-player")
+            first = await tab.js("karaokeVerify.snapshot()")
+            await evidence.capture(tab, scope, "my-songs-mini")
+            seen = {}
+            for name, selector in (("catalog", CATALOG_TAB), ("settings", '.sn-tabbar a[href="#/settings"]'),
+                                   ("my-songs", MY_SONGS_TAB)):
+                await click(tab, selector)
+                await asyncio.sleep(1.5)
+                seen[name] = await visible_in_viewport(tab, "[data-sn-mini]")
+                if name == "catalog":
+                    await evidence.capture(tab, scope, "catalog-mini")
+            await asyncio.sleep(1)
+            sample = await tab.js("karaokeVerify.snapshot()")
+            mini = sample.get("mini") or {}
+            advanced = None if first["time"] is None or sample["time"] is None else round(sample["time"] - first["time"], 2)
+            for name, expected in play["assert"].items():
+                if name == "mini_persists_across_tabs":
+                    evidence.check(scope, name, expected, seen, all(seen.values()) == expected)
+                elif name == "playback_continues_s":
+                    evidence.check(scope, name, expected, {"advanced_s": advanced, "time_s": sample["time"]},
+                                   advanced is not None and advanced >= expected)
+                elif name == "mini_line_matches":
+                    evidence.check(scope, name, expected,
+                                   {"time_s": sample["time"], "mini": mini.get("line"),
+                                    "lyric": line_at(rows, sample["time"] or 0)},
+                                   line_matches(rows, sample["time"] or 0, mini.get("line")) == expected)
+
+            await click(tab, "[data-sn-mini] .sn-mini-open")
+            stage_open = (f"location.hash.startsWith({json.dumps('#/job/' + token)})"
+                          " && !!document.querySelector('.synced-lyrics-list [aria-current]')")
+            await wait_for(lambda stage_open=stage_open: tab.js(stage_open),
+                           15, "The mini-player did not open the Stage on the current line")
+            opened = await tab.js("karaokeVerify.snapshot()")
+            await evidence.capture(tab, scope, "expanded")
+            active = (opened.get("active") or {}).get("text")
+            evidence.check(scope, "expand_same_line", expand["assert"]["expand_same_line"],
+                           {"time_s": opened["time"], "active": active, "lyric": line_at(rows, opened["time"] or 0),
+                            "still_playing": opened["time"] is not None and opened["time"] > (sample["time"] or 0)},
+                           line_matches(rows, opened["time"] or 0, active)
+                           and opened["time"] is not None and opened["time"] > (sample["time"] or 0))

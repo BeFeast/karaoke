@@ -1,0 +1,16 @@
+state:
+  authenticated_owner: clerk_user
+  catalog_fixture: ready_recording_with_synced_lyrics
+  profiles: [iphone]
+action:
+  # UI/UX v1 step 8: play on the Stage, minimize, switch tabs. The song keeps
+  # playing, the mini-player stays above Add song on every tab and shows the
+  # line being sung, and expanding it opens the Stage on that line.
+  - open: stage_play_minimize
+    assert:
+      mini_persists_across_tabs: true
+      playback_continues_s: 2
+      mini_line_matches: true
+  - open: expand_mini
+    assert:
+      expand_same_line: true

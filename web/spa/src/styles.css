@@ -1253,7 +1253,9 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
 }
 @keyframes sn-spin { to { transform: rotate(360deg); } }
 .sn-vocals { display: grid; grid-template-columns: 48px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 64px; }
-.sn-vocals-mic { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; background: var(--sn-raised); color: var(--sn-pink); }
+.sn-vocals-mic { width: 48px; height: 48px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--sn-raised); color: var(--sn-pink); cursor: pointer; }
+.sn-vocals-mic[aria-pressed="true"] { color: var(--sn-muted); }
+.sn-vocals-mic:disabled { cursor: default; }
 .sn-vocals.is-disabled .sn-vocals-mic { color: var(--sn-muted); }
 .sn-vocals-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .sn-vocals-pct { font-size: 15px; font-weight: 700; color: var(--sn-pink); font-variant-numeric: tabular-nums; }
@@ -1298,3 +1300,20 @@ input, textarea, select { font-family: inherit; font-size: inherit; color: inher
   .sn-spinner { animation: none; }
 }
 .sn-lyrics .lyrics-text.sn-plain { background: none; border: 0; padding: 0; max-height: none; overflow: visible; font-family: var(--sn-font-ui); }
+
+/* ─── Mini-player (UI/UX v1 step 8) ─── */
+.sn-mini {
+  position: relative; display: flex; align-items: center; gap: 8px;
+  margin: 0 8px 8px; padding: 8px 8px 10px 8px; max-width: 744px;
+  background: var(--sn-raised); border-radius: var(--sn-r-md); overflow: hidden;
+}
+@media (min-width: 761px) { .sn-mini { margin-inline: auto; } }
+.sn-mini-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; }
+.sn-mini-cover {
+  width: 44px; height: 44px; flex: none; border-radius: var(--sn-r-xs); object-fit: cover;
+  display: grid; place-items: center; background: var(--sn-surface); color: var(--sn-muted);
+}
+.sn-mini .sn-t1 { font-size: 15px; line-height: 20px; }
+.sn-mini .sn-t2 { font-size: 13px; line-height: 18px; }
+.sn-mini-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--sn-track); }
+.sn-mini-progress > i { display: block; height: 100%; background: var(--sn-cyan); }

@@ -1,6 +1,14 @@
 // Runs before page scripts. Observe the Web Audio timeline and gains without
 // replacing playback, bypassing the user gesture, or modifying the app state.
 (() => {
+  // Every run starts from the Original vocals defaults (25%, step 9): the
+  // per-song memory in this persistent browser profile must not leak in.
+  try {
+    localStorage.removeItem("sonereli-vocals-by-song");
+    localStorage.removeItem("sonereli-vocals-default");
+  } catch {
+    /* storage unavailable */
+  }
   const routes = new WeakMap();
   const sources = new Map();
   const prototype = AudioBufferSourceNode.prototype;
@@ -121,8 +129,18 @@
       };
     },
 
+    // Where to tap the scrub rail to land on `time` (step 9 snap check).
+    scrubPoint(time) {
+      const rail = select("[data-sn-scrub]");
+      const max = Number(rail?.getAttribute("aria-valuemax"));
+      if (!rail || !(max > 0)) return null;
+      const box = rail.getBoundingClientRect();
+      const duration = [...sources.keys()][0]?.buffer.duration ?? max;
+      return { x: box.left + (time / duration) * box.width, y: box.top + box.height / 2 };
+    },
+
     point(control, scroll = false, mixLevel = 0.5) {
-      const element = control === "play" ? play() ?? audio() : mix();
+      const element = control === "play" ? play() ?? audio() : control === "mic" ? select("[data-sn-mic]") : mix();
       if (!element || element.disabled) return null;
       if (scroll) element.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
       // Chrome's native media controls place the play button at the left of a
@@ -190,6 +208,10 @@
         plainHebrew: !!plain && /\p{Script=Hebrew}/u.test(plain.textContent),
         title: select("h1")?.textContent?.trim(),
         controls: all("audio[controls]").length,
+        mini: select("[data-sn-mini]") ? {
+          title: select("[data-sn-mini] .sn-t1")?.textContent?.trim() ?? null,
+          line: select("[data-sn-mini] .sn-mini-line")?.textContent?.trim() ?? null,
+        } : null,
       };
     },
   };

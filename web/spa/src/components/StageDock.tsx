@@ -8,6 +8,7 @@ import { type CSSProperties, useRef, useState } from "react";
 import { t } from "../i18n";
 import { fmtClock } from "../lib/library";
 import { useRailDrag } from "../lib/railDrag";
+import { snapDetent } from "../lib/vocals";
 import type { KaraokePlayerApi } from "../player/useKaraokePlayer";
 import { Icon } from "./Icon";
 import { activeLineIndex, type LyricLine } from "./SyncedLyrics";
@@ -28,12 +29,14 @@ export function snapToLine(time: number, lines: LyricLine[]): number {
   return best;
 }
 
-export function StageDock({ player, lines, vocalPct, onVocals, children }: {
+export function StageDock({ player, lines, vocalPct, onVocals, onToggleVocals, children }: {
   player: KaraokePlayerApi;
   lines: LyricLine[];
   /** Original vocals level, 0–100. */
   vocalPct: number;
   onVocals: (pct: number) => void;
+  /** Mic toggle: 0 ↔ the previous level. */
+  onToggleVocals: () => void;
   /** Status line above the controls (buffering, audio error). */
   children?: React.ReactNode;
 }) {
@@ -58,7 +61,7 @@ export function StageDock({ player, lines, vocalPct, onVocals, children }: {
           <Icon name="fwd5" size={30} />
         </button>
       </div>
-      <Vocals pct={vocalPct} onChange={onVocals} disabled={!player.hasVocals} />
+      <Vocals pct={vocalPct} onChange={onVocals} onToggle={onToggleVocals} disabled={!player.hasVocals} />
     </div>
   );
 }
@@ -116,13 +119,30 @@ function Scrub({ player, lines }: { player: KaraokePlayerApi; lines: LyricLine[]
   );
 }
 
-function Vocals({ pct, onChange, disabled }: { pct: number; onChange: (pct: number) => void; disabled: boolean }) {
+function Vocals({ pct, onChange, onToggle, disabled }: {
+  pct: number;
+  onChange: (pct: number) => void;
+  onToggle: () => void;
+  disabled: boolean;
+}) {
   const railRef = useRef<HTMLDivElement | null>(null);
-  const { onPointerDown } = useRailDrag(railRef, { onMove: (f) => onChange(Math.round(f * 100)) });
+  // Detents at Off / Half / Full; Android gets a light tick (no haptics on iOS web).
+  const last = useRef(pct);
+  const { onPointerDown } = useRailDrag(railRef, {
+    onMove: (f) => {
+      const next = snapDetent(f * 100);
+      if (next !== last.current && (next === 0 || next === 50 || next === 100)) navigator.vibrate?.(10);
+      last.current = next;
+      onChange(next);
+    },
+  });
   const value = disabled ? 0 : pct;
   return (
     <div className={`sn-vocals${disabled ? " is-disabled" : ""}`}>
-      <span className="sn-vocals-mic" aria-hidden="true"><Icon name={value > 0 ? "mic" : "micoff"} size={24} /></span>
+      <button type="button" className="sn-vocals-mic" onClick={onToggle} disabled={disabled}
+        aria-label={t("stage.vocalsMute")} aria-pressed={value === 0} data-sn-mic="">
+        <Icon name={value > 0 ? "mic" : "micoff"} size={24} />
+      </button>
       <div className="sn-vocals-body">
         <div className="sn-vocals-head">
           <span className="sn-label">{t("stage.vocals")}</span>

@@ -19,6 +19,7 @@ import yaml
 from verify_catalog import (
     run_pilot_checks,
     verify_add_song,
+    verify_mini_player,
     verify_miss,
     verify_my_songs,
     verify_ready,
@@ -235,10 +236,27 @@ def check_player(evidence, scope, checks, samples):
                 observed = {"delta_s": delta, "player": after["player"], "error": after["error"]}
                 passed = delta is not None and delta >= expected
             case "stem_mix_changes":
+                # v0.52+ (UI/UX v1 step 9): Original vocals raises the vocal
+                # stem only; the backing track stays at full gain.
                 observed = {"control": before["mixPresent"], "gains_before_after": gains}
                 passed = bool(gains and len(gains[0]) == len(gains[1]) == 2
-                              and gains[0][0] - gains[1][0] >= expected
-                              and gains[1][1] - gains[0][1] >= expected)
+                              and gains[1][1] - gains[0][1] >= expected
+                              and abs(gains[1][0] - gains[0][0]) < 0.02 and gains[1][0] > 0.98)
+            case "vocals_default_pct":
+                # 25% on a perceptual curve: -22.5 dB on the vocal stem.
+                first = gains[0] if gains else None
+                observed = {"slider_pct": before.get("vocalsPct"), "gains": first}
+                passed = (before.get("vocalsPct") == expected and first is not None and len(first) == 2
+                          and first[0] > 0.98 and abs(first[1] - 10 ** (-22.5 / 20)) < 0.02)
+            case "vocals_mute_toggle":
+                observed = samples["mute"]
+                passed = bool(observed) and observed["muted_gain"] is not None and observed["muted_gain"] < 0.005 \
+                    and observed["muted_pct"] == 0 and observed["restored_pct"] == observed["level_pct"] \
+                    and abs(observed["restored_gain"] - observed["level_gain"]) < 0.03
+            case "scrub_snaps_to_line":
+                observed = samples["scrub"]
+                passed = bool(observed) and observed["time_s"] is not None \
+                    and observed["line_s"] - 0.05 <= observed["time_s"] <= observed["line_s"] + expected
             case "lyric_highlight_sync":
                 observed = times or {"highlight": after["active"], "synced_lines": after["lineCount"]}
                 passed = (
@@ -339,6 +357,44 @@ async def timing_samples(tab, lyrics, duration):
     return samples
 
 
+def vocal_gain(snapshot):
+    tracks = snapshot["tracks"]
+    return round(tracks[1]["gain"], 4) if len(tracks) == 2 else None
+
+
+async def mute_toggle(tab):
+    """Mic toggle: 0 mutes the vocal stem, a second tap restores the level."""
+    point = await tab.js('karaokeVerify.point("mic")')
+    if not point or not point["reachable"]:
+        return {}
+    level = await tab.js("karaokeVerify.snapshot()")
+    await tab.tap(point)
+    await asyncio.sleep(0.4)
+    muted = await tab.js("karaokeVerify.snapshot()")
+    await tab.tap(point)
+    await asyncio.sleep(0.4)
+    restored = await tab.js("karaokeVerify.snapshot()")
+    return {"level_pct": level["vocalsPct"], "level_gain": vocal_gain(level),
+            "muted_pct": muted["vocalsPct"], "muted_gain": vocal_gain(muted),
+            "restored_pct": restored["vocalsPct"], "restored_gain": vocal_gain(restored)}
+
+
+async def scrub_snap(tab, lyrics, duration):
+    """Tap the scrub 0.2 s past a line start: the release snaps to the line."""
+    starts = [start for start, _, _, speech in lyric_intervals(lyrics) if not speech and start < duration - 8]
+    if len(starts) < 3:
+        return {}
+    line = starts[2]
+    point = await tab.js(f"karaokeVerify.scrubPoint({line + 0.2})")
+    if not point:
+        return {}
+    await tab.tap(point)
+    await asyncio.sleep(0.15)
+    sample = await tab.js("karaokeVerify.snapshot()")
+    return {"line_s": round(line, 3), "aimed_s": round(line + 0.2, 3),
+            "time_s": None if sample["time"] is None else round(sample["time"], 3)}
+
+
 async def inspect_player(tab, evidence, scope, checks, lyrics):
     async def ready():
         value = await tab.js(
@@ -369,12 +425,19 @@ async def inspect_player(tab, evidence, scope, checks, lyrics):
         mixed = await tab.js("karaokeVerify.snapshot()")
         gains.append([round(track["gain"], 3) for track in mixed["tracks"]])
         await evidence.capture(tab, scope, "after-mix")
+    mute = {}
+    if "vocals_mute_toggle" in checks:
+        mute = await mute_toggle(tab)
+    scrub = {}
+    if "scrub_snaps_to_line" in checks and after["duration"]:
+        scrub = await scrub_snap(tab, lyrics, after["duration"])
+        await evidence.capture(tab, scope, "after-scrub")
     timing = []
     if after["lineCount"] and after["duration"]:
         timing = await timing_samples(tab, lyrics, after["duration"])
         await evidence.capture(tab, scope, "lyrics-playing")
     check_player(evidence, scope, checks, dict(
-        before=before, after=after, timing=timing, mix=gains,
+        before=before, after=after, timing=timing, mix=gains, mute=mute, scrub=scrub,
         controls={"play": bool(point and point["reachable"]), "mix": bool(mix and mix["reachable"]),
                   "scale": before["scale"], "native_audio_controls": before["controls"]},
     ))
@@ -799,6 +862,8 @@ async def run(args, directory):
                     await verify_add_song(args, evidence, scenario, SCRIPT)
                 elif name == "mobile-my-songs":
                     await verify_my_songs(args, evidence, scenario, SCRIPT)
+                elif name == "mobile-mini-player":
+                    await verify_mini_player(args, evidence, scenario, SCRIPT)
                 elif "authenticated_owner" in state:
                     for profile in state["profiles"]:
                         await submit(args, api, evidence, scenario, profile, bearer)

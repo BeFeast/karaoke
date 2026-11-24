@@ -34,7 +34,7 @@ export interface KaraokePlayerState {
   /** Playhead quantized to ~0.1 s — display-grade; subscribeTime is the raw feed. */
   currentTime: number;
   rate: number;
-  /** 0 = instrumental only … 1 = vocals only (equal-power crossfade). */
+  /** Original vocals, 0 = off … 1 = full (backing track stays at full gain). */
   vocalLevel: number;
   loop: boolean;
   region: ABRegion;
@@ -76,7 +76,7 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
     duration: 0,
     currentTime: 0,
     rate: 1,
-    vocalLevel: 0.5,
+    vocalLevel: 0.25,
     loop: false,
     region: { a: null, b: null },
     hasVocals: vocalsUrl != null,
@@ -87,7 +87,7 @@ export function useKaraokePlayer(opts: KaraokePlayerOptions): KaraokePlayerApi {
   const ctxRef = useRef<AudioContext | null>(null);
   const engineRef = useRef<DualStemEngine | null>(null);
   // Mutable mirrors so the async setup reads fresh values without re-running.
-  const levelRef = useRef(0.5);
+  const levelRef = useRef(0.25);
   const loopRef = useRef(false);
   const regionRef = useRef<ABRegion>({ a: null, b: null });
   const timeSubsRef = useRef(new Set<(t: number) => void>());
